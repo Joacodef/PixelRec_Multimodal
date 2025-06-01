@@ -1,8 +1,8 @@
 """
 Configuration module for multimodal recommender
 """
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List
 import yaml
 from pathlib import Path
 
@@ -75,14 +75,51 @@ class TrainingConfig:
 
 
 @dataclass
+class TextAugmentationConfig:
+    """Configuration for text augmentation"""
+    enabled: bool = False
+    augmentation_type: str = 'random_delete'  # 'random_delete', 'random_swap'
+    delete_prob: float = 0.1
+    swap_prob: float = 0.1
+
+
+@dataclass
+class ImageValidationConfig:
+    """Configuration for offline image validation"""
+    check_corrupted: bool = True
+    min_width: int = 64
+    min_height: int = 64
+    allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
+
+
+@dataclass
+class OfflineTextCleaningConfig:
+    """Configuration for offline text cleaning"""
+    remove_html: bool = True
+    normalize_unicode: bool = True
+    to_lowercase: bool = True
+
+
+@dataclass
 class DataConfig:
     """Data configuration"""
     item_info_path: str = 'data/raw/item_info/Pixel200K.csv'
     interactions_path: str = 'data/raw/interactions/Pixel200K.csv'
     image_folder: str = 'data/raw/images'
+    processed_item_info_path: str = 'data/processed/item_info_processed.csv'
+    processed_interactions_path: str = 'data/processed/interactions_processed.csv'
+    scaler_path: str = 'data/processed/numerical_scaler.pkl'
     sample_size: Optional[int] = None
     negative_sampling_ratio: float = 1.0
     train_val_split: float = 0.8
+    text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
+    numerical_normalization_method: str = 'log1p'  # 'log1p', 'standardization', 'min_max', 'none'
+    offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
+    offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
+    numerical_features_cols: List[str] = field(default_factory=lambda: [
+        'view_number', 'comment_number', 'thumbup_number',
+        'share_number', 'coin_number', 'favorite_number', 'barrage_number'
+    ])
 
 
 @dataclass
@@ -98,50 +135,65 @@ class RecommendationConfig:
 @dataclass
 class Config:
     """Main configuration class"""
-    model: ModelConfig
-    training: TrainingConfig
-    data: DataConfig
-    recommendation: RecommendationConfig
-    
-    # Paths
+    model: ModelConfig = field(default_factory=ModelConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
+
     checkpoint_dir: str = 'models/checkpoints'
     log_dir: str = 'logs/tensorboard'
     results_dir: str = 'results'
-    
+
     @classmethod
     def from_yaml(cls, path: str) -> 'Config':
         """Load configuration from YAML file"""
         with open(path, 'r') as f:
             config_dict = yaml.safe_load(f)
-        
+
         return cls(
             model=ModelConfig(**config_dict.get('model', {})),
             training=TrainingConfig(**config_dict.get('training', {})),
-            data=DataConfig(**config_dict.get('data', {})),
+            data=DataConfig(
+                item_info_path=config_dict.get('data', {}).get('item_info_path', DataConfig.item_info_path),
+                interactions_path=config_dict.get('data', {}).get('interactions_path', DataConfig.interactions_path),
+                image_folder=config_dict.get('data', {}).get('image_folder', DataConfig.image_folder),
+                processed_item_info_path=config_dict.get('data', {}).get('processed_item_info_path', DataConfig.processed_item_info_path),
+                processed_interactions_path=config_dict.get('data', {}).get('processed_interactions_path', DataConfig.processed_interactions_path),
+                scaler_path=config_dict.get('data', {}).get('scaler_path', DataConfig.scaler_path),
+                sample_size=config_dict.get('data', {}).get('sample_size', DataConfig.sample_size),
+                negative_sampling_ratio=config_dict.get('data', {}).get('negative_sampling_ratio', DataConfig.negative_sampling_ratio),
+                train_val_split=config_dict.get('data', {}).get('train_val_split', DataConfig.train_val_split),
+                text_augmentation=TextAugmentationConfig(**config_dict.get('data', {}).get('text_augmentation', {})),
+                numerical_normalization_method=config_dict.get('data', {}).get('numerical_normalization_method', DataConfig.numerical_normalization_method),
+                offline_image_validation=ImageValidationConfig(**config_dict.get('data', {}).get('offline_image_validation', {})),
+                offline_text_cleaning=OfflineTextCleaningConfig(**config_dict.get('data', {}).get('offline_text_cleaning', {})),
+                numerical_features_cols=config_dict.get('data', {}).get('numerical_features_cols', DataConfig.numerical_features_cols)
+            ),
             recommendation=RecommendationConfig(**config_dict.get('recommendation', {})),
             checkpoint_dir=config_dict.get('checkpoint_dir', 'models/checkpoints'),
             log_dir=config_dict.get('log_dir', 'logs/tensorboard'),
             results_dir=config_dict.get('results_dir', 'results')
         )
-    
+
     def to_yaml(self, path: str):
         """Save configuration to YAML file"""
-        config_dict = {
-            'model': self.model.__dict__,
-            'training': self.training.__dict__,
-            'data': self.data.__dict__,
-            'recommendation': self.recommendation.__dict__,
-            'checkpoint_dir': self.checkpoint_dir,
-            'log_dir': self.log_dir,
-            'results_dir': self.results_dir
-        }
-        
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(path, 'w') as f:
+        # Helper to convert dataclasses to dicts recursively
+        def as_dict(data):
+            if hasattr(data, '__dict__'):
+                return {k: as_dict(v) for k, v in data.__dict__.items()}
+            elif isinstance(data, list):
+                return [as_dict(i) for i in data]
+            else:
+                return data
+
+        config_dict = as_dict(self)
+
+        path_obj = Path(path)
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(path_obj, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False)
-    
+
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about selected models"""
         return {

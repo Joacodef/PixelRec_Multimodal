@@ -1,6 +1,12 @@
 import numpy as np
 import random
-from sklearn.preprocessing import StandardScaler # For Z-score normalization
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+import pickle
+import unicodedata
+import re
+from PIL import Image
+import os
+from typing import Optional, Any # For type hinting scaler
 
 def augment_text(text: str, augmentation_type: str = 'random_delete', delete_prob: float = 0.1, swap_prob: float = 0.1) -> str:
     """
@@ -9,7 +15,6 @@ def augment_text(text: str, augmentation_type: str = 'random_delete', delete_pro
     Args:
         text: The input string to augment.
         augmentation_type: Type of augmentation ('random_delete', 'random_swap', 'none').
-                           More types can be added.
         delete_prob: Probability of deleting a word (if 'random_delete' is used).
         swap_prob: Probability of swapping adjacent words (if 'random_swap' is used).
 
@@ -17,96 +22,108 @@ def augment_text(text: str, augmentation_type: str = 'random_delete', delete_pro
         The augmented string.
     """
     words = text.split()
-    if len(words) == 0:
+    if not words or augmentation_type == 'none':
         return text
 
     if augmentation_type == 'random_delete':
-        # Randomly delete words with a given probability
         augmented_words = [word for word in words if random.random() > delete_prob]
-        if not augmented_words: # Ensure not to return empty string if all words deleted
-            return text 
+        if not augmented_words:
+            return text
         return " ".join(augmented_words)
 
     elif augmentation_type == 'random_swap':
-        # Randomly swap adjacent words
-        augmented_words = list(words) # Create a mutable copy
+        augmented_words = list(words)
         for i in range(len(augmented_words) - 1):
             if random.random() < swap_prob:
-                # Swap words at i and i+1
                 augmented_words[i], augmented_words[i+1] = augmented_words[i+1], augmented_words[i]
         return " ".join(augmented_words)
-    
-    elif augmentation_type == 'none':
-        return text
 
     else:
-        # Default to no augmentation if type is unknown
-        # More advanced techniques like back-translation or synonym replacement
-        # could be implemented here using libraries like NLTK, spaCy, or transformers.
-        # For example, using a pre-trained model for synonym replacement:
-        # from nltk.corpus import wordnet
-        # ... implementation ...
-        # Or using back-translation with a library like `transformers`:
-        # from transformers import MarianMTModel, MarianTokenizer
-        # ... implementation ...
-        # For now, return original text if type is not recognized
         return text
 
 
-def normalize_features(features: np.ndarray, method: str = 'standardization') -> np.ndarray:
+def normalize_features(features: np.ndarray, method: str = 'standardization', scaler: Optional[Any] = None) -> tuple[np.ndarray, Optional[Any]]:
     """
-    Normalizes numerical features.
+    Normalizes numerical features. Can fit a new scaler or use a pre-fitted one.
 
     Args:
-        features: A NumPy array of numerical features.
-                  Assumes features are in columns if 2D.
-                  If 1D, it's treated as a single feature.
-        method: Normalization method ('standardization', 'min_max', 'log1p').
+        features: A NumPy array of numerical features (2D).
+        method: Normalization method ('standardization', 'min_max', 'log1p', 'none').
+        scaler: A pre-fitted scaler object (e.g., from sklearn.preprocessing).
+                If None and method requires fitting, a new scaler will be fitted.
 
     Returns:
-        A NumPy array with normalized features.
-        Returns original features if method is unknown or not applicable.
+        A tuple containing:
+            - A NumPy array with normalized features.
+            - The scaler object used (fitted or passed-in). None if method is 'log1p' or 'none'.
     """
-    if not isinstance(features, np.ndarray) or features.size == 0:
-        return features # Return as is if not a numpy array or empty
+    if not isinstance(features, np.ndarray) or features.size == 0 or method == 'none':
+        return features, None
 
-    # Reshape 1D array to 2D for consistent processing with sklearn scalers
     if features.ndim == 1:
         features_reshaped = features.reshape(-1, 1)
     else:
         features_reshaped = features
 
+    fitted_scaler = scaler
+
     if method == 'standardization':
-        # Z-score normalization (mean=0, std=1)
-        # This is generally robust.
-        scaler = StandardScaler()
-        normalized_features = scaler.fit_transform(features_reshaped)
-    
+        if scaler is None:
+            fitted_scaler = StandardScaler()
+            normalized_features = fitted_scaler.fit_transform(features_reshaped)
+        else:
+            normalized_features = fitted_scaler.transform(features_reshaped)
+
     elif method == 'min_max':
-        # Min-Max scaling (scales to a range, typically [0, 1])
-        # Sensitive to outliers.
-        min_val = np.min(features_reshaped, axis=0)
-        max_val = np.max(features_reshaped, axis=0)
-        # Avoid division by zero if max_val == min_val for any feature
-        range_val = max_val - min_val
-        # Set range_val to 1 where it's 0 to prevent division by zero (feature is constant)
-        range_val[range_val == 0] = 1.0 
-        normalized_features = (features_reshaped - min_val) / range_val
-        
+        if scaler is None:
+            fitted_scaler = MinMaxScaler()
+            normalized_features = fitted_scaler.fit_transform(features_reshaped)
+        else:
+            normalized_features = fitted_scaler.transform(features_reshaped)
+
     elif method == 'log1p':
-        # Log transform (log(1+x))
-        # Useful for skewed data.
-        # The dataset.py already uses this for specific features.
-        # This option is provided here for general use if needed.
         if np.any(features_reshaped < 0):
             print("Warning: log1p transform applied to data with negative values. Results might be NaN.")
         normalized_features = np.log1p(features_reshaped)
-        
-    else:
-        print(f"Warning: Unknown normalization method '{method}'. Returning original features.")
-        return features # Return original if method is unknown
+        fitted_scaler = None # log1p does not have a scikit-learn style scaler here
 
-    # If original was 1D, return 1D
-    if features.ndim == 1 and normalized_features.shape[1] == 1:
-        return normalized_features.flatten()
-    return normalized_features
+    else:
+        print(f"Warning: Unknown or 'none' normalization method '{method}'. Returning original features.")
+        return features, None
+
+    return normalized_features, fitted_scaler
+
+
+def remove_html_tags(text: str) -> str:
+    """Removes HTML tags from a string."""
+    if not isinstance(text, str):
+        return text
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', text)
+
+
+def normalize_unicode_text(text: str) -> str:
+    """Normalizes unicode characters in a string."""
+    if not isinstance(text, str):
+        return text
+    return unicodedata.normalize('NFKC', text)
+
+
+def is_image_corrupted(image_path: str) -> bool:
+    """Checks if an image file is corrupted by trying to open it."""
+    try:
+        img = Image.open(image_path)
+        img.verify()  # Verify is a superficial check, load() is more thorough
+        img.load()    # Try to load the image data
+        return False
+    except Exception:
+        return True
+
+def check_image_dimensions(image_path: str, min_width: int, min_height: int) -> bool:
+    """Checks if an image meets minimum dimension requirements."""
+    try:
+        with Image.open(image_path) as img:
+            width, height = img.size
+            return width >= min_width and height >= min_height
+    except Exception:
+        return False # If image can't be opened, it fails the check
