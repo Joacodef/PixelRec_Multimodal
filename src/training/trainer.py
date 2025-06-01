@@ -53,6 +53,7 @@ class Trainer:
         self.epoch = 0
         self.best_val_loss = float('inf')
         self.patience_counter = 0
+        self.optimizer = None 
     
     def train(
         self,
@@ -85,6 +86,7 @@ class Trainer:
             lr=lr, 
             weight_decay=weight_decay
         )
+        self.optimizer = optimizer
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
             mode='min', 
@@ -344,6 +346,9 @@ class Trainer:
     
     def get_learning_rate(self) -> float:
         """Get current learning rate"""
+        if self.optimizer is None:
+            return 0.0 
+            
         for param_group in self.optimizer.param_groups:
             return param_group['lr']
         return 0.0
