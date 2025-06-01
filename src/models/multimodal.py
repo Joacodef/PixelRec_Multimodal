@@ -12,6 +12,8 @@ from transformers import (
 )
 from typing import Optional, Tuple
 
+from .layers import CrossModalAttention
+
 from ..config import MODEL_CONFIGS
 
 
@@ -326,3 +328,41 @@ class PretrainedMultimodalRecommender(nn.Module):
             )
             
         return item_full_embedding
+
+
+class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
+    """Enhanced multimodal recommender with cross-modal attention"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Add cross-modal attention layers
+        self.vision_text_attention = CrossModalAttention(self.embedding_dim)
+        self.text_vision_attention = CrossModalAttention(self.embedding_dim)
+        
+        # Add graph attention for user-item interactions
+        self.graph_attention = nn.MultiheadAttention(
+            embed_dim=self.embedding_dim,
+            num_heads=8,
+            dropout=self.dropout_rate
+        )
+        
+    def _apply_cross_modal_fusion(
+        self,
+        vision_emb: torch.Tensor,
+        language_emb: torch.Tensor,
+        numerical_emb: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Apply cross-modal attention between modalities"""
+        
+        # Vision attending to text
+        vision_text_fused = self.vision_text_attention(vision_emb, language_emb)
+        
+        # Text attending to vision
+        text_vision_fused = self.text_vision_attention(language_emb, vision_emb)
+        
+        # Combine with numerical features
+        vision_enhanced = vision_emb + 0.5 * vision_text_fused
+        text_enhanced = language_emb + 0.5 * text_vision_fused
+        
+        return vision_enhanced, text_enhanced, numerical_emb
