@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, AutoImageProcessor
 from tqdm import tqdm
 import random
 import pickle
-from typing import Dict, Optional, Tuple, Any, Union
+from typing import Dict, Optional, Tuple, Any, Union, List
 
 from ..config import MODEL_CONFIGS, TextAugmentationConfig # Import TextAugmentationConfig
 from .preprocessing import augment_text, normalize_features # Import necessary functions

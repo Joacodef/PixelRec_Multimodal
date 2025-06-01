@@ -12,6 +12,8 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from typing import List
+from src.config import TextAugmentationConfig
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))

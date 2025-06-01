@@ -6,7 +6,7 @@ import unicodedata
 import re
 from PIL import Image
 import os
-from typing import Optional, Any # For type hinting scaler
+from typing import Optional, Any, Tuple
 
 def augment_text(text: str, augmentation_type: str = 'random_delete', delete_prob: float = 0.1, swap_prob: float = 0.1) -> str:
     """

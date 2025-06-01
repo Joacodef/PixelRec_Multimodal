@@ -3,14 +3,14 @@
 model:
   vision_model: clip
   language_model: sentence-bert
-  embedding_dim: 128
+  embedding_dim: 64
   freeze_vision: true
   freeze_language: true
   use_contrastive: true
   dropout_rate: 0.3
 
 training:
-  batch_size: 32
+  batch_size: 8
   epochs: 10
   learning_rate: 0.001
   weight_decay: 0.01

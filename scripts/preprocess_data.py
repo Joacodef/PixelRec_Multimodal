@@ -12,6 +12,7 @@ from tqdm import tqdm
 import pickle
 import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from typing import List
 
 # Add parent directory to path
 import sys

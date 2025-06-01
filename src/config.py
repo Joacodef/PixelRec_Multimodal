@@ -150,24 +150,27 @@ class Config:
         with open(path, 'r') as f:
             config_dict = yaml.safe_load(f)
 
+        # Create a default DataConfig instance to access default values
+        default_data_config = DataConfig()
+        
         return cls(
             model=ModelConfig(**config_dict.get('model', {})),
             training=TrainingConfig(**config_dict.get('training', {})),
             data=DataConfig(
-                item_info_path=config_dict.get('data', {}).get('item_info_path', DataConfig.item_info_path),
-                interactions_path=config_dict.get('data', {}).get('interactions_path', DataConfig.interactions_path),
-                image_folder=config_dict.get('data', {}).get('image_folder', DataConfig.image_folder),
-                processed_item_info_path=config_dict.get('data', {}).get('processed_item_info_path', DataConfig.processed_item_info_path),
-                processed_interactions_path=config_dict.get('data', {}).get('processed_interactions_path', DataConfig.processed_interactions_path),
-                scaler_path=config_dict.get('data', {}).get('scaler_path', DataConfig.scaler_path),
-                sample_size=config_dict.get('data', {}).get('sample_size', DataConfig.sample_size),
-                negative_sampling_ratio=config_dict.get('data', {}).get('negative_sampling_ratio', DataConfig.negative_sampling_ratio),
-                train_val_split=config_dict.get('data', {}).get('train_val_split', DataConfig.train_val_split),
+                item_info_path=config_dict.get('data', {}).get('item_info_path', default_data_config.item_info_path),
+                interactions_path=config_dict.get('data', {}).get('interactions_path', default_data_config.interactions_path),
+                image_folder=config_dict.get('data', {}).get('image_folder', default_data_config.image_folder),
+                processed_item_info_path=config_dict.get('data', {}).get('processed_item_info_path', default_data_config.processed_item_info_path),
+                processed_interactions_path=config_dict.get('data', {}).get('processed_interactions_path', default_data_config.processed_interactions_path),
+                scaler_path=config_dict.get('data', {}).get('scaler_path', default_data_config.scaler_path),
+                sample_size=config_dict.get('data', {}).get('sample_size', default_data_config.sample_size),
+                negative_sampling_ratio=config_dict.get('data', {}).get('negative_sampling_ratio', default_data_config.negative_sampling_ratio),
+                train_val_split=config_dict.get('data', {}).get('train_val_split', default_data_config.train_val_split),
                 text_augmentation=TextAugmentationConfig(**config_dict.get('data', {}).get('text_augmentation', {})),
-                numerical_normalization_method=config_dict.get('data', {}).get('numerical_normalization_method', DataConfig.numerical_normalization_method),
+                numerical_normalization_method=config_dict.get('data', {}).get('numerical_normalization_method', default_data_config.numerical_normalization_method),
                 offline_image_validation=ImageValidationConfig(**config_dict.get('data', {}).get('offline_image_validation', {})),
                 offline_text_cleaning=OfflineTextCleaningConfig(**config_dict.get('data', {}).get('offline_text_cleaning', {})),
-                numerical_features_cols=config_dict.get('data', {}).get('numerical_features_cols', DataConfig.numerical_features_cols)
+                numerical_features_cols=config_dict.get('data', {}).get('numerical_features_cols', default_data_config.numerical_features_cols)
             ),
             recommendation=RecommendationConfig(**config_dict.get('recommendation', {})),
             checkpoint_dir=config_dict.get('checkpoint_dir', 'models/checkpoints'),
