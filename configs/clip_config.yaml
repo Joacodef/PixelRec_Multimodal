@@ -1,0 +1,12 @@
+model:
+  vision_model: clip
+  language_model: sentence-bert
+  embedding_dim: 512
+  freeze_vision: true
+  freeze_language: true
+  use_contrastive: true
+  dropout_rate: 0.2
+
+training:
+  contrastive_weight: 0.2
+  temperature: 0.07
