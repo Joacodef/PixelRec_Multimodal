@@ -16,7 +16,7 @@ training:
   weight_decay: 0.01
   patience: 10
   gradient_clip: 1.0
-  num_workers: 4
+  num_workers: 8
   contrastive_weight: 0.1
   bce_weight: 1.0
 
@@ -30,7 +30,7 @@ data:
   processed_interactions_path: data/processed/interactions_processed.csv
   scaler_path: data/processed/numerical_scaler.pkl # Path to save/load the fitted numerical scaler
 
-  sample_size: 1000  # Set to null for full dataset, applied to processed data in train script
+  sample_size: 5000  # Set to null for full dataset, applied to processed data in train script
   negative_sampling_ratio: 1.0
   train_val_split: 0.8
 
