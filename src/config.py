@@ -3,8 +3,8 @@
 Configuration module for multimodal recommender
 """
 # Updated import: added is_dataclass
-from dataclasses import dataclass, field, asdict, is_dataclass
-from typing import Optional, Dict, Any, List, Union # Ensure Union is imported for type hints
+from dataclasses import dataclass, field, asdict, is_dataclass, fields
+from typing import Optional, Dict, Any, List, Union
 import yaml
 from pathlib import Path
 
