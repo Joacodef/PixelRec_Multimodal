@@ -22,7 +22,6 @@ venv/
 .ipynb_checkpoints
 *.ipynb_checkpoints
 
-logs/
 *.log
 
 .DS_Store

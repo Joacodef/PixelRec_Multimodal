@@ -2,13 +2,12 @@
 """
 Configuration module for multimodal recommender
 """
-# Updated import: added is_dataclass
 from dataclasses import dataclass, field, asdict, is_dataclass, fields
 from typing import Optional, Dict, Any, List, Union
 import yaml
 from pathlib import Path
 
-# MODEL_CONFIGS definition remains the same...
+# MODEL_CONFIGS definition (keep existing)
 MODEL_CONFIGS = {
     'vision': {
         'clip': {
@@ -96,6 +95,26 @@ class OfflineTextCleaningConfig:
     to_lowercase: bool = True
 
 @dataclass
+class DataSplittingConfig:
+    """Configuration for data splitting strategies"""
+    strategy: str = 'stratified'  # 'user', 'item', 'temporal', 'stratified', 'leave_one_out', 'mixed'
+    train_ratio: float = 0.8
+    random_state: int = 42
+    
+    # Strategy-specific parameters
+    min_interactions_per_user: int = 5
+    min_interactions_per_item: int = 3
+    timestamp_col: Optional[str] = None  # For temporal split
+    leave_one_out_strategy: str = 'random'  # 'random' or 'latest'
+    
+    # For mixed split
+    cold_user_ratio: float = 0.1
+    cold_item_ratio: float = 0.1
+    
+    # Validation
+    validate_no_leakage: bool = True  # Check for user/item leakage
+
+@dataclass
 class DataConfig:
     """Data loading and preprocessing configuration parameters"""
     item_info_path: str = 'data/raw/item_info/Pixel200K.csv'
@@ -111,6 +130,7 @@ class DataConfig:
     numerical_normalization_method: str = 'log1p'
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
+    splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)  # ADD THIS LINE
     numerical_features_cols: List[str] = field(default_factory=lambda: [
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
@@ -133,7 +153,6 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
     checkpoint_dir: str = 'models/checkpoints'
-    log_dir: str = 'logs/tensorboard'
     results_dir: str = 'results'
 
     @classmethod
@@ -146,17 +165,15 @@ class Config:
             if cfg_dict is None:
                 return default_instance
             
-            current_args = asdict(default_instance) # Use asdict from the import
+            current_args = asdict(default_instance)
             current_args.update(cfg_dict)
             
             for field_name, field_type_hint in dc_type.__annotations__.items():
-                # Check for Optional[DataclassType] or DataclassType
                 actual_field_type = None
                 is_optional = getattr(field_type_hint, '__origin__', None) is Union and \
                               type(None) in getattr(field_type_hint, '__args__', ())
                 
                 if is_optional:
-                    # Get the non-None type from Optional[T]
                     possible_types = [t for t in field_type_hint.__args__ if t is not type(None)]
                     if possible_types:
                         actual_field_type = possible_types[0]
@@ -165,7 +182,6 @@ class Config:
 
                 if actual_field_type and is_dataclass(actual_field_type) and \
                    isinstance(current_args.get(field_name), dict):
-                    # Recursively create instance for nested dataclass
                     current_args[field_name] = actual_field_type(**current_args[field_name])
             
             return dc_type(**current_args)
@@ -177,7 +193,7 @@ class Config:
         data_yaml_dict = yaml_config.get('data', {})
         default_data_instance = DataConfig()
 
-        # Explicitly instantiate nested dataclasses within DataConfig
+        # Handle nested dataclasses in DataConfig
         text_aug_instance = _create_dataclass_from_dict(
             TextAugmentationConfig,
             data_yaml_dict.get('text_augmentation'),
@@ -193,6 +209,11 @@ class Config:
             data_yaml_dict.get('offline_text_cleaning'),
             default_data_instance.offline_text_cleaning
         )
+        splitting_instance = _create_dataclass_from_dict(
+            DataSplittingConfig,
+            data_yaml_dict.get('splitting'),
+            default_data_instance.splitting
+        )
 
         data_config_args = asdict(default_data_instance)
         if data_yaml_dict:
@@ -201,6 +222,7 @@ class Config:
         data_config_args['text_augmentation'] = text_aug_instance
         data_config_args['offline_image_validation'] = img_val_instance
         data_config_args['offline_text_cleaning'] = text_clean_instance
+        data_config_args['splitting'] = splitting_instance
         
         data_config = DataConfig(**data_config_args)
 
@@ -209,22 +231,22 @@ class Config:
             training=training_config,
             data=data_config,
             recommendation=rec_config,
-            checkpoint_dir=yaml_config.get('checkpoint_dir', cls.checkpoint_dir),
-            log_dir=yaml_config.get('log_dir', cls.log_dir),
-            results_dir=yaml_config.get('results_dir', cls.results_dir)
+            checkpoint_dir=yaml_config.get('checkpoint_dir', 'models/checkpoints'),
+            results_dir=yaml_config.get('results_dir', 'results')
         )
 
     def to_yaml(self, path: str):
         """Saves the current configuration to a YAML file."""
         def as_dict_recursive(data_obj: Any) -> Any:
-            if is_dataclass(data_obj): # Use imported is_dataclass
-                return {f.name: as_dict_recursive(getattr(data_obj, f.name)) for f in dataclasses.fields(data_obj)}
+            if is_dataclass(data_obj):
+                return {f.name: as_dict_recursive(getattr(data_obj, f.name)) for f in fields(data_obj)}
             elif isinstance(data_obj, list):
                 return [as_dict_recursive(i) for i in data_obj]
             elif isinstance(data_obj, dict):
                 return {k: as_dict_recursive(v) for k, v in data_obj.items()}
             else:
                 return data_obj
+        
         config_dict_to_save = as_dict_recursive(self)
         path_obj = Path(path)
         path_obj.parent.mkdir(parents=True, exist_ok=True)

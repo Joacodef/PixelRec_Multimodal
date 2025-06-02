@@ -23,6 +23,7 @@ from src.config import Config, TextAugmentationConfig # Ensure TextAugmentationC
 from src.data.dataset import MultimodalDataset
 from src.models.multimodal import PretrainedMultimodalRecommender
 from src.training.trainer import Trainer
+from src.data.splitting import DataSplitter, create_robust_splits
 
 
 def fit_numerical_scaler(df: pd.DataFrame, numerical_cols: List[str], method: str, scaler_path: Path):
@@ -115,33 +116,31 @@ def main():
     # Initialize wandb if enabled
     if args.use_wandb:
         try:
-            # Convert config dataclass to a dictionary for wandb logging
             config_dict_for_wandb = dataclasses.asdict(config)
             wandb.init(
                 project=args.wandb_project,
-                entity=args.wandb_entity, # Can be set via environment variable WANDB_ENTITY
+                entity=args.wandb_entity,
                 name=args.wandb_run_name,
                 config=config_dict_for_wandb,
-                reinit=True # Allows multiple initializations in the same process if needed (e.g. for sweeps)
+                reinit=True
             )
             print("Weights & Biases logging enabled.")
             if args.wandb_run_name:
                 print(f"Wandb run name: {args.wandb_run_name}")
             if args.wandb_project:
                 print(f"Wandb project: {args.wandb_project}")
-            if args.wandb_entity: # Check if entity was provided
-                 print(f"Wandb entity: {args.wandb_entity}")
-            else: # Entity might be picked from env vars or default login
-                 print(f"Wandb entity: Using default or environment variable WANDB_ENTITY.")
-
+            if args.wandb_entity:
+                print(f"Wandb entity: {args.wandb_entity}")
+            else:
+                print(f"Wandb entity: Using default or environment variable WANDB_ENTITY.")
         except Exception as e:
             print(f"Warning: Failed to initialize wandb: {e}. Proceeding without wandb logging.")
-            args.use_wandb = False # Disable if initialization fails
+            args.use_wandb = False
 
     device = torch.device(args.device)
     print(f"Using device: {device}")
 
-    try: # Wrap main logic in try-finally to ensure wandb.finish() is called
+    try:
         print("\nLoading processed data...")
         item_info_df = pd.read_csv(data_config.processed_item_info_path)
         interactions_df = pd.read_csv(data_config.processed_interactions_path)
@@ -154,6 +153,196 @@ def main():
             ).reset_index(drop=True)
             sampled_item_ids = set(interactions_df['item_id'].unique())
             item_info_df = item_info_df[item_info_df['item_id'].isin(sampled_item_ids)].reset_index(drop=True)
+
+        # ===== NUMERICAL SCALER SETUP =====
+        numerical_scaler = None  # Initialize to None
+        scaler_path_obj = Path(data_config.scaler_path)
+        
+        if data_config.numerical_normalization_method in ['standardization', 'min_max']:
+            if scaler_path_obj.exists():
+                numerical_scaler = load_numerical_scaler(scaler_path_obj)
+            else:
+                print(f"Scaler not found at {scaler_path_obj}. Fitting a new one based on current item_info_df...")
+                if not all(col in item_info_df.columns for col in data_config.numerical_features_cols):
+                    print(f"Error: Not all numerical_features_cols ({data_config.numerical_features_cols}) found in item_info_df columns ({item_info_df.columns}). Cannot fit scaler.")
+                    sys.exit(1)
+                numerical_scaler = fit_numerical_scaler(
+                    item_info_df,
+                    data_config.numerical_features_cols,
+                    data_config.numerical_normalization_method,
+                    scaler_path_obj
+                )
+                if numerical_scaler is None and data_config.numerical_normalization_method not in ['none', 'log1p']:
+                    print(f"Warning: Scaler fitting failed for method {data_config.numerical_normalization_method}.")
+
+        # ===== DATA SPLITTING =====
+        print(f"\nSplitting data using strategy: {data_config.splitting.strategy}")
+        
+        # For small datasets, adjust the splitting strategy
+        total_interactions = len(interactions_df)
+        unique_users = interactions_df['user_id'].nunique()
+        
+        print(f"Dataset info: {total_interactions} interactions, {unique_users} unique users")
+        
+        # Adjust strategy for very small datasets
+        if total_interactions < 5000 or unique_users < 100:
+            print(f"Small dataset detected. Adjusting splitting strategy...")
+            if data_config.splitting.strategy == 'stratified':
+                # Use leave_one_out for small datasets
+                print("Switching to leave_one_out strategy for small dataset")
+                splitter = DataSplitter(random_state=data_config.splitting.random_state)
+                train_interactions_df, val_interactions_df = splitter.leave_one_out_split(
+                    interactions_df,
+                    strategy='random'
+                )
+            else:
+                # Use the configured strategy
+                splitter = DataSplitter(random_state=data_config.splitting.random_state)
+                
+                if data_config.splitting.strategy == 'user':
+                    train_interactions_df, val_interactions_df = splitter.user_based_split(
+                        interactions_df,
+                        train_ratio=data_config.splitting.train_ratio,
+                        min_interactions_per_user=max(2, data_config.splitting.min_interactions_per_user)
+                    )
+                elif data_config.splitting.strategy == 'item':
+                    train_interactions_df, val_interactions_df = splitter.item_based_split(
+                        interactions_df,
+                        train_ratio=data_config.splitting.train_ratio,
+                        min_interactions_per_item=max(2, data_config.splitting.min_interactions_per_item)
+                    )
+                elif data_config.splitting.strategy == 'leave_one_out':
+                    train_interactions_df, val_interactions_df = splitter.leave_one_out_split(
+                        interactions_df,
+                        strategy=data_config.splitting.leave_one_out_strategy
+                    )
+                else:
+                    # Fallback to simple random split
+                    print("Using simple random split as fallback")
+                    train_interactions_df, val_interactions_df = splitter.simple_random_split(
+                        interactions_df,
+                        train_ratio=data_config.splitting.train_ratio
+                    )
+        else:
+            splitter = DataSplitter(random_state=data_config.splitting.random_state)
+            
+            if data_config.splitting.strategy == 'stratified':
+                train_interactions_df, val_interactions_df = splitter.stratified_split(
+                    interactions_df,
+                    train_ratio=data_config.splitting.train_ratio,
+                    min_interactions_per_user=data_config.splitting.min_interactions_per_user
+                )
+            elif data_config.splitting.strategy == 'user':
+                train_interactions_df, val_interactions_df = splitter.user_based_split(
+                    interactions_df,
+                    train_ratio=data_config.splitting.train_ratio,
+                    min_interactions_per_user=data_config.splitting.min_interactions_per_user
+                )
+            elif data_config.splitting.strategy == 'item':
+                train_interactions_df, val_interactions_df = splitter.item_based_split(
+                    interactions_df,
+                    train_ratio=data_config.splitting.train_ratio,
+                    min_interactions_per_item=data_config.splitting.min_interactions_per_item
+                )
+            elif data_config.splitting.strategy == 'temporal':
+                if not data_config.splitting.timestamp_col:
+                    raise ValueError("timestamp_col must be specified for temporal splitting")
+                train_interactions_df, val_interactions_df = splitter.temporal_split(
+                    interactions_df,
+                    timestamp_col=data_config.splitting.timestamp_col,
+                    train_ratio=data_config.splitting.train_ratio
+                )
+            elif data_config.splitting.strategy == 'leave_one_out':
+                train_interactions_df, val_interactions_df = splitter.leave_one_out_split(
+                    interactions_df,
+                    strategy=data_config.splitting.leave_one_out_strategy
+                )
+            else:
+                raise ValueError(f"Unknown splitting strategy: {data_config.splitting.strategy}")
+
+        # Validate split quality
+        split_stats = splitter.get_split_statistics(train_interactions_df, val_interactions_df)
+        print(f"\nSplit statistics:")
+        for key, value in split_stats.items():
+            print(f"  {key}: {value}")
+
+        # Check for problematic splits
+        if split_stats['val_interactions'] < 10:
+            print(f"WARNING: Very few validation interactions ({split_stats['val_interactions']}). Consider using a larger dataset or different splitting strategy.")
+        
+        if split_stats['user_overlap_ratio'] > 0.5:
+            print(f"WARNING: High user overlap ({split_stats['user_overlap_ratio']:.2%}) between train and validation.")
+
+        print(f"Training interactions: {len(train_interactions_df)}")
+        print(f"Validation interactions: {len(val_interactions_df)}")
+
+        # ===== CREATE DATASETS WITH NEGATIVE SAMPLING =====
+        print("\nCreating dataset instances with negative sampling...")
+        
+        # Create full dataset for encoder fitting (using ALL interactions)
+        full_dataset_for_encoders = MultimodalDataset(
+            interactions_df=interactions_df,  # Full interactions for encoder fitting
+            item_info_df=item_info_df,
+            image_folder=data_config.image_folder,
+            vision_model_name=model_config.vision_model,
+            language_model_name=model_config.language_model,
+            create_negative_samples=False,  # Just for encoder fitting
+            numerical_feat_cols=data_config.numerical_features_cols,
+            numerical_normalization_method=data_config.numerical_normalization_method,
+            numerical_scaler=numerical_scaler,  # This should now be defined
+            is_train_mode=False
+        )
+        
+        print(f"Fitted encoders on full dataset:")
+        print(f"  Number of users: {full_dataset_for_encoders.n_users}")
+        print(f"  Number of items: {full_dataset_for_encoders.n_items}")
+        
+        # Create training dataset with negative sampling
+        train_dataset_instance = MultimodalDataset(
+            interactions_df=train_interactions_df,
+            item_info_df=item_info_df,
+            image_folder=data_config.image_folder,
+            vision_model_name=model_config.vision_model,
+            language_model_name=model_config.language_model,
+            create_negative_samples=True,  # Enable negative sampling for training
+            negative_sampling_ratio=data_config.negative_sampling_ratio,
+            text_augmentation_config=data_config.text_augmentation,
+            numerical_feat_cols=data_config.numerical_features_cols,
+            numerical_normalization_method=data_config.numerical_normalization_method,
+            numerical_scaler=numerical_scaler,  # This should now be defined
+            is_train_mode=True
+        )
+        
+        # Use encoders from full dataset
+        train_dataset_instance.user_encoder = full_dataset_for_encoders.user_encoder
+        train_dataset_instance.item_encoder = full_dataset_for_encoders.item_encoder
+        train_dataset_instance.n_users = full_dataset_for_encoders.n_users
+        train_dataset_instance.n_items = full_dataset_for_encoders.n_items
+        
+        # Create validation dataset with negative sampling
+        val_dataset_instance = MultimodalDataset(
+            interactions_df=val_interactions_df,
+            item_info_df=item_info_df,
+            image_folder=data_config.image_folder,
+            vision_model_name=model_config.vision_model,
+            language_model_name=model_config.language_model,
+            create_negative_samples=True,  # Enable negative sampling for validation
+            negative_sampling_ratio=data_config.negative_sampling_ratio,
+            text_augmentation_config=TextAugmentationConfig(enabled=False),  # No augmentation for validation
+            numerical_feat_cols=data_config.numerical_features_cols,
+            numerical_normalization_method=data_config.numerical_normalization_method,
+            numerical_scaler=numerical_scaler,  # This should now be defined
+            is_train_mode=False
+        )
+        
+        # Use encoders from full dataset
+        val_dataset_instance.user_encoder = full_dataset_for_encoders.user_encoder
+        val_dataset_instance.item_encoder = full_dataset_for_encoders.item_encoder
+        val_dataset_instance.n_users = full_dataset_for_encoders.n_users
+        val_dataset_instance.n_items = full_dataset_for_encoders.n_items
+        
+        print(f"Training samples: {len(train_dataset_instance)}")
+        print(f"Validation samples: {len(val_dataset_instance)}")
 
         numerical_scaler = None
         scaler_path_obj = Path(data_config.scaler_path)
@@ -271,9 +460,10 @@ def main():
         print(f"Trainable parameters: {trainable_params:,}")
 
         trainer = Trainer(
-            model=model_init, device=device,
-            checkpoint_dir=config.checkpoint_dir, log_dir=config.log_dir,
-            use_contrastive=model_config.use_contrastive
+            model=model_init, 
+            device=device,
+            checkpoint_dir=config.checkpoint_dir,
+            use_contrastive=model_config.use_contrastive        
         )
         # Ensure loss weights from config are applied to the criterion in Trainer
         trainer.criterion.contrastive_weight = training_config.contrastive_weight
