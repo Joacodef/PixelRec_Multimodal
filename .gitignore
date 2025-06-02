@@ -37,3 +37,4 @@ results/figures/
 results/metrics/
 
 notebooks/
+wandb/

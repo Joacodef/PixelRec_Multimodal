@@ -127,52 +127,75 @@ class MultimodalDataset(Dataset):
 
 
     def _create_samples_with_labels(self):
-        """Create positive and negative samples for training."""
+        """
+        Creates positive and negative samples for training, ensuring original
+        user_id and item_id string identifiers are preserved alongside their indices.
+        """
+        # self.interactions (a copy of the input interactions_df) at this point should have:
+        # 'user_id', 'item_id', and after encoder fitting in __init__: 'user_idx', 'item_idx'.
         positive_df = self.interactions.copy()
         positive_df['label'] = 1
 
-        all_item_indices = set(self.interactions['item_idx'].unique())
+        # Prepare mappings from indices back to original string IDs for negative samples
+        # These encoders (self.user_encoder, self.item_encoder) should have been fitted
+        # in the __init__ method on the full interactions_df before this method is called.
+        idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
+        idx_to_item_id = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
+
+        all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_)) # Use all known item indices
         user_item_interaction_dict = self.interactions.groupby('user_idx')['item_idx'].apply(set).to_dict()
-        
+
         negative_samples_list = []
         print("Creating negative samples...")
-        for user_idx, positive_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
-            possible_negative_indices = list(all_item_indices - positive_item_indices)
-            
-            n_positive = len(positive_item_indices)
-            n_negative_to_sample = min(
-                int(n_positive * self.negative_sampling_ratio),
+        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
+            possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
+
+            num_positive = len(interacted_item_indices)
+            num_negative_to_sample = min(
+                int(num_positive * self.negative_sampling_ratio),
                 len(possible_negative_indices)
             )
 
-            if n_negative_to_sample > 0:
-                sampled_negative_indices = random.sample(possible_negative_indices, n_negative_to_sample)
+            if num_negative_to_sample > 0:
+                sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
+                current_user_id_str = idx_to_user_id[user_idx] # Get original string user_id
+
                 for neg_item_idx in sampled_negative_indices:
-                    # We need original user_id and item_id if encoders are re-fitted or not universally available
-                    # For simplicity, if encoders are stable, we can use idx.
-                    # Here, assuming user_idx and item_idx are primary keys for samples.
+                    current_item_id_str = idx_to_item_id[neg_item_idx] # Get original string item_id
                     negative_samples_list.append({
-                        'user_idx': user_idx,
-                        'item_idx': neg_item_idx,
-                        'label': 0
-                        # 'user_id' and 'item_id' can be mapped back if needed, but model uses idx
+                        'user_id': current_user_id_str,    # Include string user_id
+                        'item_id': current_item_id_str,    # Include string item_id
+                        'user_idx': user_idx,              # Include user_idx
+                        'item_idx': neg_item_idx,            # Include item_idx
+                        'label': 0                         # Label for negative sample
                     })
-        
+
         negative_df = pd.DataFrame(negative_samples_list)
 
-        # Concatenate and shuffle
-        all_samples_df = pd.concat([positive_df[['user_idx', 'item_idx', 'label']], negative_df], ignore_index=True)
+        # Define columns to select from positive_df. It already has all required columns.
+        # Ensure 'user_id', 'item_id', 'user_idx', 'item_idx', 'label' are present.
+        columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
         
-        # Map item_idx back to item_id for fetching item info later
-        # This requires item_encoder to be fitted on the same item set.
-        # Create a reverse mapping from item_idx to item_id
-        idx_to_id_mapping = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
-        all_samples_df['item_id'] = all_samples_df['item_idx'].map(idx_to_id_mapping)
-        
-        # Remove samples where item_id could not be mapped (if any item_idx was out of encoder's scope)
-        all_samples_df.dropna(subset=['item_id'], inplace=True)
+        # Verify positive_df has these columns (it should from self.interactions)
+        for col in columns_for_concat:
+            if col not in positive_df.columns and col != 'label': # label is added just above
+                 # This case should ideally not happen if __init__ populates idx correctly
+                raise ValueError(f"Missing column '{col}' in positive_df during _create_samples_with_labels. Check MultimodalDataset __init__ regarding idx creation.")
 
-        return all_samples_df.sample(frac=1).reset_index(drop=True)
+
+        # Concatenate positive and negative samples
+        if not negative_df.empty:
+            all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
+        else: # Handle case where no negative samples were generated
+            all_samples_df = positive_df[columns_for_concat].copy()
+
+
+        # Drop rows if any crucial ID mapping might have failed or resulted in NaNs
+        # (though with the current logic, NaNs in these ID columns are less likely)
+        all_samples_df.dropna(subset=['user_id', 'item_id', 'user_idx', 'item_idx'], inplace=True)
+
+        # Shuffle the combined samples
+        return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True)
 
 
     def __len__(self) -> int:

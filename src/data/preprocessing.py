@@ -114,6 +114,7 @@ def is_image_corrupted(image_path: str) -> bool:
     try:
         img = Image.open(image_path)
         img.verify()  # Verify is a superficial check, load() is more thorough
+        img = Image.open(image_path)
         img.load()    # Try to load the image data
         return False
     except Exception:

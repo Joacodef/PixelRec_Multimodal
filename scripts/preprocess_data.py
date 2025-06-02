@@ -40,16 +40,16 @@ def validate_and_filter_images(
             image_path = image_folder_path / f"{item_id}{ext}"
             if image_path.exists():
                 if img_val_config.check_corrupted and is_image_corrupted(str(image_path)):
-                    # print(f"Warning: Image {image_path} is corrupted. Skipping item {item_id}.")
+                    print(f"Warning: Image {image_path} is corrupted. Skipping item {item_id}.")
                     continue
                 if not check_image_dimensions(str(image_path), img_val_config.min_width, img_val_config.min_height):
-                    # print(f"Warning: Image {image_path} does not meet dimension requirements. Skipping item {item_id}.")
+                    print(f"Warning: Image {image_path} does not meet dimension requirements. Skipping item {item_id}.")
                     continue
                 valid_item_ids.append(item_id)
                 image_found = True
                 break
-        # if not image_found:
-            # print(f"Warning: No valid image found for item {item_id} with allowed extensions. Skipping item.")
+        if not image_found:
+            print(f"Warning: No valid image found for item {item_id} with allowed extensions. Skipping item.")
     
     original_count = len(item_df)
     filtered_df = item_df[item_df['item_id'].isin(valid_item_ids)].copy()

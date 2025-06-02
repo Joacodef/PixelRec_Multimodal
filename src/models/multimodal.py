@@ -1,368 +1,313 @@
+# src/models/multimodal.py
 """
-Multimodal recommender model architecture
+Multimodal recommender model architecture using pre-trained vision and language models.
 """
 import torch
 import torch.nn as nn
 from transformers import (
-    AutoModel, 
-    AutoModelForImageClassification,
-    CLIPVisionModel, 
+    AutoModel,
+    AutoModelForImageClassification, # For models like ResNet, ConvNeXT
+    CLIPVisionModel,
     CLIPTextModel,
-    DinoModel
+    Dinov2Model # For DINOv2 models
 )
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union # Adjusted Union import for type hint
 
-from .layers import CrossModalAttention
-
-from ..config import MODEL_CONFIGS
-
+from ..config import MODEL_CONFIGS # Relative import for configuration
 
 class PretrainedMultimodalRecommender(nn.Module):
-    """Multimodal recommender using pre-trained models"""
-    
+    """
+    A multimodal recommender system that leverages pre-trained models for vision
+    and language feature extraction, combined with user and item embeddings.
+    """
+
     def __init__(
-        self, 
-        n_users: int, 
-        n_items: int, 
+        self,
+        n_users: int,
+        n_items: int,
         embedding_dim: int = 128,
-        vision_model_name: str = 'clip', 
-        language_model_name: str = 'sentence-bert',
-        freeze_vision: bool = True, 
-        freeze_language: bool = True, 
-        use_contrastive: bool = True,
+        vision_model_name: str = 'clip', # Key for vision model in MODEL_CONFIGS
+        language_model_name: str = 'sentence-bert', # Key for language model in MODEL_CONFIGS
+        freeze_vision: bool = True,
+        freeze_language: bool = True,
+        use_contrastive: bool = True, # Enables contrastive loss if vision_model_name is 'clip'
         dropout_rate: float = 0.3
     ):
         """
-        Initialize the multimodal recommender.
-        
+        Initializes the PretrainedMultimodalRecommender.
+
         Args:
-            n_users: Number of unique users
-            n_items: Number of unique items
-            embedding_dim: Dimension of embeddings
-            vision_model_name: Name of vision model ('clip', 'dino', 'resnet', 'convnext')
-            language_model_name: Name of language model
-            freeze_vision: Whether to freeze vision model weights
-            freeze_language: Whether to freeze language model weights
-            use_contrastive: Whether to use contrastive learning (only for CLIP)
-            dropout_rate: Dropout rate for regularization
+            n_users: Number of unique users for user embeddings.
+            n_items: Number of unique items for item embeddings.
+            embedding_dim: Dimensionality of the user, item, and projected modal embeddings.
+            vision_model_name: Identifier for the vision model configuration.
+            language_model_name: Identifier for the language model configuration.
+            freeze_vision: If True, freezes the weights of the pre-trained vision model.
+            freeze_language: If True, freezes the weights of the pre-trained language model.
+            use_contrastive: If True and using 'clip' vision model, enables contrastive learning components.
+            dropout_rate: Dropout rate for regularization in projection and fusion layers.
         """
         super(PretrainedMultimodalRecommender, self).__init__()
-        
-        # Store configurations
+
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
-        
-        # Initialize embeddings
+        # Store the number of numerical features, assuming 7 based on original design.
+        # This should ideally be configurable if it can vary.
+        self.num_numerical_features = 7
+
         self._init_embeddings(n_users, n_items)
-        
-        # Initialize vision model
         self._init_vision_model(vision_model_name, freeze_vision)
-        
-        # Initialize language model
         self._init_language_model(language_model_name, freeze_language)
-        
-        # Initialize projection layers
         self._init_projection_layers()
-        
-        # Initialize fusion network
         self._init_fusion_network()
-    
+
     def _init_embeddings(self, n_users: int, n_items: int):
-        """Initialize user and item embeddings"""
+        """Initializes user and item embedding layers."""
         self.user_embedding = nn.Embedding(n_users, self.embedding_dim)
         self.item_embedding = nn.Embedding(n_items, self.embedding_dim)
-        
-        # Initialize embeddings
         nn.init.xavier_uniform_(self.user_embedding.weight)
         nn.init.xavier_uniform_(self.item_embedding.weight)
-    
-    def _init_vision_model(self, model_name: str, freeze: bool):
-        """Initialize vision model based on selection"""
-        if model_name == 'clip':
-            self.vision_model = CLIPVisionModel.from_pretrained(
-                self.vision_config['name']
-            )
+
+    def _init_vision_model(self, model_key: str, freeze: bool):
+        """Initializes the vision model based on the provided key."""
+        hf_model_name = self.vision_config['name']
+        if model_key == 'clip':
+            self.vision_model = CLIPVisionModel.from_pretrained(hf_model_name)
             if self.use_contrastive:
-                self.clip_text_model = CLIPTextModel.from_pretrained(
-                    self.vision_config['name']
-                )
-        elif model_name == 'dino':
-            self.vision_model = DinoModel.from_pretrained(
-                self.vision_config['name']
-            )
-        else:
+                self.clip_text_model = CLIPTextModel.from_pretrained(hf_model_name)
+        elif model_key == 'dino': # This key now loads DINOv2
+            self.vision_model = Dinov2Model.from_pretrained(hf_model_name)
+        else: # Handles ResNet, ConvNeXT, or other AutoModelForImageClassification compatible models
             self.vision_model = AutoModelForImageClassification.from_pretrained(
-                self.vision_config['name'], 
-                num_labels=self.embedding_dim,
+                hf_model_name,
+                num_labels=self.vision_config['dim'], # Using native dim as num_labels for feature extraction
                 ignore_mismatched_sizes=True
             )
-        
         if freeze:
             for param in self.vision_model.parameters():
                 param.requires_grad = False
-    
-    def _init_language_model(self, model_name: str, freeze: bool):
-        """Initialize language model"""
-        self.language_model = AutoModel.from_pretrained(
-            self.language_config['name']
-        )
-        
+
+    def _init_language_model(self, model_key: str, freeze: bool):
+        """Initializes the language model based on the provided key."""
+        hf_model_name = self.language_config['name']
+        self.language_model = AutoModel.from_pretrained(hf_model_name)
         if freeze:
             for param in self.language_model.parameters():
                 param.requires_grad = False
-    
+
     def _init_projection_layers(self):
-        """Initialize projection layers for each modality"""
+        """Initializes linear projection layers for modality features."""
         self.vision_projection = nn.Sequential(
             nn.Linear(self.vision_config['dim'], self.embedding_dim),
             nn.ReLU(),
             nn.Dropout(self.dropout_rate)
         )
-        
         self.language_projection = nn.Sequential(
             nn.Linear(self.language_config['dim'], self.embedding_dim),
             nn.ReLU(),
             nn.Dropout(self.dropout_rate)
         )
-        
         self.numerical_projection = nn.Sequential(
-            nn.Linear(7, self.embedding_dim),
+            nn.Linear(self.num_numerical_features, self.embedding_dim), # Uses self.num_numerical_features
             nn.ReLU(),
             nn.Dropout(self.dropout_rate)
         )
-        
-        if self.use_contrastive:
+        if self.use_contrastive: # Specific to CLIP usage
             self.contrastive_projection = nn.Linear(
-                self.vision_config['dim'], 
-                self.embedding_dim
+                self.vision_config['dim'], self.embedding_dim
             )
             self.temperature = nn.Parameter(torch.tensor(0.07))
-    
+
     def _init_fusion_network(self):
-        """Initialize the fusion network"""
-        # Attention mechanism for feature fusion
+        """Initializes the attention-based fusion network and final prediction layers."""
+        # MultiheadAttention expects input (L, N, E) where L is sequence length, N is batch size, E is embedding dim.
+        # Here, 5 modal/user/item features are stacked, so L=5.
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.embedding_dim, 
-            num_heads=4,
-            dropout=self.dropout_rate
+            embed_dim=self.embedding_dim, num_heads=4, dropout=self.dropout_rate
         )
-        
-        # Final fusion layers
+        # The output of attention (after permutation and view) will be (N, 5 * E)
         self.fusion = nn.Sequential(
-            nn.Linear(self.embedding_dim * 5, 512),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate),
-            nn.BatchNorm1d(512),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate),
-            nn.BatchNorm1d(256),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-            nn.Sigmoid()
+            nn.Linear(self.embedding_dim * 5, 512), nn.ReLU(), nn.Dropout(self.dropout_rate), nn.BatchNorm1d(512),
+            nn.Linear(512, 256), nn.ReLU(), nn.Dropout(self.dropout_rate), nn.BatchNorm1d(256),
+            nn.Linear(256, 128), nn.ReLU(),
+            nn.Linear(128, 1), nn.Sigmoid()
         )
-    
+
     def forward(
-        self, 
-        user_idx: torch.Tensor, 
-        item_idx: torch.Tensor, 
-        image: torch.Tensor, 
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor, 
-        numerical_features: torch.Tensor, 
-        return_embeddings: bool = False
-    ) -> torch.Tensor:
+        self, user_idx: torch.Tensor, item_idx: torch.Tensor, image: torch.Tensor,
+        text_input_ids: torch.Tensor, text_attention_mask: torch.Tensor,
+        numerical_features: torch.Tensor, return_embeddings: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
-        Forward pass through the model.
-        
+        Performs the forward pass of the model.
+
         Args:
-            user_idx: User indices
-            item_idx: Item indices
-            image: Image tensors
-            text_input_ids: Text input IDs
-            text_attention_mask: Text attention mask
-            numerical_features: Numerical features
-            return_embeddings: Whether to return intermediate embeddings
-            
+            user_idx: Tensor of user indices.
+            item_idx: Tensor of item indices.
+            image: Tensor of image pixel values.
+            text_input_ids: Tensor of text input IDs.
+            text_attention_mask: Tensor of text attention masks.
+            numerical_features: Tensor of numerical features.
+            return_embeddings: If True, returns intermediate embeddings along with predictions.
+
         Returns:
-            Prediction scores and optionally embeddings
+            The prediction scores (Tensor). If return_embeddings is True, also returns
+            raw vision features, raw CLIP text features (if applicable), and projected vision embeddings.
         """
         batch_size = user_idx.size(0)
-        
-        # Get embeddings
+
         user_emb = self.user_embedding(user_idx)
         item_emb = self.item_embedding(item_idx)
-        
-        # Get vision features
-        vision_output = self._get_vision_features(image)
-        vision_emb = self.vision_projection(vision_output)
-        
-        # Get language features
-        language_output = self._get_language_features(
-            text_input_ids, 
-            text_attention_mask
-        )
-        language_emb = self.language_projection(language_output)
-        
-        # Get numerical features
-        numerical_emb = self.numerical_projection(numerical_features)
-        
-        # Get CLIP text features for contrastive learning
-        clip_text_features = None
+
+        raw_vision_feat = self._get_vision_features(image)
+        projected_vision_emb = self.vision_projection(raw_vision_feat)
+
+        raw_language_feat = self._get_language_features(text_input_ids, text_attention_mask)
+        projected_language_emb = self.language_projection(raw_language_feat)
+
+        projected_numerical_emb = self.numerical_projection(numerical_features)
+
+        raw_clip_text_feat = None
         if self.use_contrastive and hasattr(self, 'clip_text_model'):
-            clip_text_features = self._get_clip_text_features(
-                text_input_ids, 
-                text_attention_mask
-            )
-        
-        # Apply attention-based fusion
-        combined = self._apply_attention_fusion(
-            user_emb, 
-            item_emb, 
-            vision_emb, 
-            language_emb, 
-            numerical_emb, 
-            batch_size
+            raw_clip_text_feat = self._get_clip_text_features(text_input_ids, text_attention_mask)
+
+        combined_features = self._apply_attention_fusion(
+            user_emb, item_emb, projected_vision_emb,
+            projected_language_emb, projected_numerical_emb, batch_size
         )
-        
-        # Final prediction
-        output = self.fusion(combined)
-        
+        output = self.fusion(combined_features)
+
         if return_embeddings:
-            return output, vision_output, clip_text_features, vision_emb
-        
+            return output, raw_vision_feat, raw_clip_text_feat, projected_vision_emb
         return output
-    
+
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
-        """Extract vision features from image"""
-        if hasattr(self.vision_model, 'get_image_features'):
-            vision_output = self.vision_model.get_image_features(image)
+        """Extracts vision features from the image tensor using the vision model."""
+        # Standardize input argument name for Hugging Face models
+        model_input = {'pixel_values': image}
+        
+        if hasattr(self.vision_model, 'get_image_features'): # Specific to CLIP's vision model
+            vision_output = self.vision_model.get_image_features(**model_input)
         else:
-            vision_output = self.vision_model(image).pooler_output
+            outputs = self.vision_model(**model_input)
+            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                vision_output = outputs.pooler_output
+            elif hasattr(outputs, 'last_hidden_state'): # Fallback for models without pooler_output
+                vision_output = outputs.last_hidden_state.mean(dim=1)
+            else:
+                # If output is a tensor (e.g. from a model without explicit pooler or last_hidden_state attribute in output object)
+                # This case needs careful handling based on specific model structure
+                # For AutoModelForImageClassification, output.logits might be returned if not careful
+                # Assuming a feature extractor should give a feature tensor.
+                # This part might need adjustment if a model doesn't fit the above patterns.
+                # For now, we assume one of the above attributes will exist for feature extraction.
+                raise ValueError("Vision model output structure not recognized for feature extraction.")
         return vision_output
-    
-    def _get_language_features(
-        self, 
-        input_ids: torch.Tensor, 
-        attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """Extract language features from text"""
-        language_output = self.language_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        
-        # Use pooler output if available, otherwise mean pooling
-        if hasattr(language_output, 'pooler_output') and language_output.pooler_output is not None:
-            language_feat = language_output.pooler_output
-        else:
-            language_feat = language_output.last_hidden_state.mean(dim=1)
-        
-        return language_feat
-    
-    def _get_clip_text_features(
-        self, 
-        input_ids: torch.Tensor, 
-        attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """Get CLIP text features for contrastive learning"""
-        clip_text_output = self.clip_text_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        return clip_text_output.pooler_output
-    
+
+    def _get_language_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Extracts language features from text inputs using the language model."""
+        outputs = self.language_model(input_ids=input_ids, attention_mask=attention_mask)
+        if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+            lang_feat = outputs.pooler_output
+        else: # Default to mean of last hidden state
+            lang_feat = outputs.last_hidden_state.mean(dim=1)
+        return lang_feat
+
+    def _get_clip_text_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> Optional[torch.Tensor]:
+        """Extracts text features using the CLIP text model, if available."""
+        if hasattr(self, 'clip_text_model') and self.clip_text_model is not None:
+            outputs = self.clip_text_model(input_ids=input_ids, attention_mask=attention_mask)
+            return outputs.pooler_output # CLIP text model typically uses pooler_output
+        return None
+
     def _apply_attention_fusion(
-        self, 
-        user_emb: torch.Tensor,
-        item_emb: torch.Tensor,
-        vision_emb: torch.Tensor,
-        language_emb: torch.Tensor,
-        numerical_emb: torch.Tensor,
-        batch_size: int
+        self, user_emb: torch.Tensor, item_emb: torch.Tensor, vision_emb: torch.Tensor,
+        language_emb: torch.Tensor, numerical_emb: torch.Tensor, batch_size: int
     ) -> torch.Tensor:
-        """Apply attention-based fusion of features"""
-        # Stack features for attention
-        features = torch.stack(
-            [user_emb, item_emb, vision_emb, language_emb, numerical_emb], 
-            dim=1
-        )
-        
-        # Apply self-attention
-        attended_features, _ = self.attention(features, features, features)
-        
-        # Concatenate all features
-        combined = attended_features.view(batch_size, -1)
-        
+        """Combines features using self-attention and prepares for final fusion layers."""
+        # Stack features: (num_features, batch_size, embedding_dim)
+        features_stacked = torch.stack([user_emb, item_emb, vision_emb, language_emb, numerical_emb], dim=0)
+        # Apply attention
+        attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
+        # Reshape for concatenation: (batch_size, num_features * embedding_dim)
+        combined = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
         return combined
-    
+
     def get_item_embedding(
-        self, 
-        item_idx: torch.Tensor,
-        image: torch.Tensor,
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor,
-        numerical_features: torch.Tensor
+        self, item_idx: torch.Tensor, image: torch.Tensor, text_input_ids: torch.Tensor,
+        text_attention_mask: torch.Tensor, numerical_features: torch.Tensor
     ) -> torch.Tensor:
-        """Get the complete embedding for an item"""
-        with torch.no_grad():
-            # Get all embeddings
-            item_emb = self.item_embedding(item_idx)
-            vision_output = self._get_vision_features(image)
-            vision_emb = self.vision_projection(vision_output)
-            language_output = self._get_language_features(
-                text_input_ids, 
-                text_attention_mask
-            )
-            language_emb = self.language_projection(language_output)
-            numerical_emb = self.numerical_projection(numerical_features)
-            
-            # Concatenate all item-related embeddings
+        """
+        Computes a comprehensive item embedding by concatenating its ID-based embedding
+        with projected modal features. For inference or analysis purposes.
+        """
+        with torch.no_grad(): # Ensure no gradients are computed during this process
+            base_item_emb = self.item_embedding(item_idx)
+            raw_vision_feat = self._get_vision_features(image)
+            projected_vision_emb = self.vision_projection(raw_vision_feat)
+            raw_language_feat = self._get_language_features(text_input_ids, text_attention_mask)
+            projected_language_emb = self.language_projection(raw_language_feat)
+            projected_numerical_emb = self.numerical_projection(numerical_features)
+
             item_full_embedding = torch.cat(
-                [item_emb, vision_emb, language_emb, numerical_emb], 
-                dim=-1
+                [base_item_emb, projected_vision_emb, projected_language_emb, projected_numerical_emb],
+                dim=-1 # Concatenate along the last dimension (feature dimension)
             )
-            
         return item_full_embedding
 
 
+# The EnhancedMultimodalRecommender class definition follows.
+# Its comments and functionality are kept concise as per the production-ready requirement.
+# If CrossModalAttention is not fully integrated or used in a production path,
+# its inclusion should be minimal or clearly justified for a specific, functional purpose.
+
 class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
-    """Enhanced multimodal recommender with cross-modal attention"""
-    
+    """
+    An enhanced version of the multimodal recommender, potentially incorporating
+    additional mechanisms like cross-modal attention.
+    """
     def __init__(self, *args, **kwargs):
+        """
+        Initializes the EnhancedMultimodalRecommender.
+        Inherits from PretrainedMultimodalRecommender and may add or override components.
+        """
         super().__init__(*args, **kwargs)
-        
-        # Add cross-modal attention layers
+
+        # Initialize cross-modal attention layers if they are part of this enhanced model's design.
+        # The CrossModalAttention layer is assumed to be defined in '.layers'.
+        from .layers import CrossModalAttention # Ensure this import path is correct.
         self.vision_text_attention = CrossModalAttention(self.embedding_dim)
         self.text_vision_attention = CrossModalAttention(self.embedding_dim)
         
-        # Add graph attention for user-item interactions
-        self.graph_attention = nn.MultiheadAttention(
-            embed_dim=self.embedding_dim,
-            num_heads=8,
-            dropout=self.dropout_rate
-        )
-        
+        # Note: The original PretrainedMultimodalRecommender.forward pass does not use
+        # the _apply_cross_modal_fusion method. If this Enhanced class intends to use it,
+        # its forward() method would need to be overridden to incorporate calls to
+        # _apply_cross_modal_fusion and adjust subsequent fusion logic.
+
     def _apply_cross_modal_fusion(
-        self,
-        vision_emb: torch.Tensor,
-        language_emb: torch.Tensor,
-        numerical_emb: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Apply cross-modal attention between modalities"""
-        
-        # Vision attending to text
-        vision_text_fused = self.vision_text_attention(vision_emb, language_emb)
-        
-        # Text attending to vision
-        text_vision_fused = self.text_vision_attention(language_emb, vision_emb)
-        
-        # Combine with numerical features
-        vision_enhanced = vision_emb + 0.5 * vision_text_fused
-        text_enhanced = language_emb + 0.5 * text_vision_fused
-        
-        return vision_enhanced, text_enhanced, numerical_emb
+        self, vision_emb: torch.Tensor, language_emb: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Applies cross-modal attention between vision and language embeddings.
+
+        Args:
+            vision_emb: Projected vision embeddings.
+            language_emb: Projected language embeddings.
+
+        Returns:
+            A tuple containing enhanced vision and language embeddings.
+        """
+        # Vision features attend to text features
+        vision_contextualized_by_text = self.vision_text_attention(vision_emb, language_emb)
+        # Text features attend to vision features
+        text_contextualized_by_vision = self.text_vision_attention(language_emb, vision_emb)
+
+        # Example of enhancing original embeddings with cross-modal components
+        # The combination strategy (e.g., addition, weighting) can be further refined.
+        vision_enhanced = vision_emb + 0.5 * vision_contextualized_by_text
+        text_enhanced = language_emb + 0.5 * text_contextualized_by_vision
+
+        return vision_enhanced, text_enhanced
