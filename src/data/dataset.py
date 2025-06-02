@@ -243,11 +243,11 @@ class MultimodalDataset(Dataset):
         # Get numerical features
         numerical_features_tensor = self._get_item_numerical_features(item_id_val, item_info_series)
 
-
         # Load and process image
         image_tensor = self._load_and_process_image(item_id_val)
 
-        return {
+        # Initialize the batch dictionary
+        batch = {
             'user_idx': torch.tensor(user_idx_val, dtype=torch.long),
             'item_idx': torch.tensor(item_idx_val, dtype=torch.long),
             'image': image_tensor,
@@ -256,10 +256,12 @@ class MultimodalDataset(Dataset):
             'numerical_features': numerical_features_tensor,
             'label': torch.tensor(label_val, dtype=torch.float32)
         }
-                # CLIP-specific tokenization
+        
+        # CLIP-specific tokenization
+        # This condition (self.clip_tokenizer_for_contrastive) is true if vision_model_name was 'clip'
         if self.clip_tokenizer_for_contrastive:
             clip_tokens = self.clip_tokenizer_for_contrastive(
-                text_content,
+                text_content, # Uses the same text_content as the primary tokenizer
                 padding='max_length',
                 truncation=True,
                 max_length=77,  # Standard CLIP max length
