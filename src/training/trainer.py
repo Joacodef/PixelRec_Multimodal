@@ -160,27 +160,28 @@ class Trainer:
             # Move batch to device
             batch = self._batch_to_device(batch)
 
+            # Prepare model inputs
+            model_call_args = {
+                'user_idx': batch['user_idx'],
+                'item_idx': batch['item_idx'],
+                'image': batch['image'],
+                'text_input_ids': batch['text_input_ids'],
+                'text_attention_mask': batch['text_attention_mask'],
+                'numerical_features': batch['numerical_features'],
+            }
+            
+            # Add CLIP specific inputs if they exist in the batch
+            if 'clip_text_input_ids' in batch:
+                model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
+            if 'clip_text_attention_mask' in batch:
+                model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
+
             # Forward pass with embeddings
-            # Assumes model.use_contrastive attribute exists if contrastive learning is part of the model
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
-                output, vision_features, text_features, _ = self.model(
-                    batch['user_idx'],
-                    batch['item_idx'],
-                    batch['image'],
-                    batch['text_input_ids'],
-                    batch['text_attention_mask'],
-                    batch['numerical_features'],
-                    return_embeddings=True
-                )
+                model_call_args['return_embeddings'] = True
+                output, vision_features, text_features, _ = self.model(**model_call_args)
             else:
-                output = self.model(
-                    batch['user_idx'],
-                    batch['item_idx'],
-                    batch['image'],
-                    batch['text_input_ids'],
-                    batch['text_attention_mask'],
-                    batch['numerical_features']
-                )
+                output = self.model(**model_call_args)
                 vision_features = None
                 text_features = None
 
@@ -246,15 +247,28 @@ class Trainer:
                 # Move batch to device
                 batch = self._batch_to_device(batch)
 
+                # Prepare model inputs for validation
+                # Note: clip_text_input_ids and clip_text_attention_mask are usually not needed for validation's forward pass
+                # unless validation also specifically evaluates the contrastive aspect or embeddings.
+                # Assuming standard validation focuses on the primary recommendation task output.
+                model_call_args_val = {
+                    'user_idx': batch['user_idx'],
+                    'item_idx': batch['item_idx'],
+                    'image': batch['image'],
+                    'text_input_ids': batch['text_input_ids'],
+                    'text_attention_mask': batch['text_attention_mask'],
+                    'numerical_features': batch['numerical_features'],
+                }
+                # If your model's forward pass for validation *requires* these (even if None), add them:
+                # if 'clip_text_input_ids' in batch: # Or more generally, ensure all expected args are present
+                #     model_call_args_val['clip_text_input_ids'] = batch.get('clip_text_input_ids')
+                # if 'clip_text_attention_mask' in batch:
+                #    model_call_args_val['clip_text_attention_mask'] = batch.get('clip_text_attention_mask')
+
+
                 # Forward pass
-                output = self.model(
-                    batch['user_idx'],
-                    batch['item_idx'],
-                    batch['image'],
-                    batch['text_input_ids'],
-                    batch['text_attention_mask'],
-                    batch['numerical_features']
-                ).squeeze()
+                output = self.model(**model_call_args_val).squeeze()
+
 
                 # Calculate loss (only BCE for validation if contrastive parts are not returned/used)
                 # Assuming MultimodalRecommenderLoss can handle None for vision/text features

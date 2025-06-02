@@ -13,7 +13,7 @@ MODEL_CONFIGS = {
     'vision': {
         'clip': {
             'name': 'openai/clip-vit-base-patch32',
-            'dim': 512
+            'dim': 768
         },
         'dino': {
             'name': 'facebook/dinov2-base',

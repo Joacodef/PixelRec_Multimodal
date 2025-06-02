@@ -139,7 +139,10 @@ class PretrainedMultimodalRecommender(nn.Module):
     def forward(
         self, user_idx: torch.Tensor, item_idx: torch.Tensor, image: torch.Tensor,
         text_input_ids: torch.Tensor, text_attention_mask: torch.Tensor,
-        numerical_features: torch.Tensor, return_embeddings: bool = False
+        numerical_features: torch.Tensor,
+        clip_text_input_ids: Optional[torch.Tensor] = None, # New
+        clip_text_attention_mask: Optional[torch.Tensor] = None, # New
+        return_embeddings: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
         Performs the forward pass of the model.
@@ -171,8 +174,13 @@ class PretrainedMultimodalRecommender(nn.Module):
         projected_numerical_emb = self.numerical_projection(numerical_features)
 
         raw_clip_text_feat = None
+        # self.use_contrastive is True if vision_model is 'clip' AND config model.use_contrastive is true
         if self.use_contrastive and hasattr(self, 'clip_text_model'):
-            raw_clip_text_feat = self._get_clip_text_features(text_input_ids, text_attention_mask)
+            if clip_text_input_ids is not None and clip_text_attention_mask is not None:
+                raw_clip_text_feat = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
+            else:
+                raise ValueError("CLIP text input IDs and attention mask must be provided when using contrastive learning.")
+
 
         combined_features = self._apply_attention_fusion(
             user_emb, item_emb, projected_vision_emb,
@@ -183,6 +191,13 @@ class PretrainedMultimodalRecommender(nn.Module):
         if return_embeddings:
             return output, raw_vision_feat, raw_clip_text_feat, projected_vision_emb
         return output
+    
+    def _get_clip_text_features(self, clip_input_ids: torch.Tensor, clip_attention_mask: torch.Tensor) -> Optional[torch.Tensor]: # Signature updated
+        """Extracts text features using the CLIP text model, if available."""
+        if hasattr(self, 'clip_text_model') and self.clip_text_model is not None:
+            outputs = self.clip_text_model(input_ids=clip_input_ids, attention_mask=clip_attention_mask)
+            return outputs.pooler_output 
+        return None
 
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
         """Extracts vision features from the image tensor using the vision model."""

@@ -1,7 +1,7 @@
 # Default configuration for multimodal recommender
 
 model:
-  vision_model: dino
+  vision_model: clip
   language_model: sentence-bert
   embedding_dim: 64
   freeze_vision: true

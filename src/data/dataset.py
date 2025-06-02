@@ -13,6 +13,7 @@ from tqdm import tqdm
 import random
 import pickle
 from typing import Dict, Optional, Tuple, Any, Union, List
+from transformers import CLIPTokenizer
 
 from ..config import MODEL_CONFIGS, TextAugmentationConfig # Import TextAugmentationConfig
 from .preprocessing import augment_text, normalize_features # Import necessary functions
@@ -70,6 +71,17 @@ class MultimodalDataset(Dataset):
 
         self.n_users = len(self.user_encoder.classes_)
         self.n_items = len(self.item_encoder.classes_)
+
+        self.vision_model_name = vision_model_name
+
+        self.language_config = MODEL_CONFIGS['language'][language_model_name] # Ensure MODEL_CONFIGS is loaded
+        self.tokenizer = AutoTokenizer.from_pretrained(self.language_config['name'])
+
+        self.clip_tokenizer_for_contrastive = None
+        if self.vision_model_name == 'clip': # Check if vision model is CLIP
+            from transformers import CLIPTokenizer # Specific import
+            clip_model_hf_name = MODEL_CONFIGS['vision']['clip']['name']
+            self.clip_tokenizer_for_contrastive = CLIPTokenizer.from_pretrained(clip_model_hf_name)
         
         # Pre-process and cache numerical features from item_info if they are to be used
         # This helps in applying normalization consistently if a scaler is fitted on training data
@@ -224,7 +236,7 @@ class MultimodalDataset(Dataset):
             text_content,
             padding='max_length',
             truncation=True,
-            max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') else 128, # Use model_max_length
+            max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') else 128,
             return_tensors='pt'
         )
 
@@ -244,6 +256,19 @@ class MultimodalDataset(Dataset):
             'numerical_features': numerical_features_tensor,
             'label': torch.tensor(label_val, dtype=torch.float32)
         }
+                # CLIP-specific tokenization
+        if self.clip_tokenizer_for_contrastive:
+            clip_tokens = self.clip_tokenizer_for_contrastive(
+                text_content,
+                padding='max_length',
+                truncation=True,
+                max_length=77,  # Standard CLIP max length
+                return_tensors='pt'
+            )
+            batch['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
+            batch['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
+
+        return batch
 
     def _get_item_info(self, item_id: str) -> pd.Series:
         try:
