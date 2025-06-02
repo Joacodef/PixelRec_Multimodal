@@ -320,17 +320,58 @@ def main():
 
         # ===== INITIALIZE MODEL =====
         print("\nInitializing model...")
-        model = PretrainedMultimodalRecommender(
-            n_users=full_dataset_for_encoders.n_users,
-            n_items=full_dataset_for_encoders.n_items,
-            embedding_dim=model_config.embedding_dim,
-            vision_model_name=model_config.vision_model,
-            language_model_name=model_config.language_model,
-            freeze_vision=model_config.freeze_vision,
-            freeze_language=model_config.freeze_language,
-            use_contrastive=model_config.use_contrastive,
-            dropout_rate=model_config.dropout_rate
-        ).to(device)
+        
+        # Get model class based on configuration
+        if hasattr(model_config, 'model_class') and model_config.model_class == 'enhanced':
+            from src.models.multimodal import EnhancedMultimodalRecommender
+            model_class = EnhancedMultimodalRecommender
+            print("Using EnhancedMultimodalRecommender")
+        else:
+            model_class = PretrainedMultimodalRecommender
+            print("Using PretrainedMultimodalRecommender")
+        
+        # Prepare model initialization parameters
+        model_params = {
+            'n_users': full_dataset_for_encoders.n_users,
+            'n_items': full_dataset_for_encoders.n_items,
+            'embedding_dim': model_config.embedding_dim,
+            'vision_model_name': model_config.vision_model,
+            'language_model_name': model_config.language_model,
+            'freeze_vision': model_config.freeze_vision,
+            'freeze_language': model_config.freeze_language,
+            'use_contrastive': model_config.use_contrastive,
+            'dropout_rate': model_config.dropout_rate,
+        }
+        
+        # Add architecture-specific parameters if they exist in config
+        if hasattr(model_config, 'num_attention_heads'):
+            model_params['num_attention_heads'] = model_config.num_attention_heads
+        if hasattr(model_config, 'attention_dropout'):
+            model_params['attention_dropout'] = model_config.attention_dropout
+        if hasattr(model_config, 'fusion_hidden_dims'):
+            model_params['fusion_hidden_dims'] = model_config.fusion_hidden_dims
+        if hasattr(model_config, 'fusion_activation'):
+            model_params['fusion_activation'] = model_config.fusion_activation
+        if hasattr(model_config, 'use_batch_norm'):
+            model_params['use_batch_norm'] = model_config.use_batch_norm
+        if hasattr(model_config, 'projection_hidden_dim'):
+            model_params['projection_hidden_dim'] = model_config.projection_hidden_dim
+        if hasattr(model_config, 'final_activation'):
+            model_params['final_activation'] = model_config.final_activation
+        if hasattr(model_config, 'init_method'):
+            model_params['init_method'] = model_config.init_method
+        if hasattr(model_config, 'contrastive_temperature'):
+            model_params['contrastive_temperature'] = model_config.contrastive_temperature
+        
+        # Add EnhancedMultimodalRecommender specific parameters
+        if model_class == EnhancedMultimodalRecommender:
+            if hasattr(model_config, 'use_cross_modal_attention'):
+                model_params['use_cross_modal_attention'] = model_config.use_cross_modal_attention
+            if hasattr(model_config, 'cross_modal_attention_weight'):
+                model_params['cross_modal_attention_weight'] = model_config.cross_modal_attention_weight
+        
+        # Initialize model with all parameters
+        model = model_class(**model_params).to(device)
 
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -356,15 +397,41 @@ def main():
 
         # ===== TRAIN MODEL =====
         print("\nStarting training...")
-        train_losses, val_losses = trainer.train(
-            train_loader=train_loader,
-            val_loader=val_loader,
-            epochs=training_config.epochs,
-            lr=training_config.learning_rate,
-            weight_decay=training_config.weight_decay,
-            patience=training_config.patience,
-            gradient_clip=training_config.gradient_clip
-        )
+        
+        # Prepare training parameters including optimizer configuration
+        training_params = {
+            'train_loader': train_loader,
+            'val_loader': val_loader,
+            'epochs': training_config.epochs,
+            'lr': training_config.learning_rate,
+            'weight_decay': training_config.weight_decay,
+            'patience': training_config.patience,
+            'gradient_clip': training_config.gradient_clip
+        }
+        
+        # Add optimizer configuration if available
+        if hasattr(training_config, 'optimizer_type'):
+            training_params['optimizer_type'] = training_config.optimizer_type
+        if hasattr(training_config, 'adam_beta1'):
+            training_params['adam_beta1'] = training_config.adam_beta1
+        if hasattr(training_config, 'adam_beta2'):
+            training_params['adam_beta2'] = training_config.adam_beta2
+        if hasattr(training_config, 'adam_eps'):
+            training_params['adam_eps'] = training_config.adam_eps
+        
+        # Add scheduler configuration if available
+        if hasattr(training_config, 'use_lr_scheduler'):
+            training_params['use_lr_scheduler'] = training_config.use_lr_scheduler
+        if hasattr(training_config, 'lr_scheduler_type'):
+            training_params['lr_scheduler_type'] = training_config.lr_scheduler_type
+        if hasattr(training_config, 'lr_scheduler_patience'):
+            training_params['lr_scheduler_patience'] = training_config.lr_scheduler_patience
+        if hasattr(training_config, 'lr_scheduler_factor'):
+            training_params['lr_scheduler_factor'] = training_config.lr_scheduler_factor
+        if hasattr(training_config, 'lr_scheduler_min_lr'):
+            training_params['lr_scheduler_min_lr'] = training_config.lr_scheduler_min_lr
+        
+        train_losses, val_losses = trainer.train(**training_params)
 
         # ===== SAVE FINAL MODEL AND ARTIFACTS =====
         # Save final model

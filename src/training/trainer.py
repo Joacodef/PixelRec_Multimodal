@@ -1,6 +1,6 @@
 # src/training/trainer.py
 """
-Training logic for multimodal recommender
+Training logic for multimodal recommender with configurable optimizer and scheduler
 """
 import torch
 import torch.nn as nn
@@ -50,6 +50,90 @@ class Trainer:
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.optimizer = None
+        self.scheduler = None
+
+    def _create_optimizer(
+        self,
+        lr: float,
+        weight_decay: float,
+        optimizer_type: str = 'adamw',
+        adam_beta1: float = 0.9,
+        adam_beta2: float = 0.999,
+        adam_eps: float = 1e-8
+    ) -> optim.Optimizer:
+        """Create optimizer based on configuration"""
+        if optimizer_type.lower() == 'adamw':
+            return optim.AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+                betas=(adam_beta1, adam_beta2),
+                eps=adam_eps
+            )
+        elif optimizer_type.lower() == 'adam':
+            return optim.Adam(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+                betas=(adam_beta1, adam_beta2),
+                eps=adam_eps
+            )
+        elif optimizer_type.lower() == 'sgd':
+            return optim.SGD(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+                momentum=0.9  # Default momentum for SGD
+            )
+        else:
+            print(f"Unknown optimizer type: {optimizer_type}. Using AdamW.")
+            return optim.AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay
+            )
+
+    def _create_scheduler(
+        self,
+        optimizer: optim.Optimizer,
+        scheduler_type: str = 'reduce_on_plateau',
+        patience: int = 2,
+        factor: float = 0.5,
+        min_lr: float = 1e-6,
+        total_epochs: int = 10
+    ):
+        """Create learning rate scheduler based on configuration"""
+        if scheduler_type.lower() == 'reduce_on_plateau':
+            return optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='min',
+                patience=patience,
+                factor=factor,
+                min_lr=min_lr,
+                verbose=True
+            )
+        elif scheduler_type.lower() == 'cosine':
+            return optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=total_epochs,
+                eta_min=min_lr
+            )
+        elif scheduler_type.lower() == 'step':
+            # Step every 'patience' epochs
+            return optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=patience,
+                gamma=factor
+            )
+        else:
+            print(f"Unknown scheduler type: {scheduler_type}. Using ReduceLROnPlateau.")
+            return optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='min',
+                patience=patience,
+                factor=factor,
+                min_lr=min_lr
+            )
 
     def train(
         self,
@@ -59,36 +143,46 @@ class Trainer:
         lr: float = 0.001,
         weight_decay: float = 0.01,
         patience: int = 3,
-        gradient_clip: float = 1.0
+        gradient_clip: float = 1.0,
+        # Optimizer parameters
+        optimizer_type: str = 'adamw',
+        adam_beta1: float = 0.9,
+        adam_beta2: float = 0.999,
+        adam_eps: float = 1e-8,
+        # Scheduler parameters
+        use_lr_scheduler: bool = True,
+        lr_scheduler_type: str = 'reduce_on_plateau',
+        lr_scheduler_patience: int = 2,
+        lr_scheduler_factor: float = 0.5,
+        lr_scheduler_min_lr: float = 1e-6
     ) -> Tuple[List[float], List[float]]:
         """
-        Train the model.
-
-        Args:
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            epochs: Number of epochs
-            lr: Learning rate
-            weight_decay: Weight decay for regularization
-            patience: Early stopping patience
-            gradient_clip: Gradient clipping value
+        Train the model with configurable optimizer and scheduler.
 
         Returns:
             Training and validation losses
         """
-        # Initialize optimizer and scheduler
-        optimizer = optim.AdamW(
-            self.model.parameters(),
+        # Initialize optimizer
+        optimizer = self._create_optimizer(
             lr=lr,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
+            optimizer_type=optimizer_type,
+            adam_beta1=adam_beta1,
+            adam_beta2=adam_beta2,
+            adam_eps=adam_eps
         )
         self.optimizer = optimizer
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            patience=2,
-            factor=0.5
-        )
+        
+        # Initialize scheduler if requested
+        if use_lr_scheduler:
+            self.scheduler = self._create_scheduler(
+                optimizer=optimizer,
+                scheduler_type=lr_scheduler_type,
+                patience=lr_scheduler_patience,
+                factor=lr_scheduler_factor,
+                min_lr=lr_scheduler_min_lr,
+                total_epochs=epochs
+            )
 
         train_losses = []
         val_losses = []
@@ -114,7 +208,11 @@ class Trainer:
             self._log_metrics(train_metrics, val_metrics, self.epoch)
 
             # Learning rate scheduling
-            scheduler.step(val_metrics['total_loss'])
+            if self.scheduler is not None:
+                if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(val_metrics['total_loss'])
+                else:
+                    self.scheduler.step()
 
             # Early stopping check
             if self._check_early_stopping(val_metrics['total_loss'], patience):
@@ -333,6 +431,10 @@ class Trainer:
         print(f"Train Acc: {train_metrics['accuracy']:.4f}")
         print(f"Val Loss: {val_metrics['total_loss']:.4f}, "
               f"Val Acc: {val_metrics['accuracy']:.4f}")
+        
+        # Print current learning rate
+        current_lr = self.get_learning_rate()
+        print(f"Learning Rate: {current_lr:.6f}")
         print("-" * 50)
 
     def save_checkpoint(self, filename: str, is_best: bool = False):
@@ -346,6 +448,10 @@ class Trainer:
         # Include optimizer state if it exists
         if self.optimizer:
             checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
+        
+        # Include scheduler state if it exists
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
 
         path = self.checkpoint_dir / filename
         torch.save(checkpoint, path)
@@ -378,6 +484,11 @@ class Trainer:
             print(f"Loaded optimizer state from checkpoint.")
         elif 'optimizer_state_dict' in checkpoint and not self.optimizer:
             print(f"Warning: Optimizer state found in checkpoint, but trainer's optimizer is not initialized.")
+        
+        # Load scheduler state if it exists
+        if self.scheduler and 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            print(f"Loaded scheduler state from checkpoint.")
 
         print(f"Loaded checkpoint from {path} (epoch {self.epoch+1})")
 

@@ -1,29 +1,23 @@
 # src/models/multimodal.py
 """
 Multimodal recommender model architecture using pre-trained vision and language models.
+Now with fully configurable architecture from config file.
 """
 import torch
 import torch.nn as nn
 from transformers import (
     AutoModel,
-    AutoModelForImageClassification, # For models like ResNet, ConvNeXT
+    AutoModelForImageClassification,
     CLIPVisionModel,
     CLIPTextModel,
-    Dinov2Model # For DINOv2 models
+    Dinov2Model
 )
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
-from ..config import MODEL_CONFIGS # Relative import for configuration
+from ..config import MODEL_CONFIGS
+
 
 class PretrainedMultimodalRecommender(nn.Module):
-    # __init__, _init_embeddings, _init_vision_model, 
-    # _init_language_model, _init_projection_layers, _init_fusion_network,
-    # _get_vision_features, _get_language_features, _get_clip_text_features,
-    # _apply_attention_fusion, get_item_embedding methods remain as previously defined.
-    # Ensure _init_projection_layers correctly defines:
-    # self.vision_projection, self.language_projection, self.numerical_projection
-    # self.vision_contrastive_projection, self.text_contrastive_projection (if use_contrastive)
-
     def __init__(
         self,
         n_users: int,
@@ -34,7 +28,17 @@ class PretrainedMultimodalRecommender(nn.Module):
         freeze_vision: bool = True,
         freeze_language: bool = True,
         use_contrastive: bool = True,
-        dropout_rate: float = 0.3
+        dropout_rate: float = 0.3,
+        # Additional architectural parameters
+        num_attention_heads: int = 4,
+        attention_dropout: float = 0.1,
+        fusion_hidden_dims: List[int] = None,
+        fusion_activation: str = 'relu',
+        use_batch_norm: bool = True,
+        projection_hidden_dim: Optional[int] = None,
+        final_activation: str = 'sigmoid',
+        init_method: str = 'xavier_uniform',
+        contrastive_temperature: float = 0.07
     ):
         super(PretrainedMultimodalRecommender, self).__init__()
 
@@ -43,7 +47,18 @@ class PretrainedMultimodalRecommender(nn.Module):
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
-        self.num_numerical_features = 7 
+        self.num_numerical_features = 7
+        
+        # Architectural parameters
+        self.num_attention_heads = num_attention_heads
+        self.attention_dropout = attention_dropout
+        self.fusion_hidden_dims = fusion_hidden_dims or [512, 256, 128]
+        self.fusion_activation = fusion_activation
+        self.use_batch_norm = use_batch_norm
+        self.projection_hidden_dim = projection_hidden_dim
+        self.final_activation = final_activation
+        self.init_method = init_method
+        self.contrastive_temperature = contrastive_temperature
 
         self._init_embeddings(n_users, n_items)
         self._init_vision_model(vision_model_name, freeze_vision)
@@ -51,12 +66,39 @@ class PretrainedMultimodalRecommender(nn.Module):
         self._init_projection_layers()
         self._init_fusion_network()
 
+    def _get_activation(self, activation_name: str):
+        """Get activation function by name"""
+        activations = {
+            'relu': nn.ReLU(),
+            'gelu': nn.GELU(),
+            'tanh': nn.Tanh(),
+            'leaky_relu': nn.LeakyReLU(),
+            'silu': nn.SiLU()
+        }
+        return activations.get(activation_name.lower(), nn.ReLU())
+
     def _init_embeddings(self, n_users: int, n_items: int):
-        """Initializes user and item embedding layers."""
+        """Initializes user and item embedding layers with configurable initialization."""
         self.user_embedding = nn.Embedding(n_users, self.embedding_dim)
         self.item_embedding = nn.Embedding(n_items, self.embedding_dim)
-        nn.init.xavier_uniform_(self.user_embedding.weight)
-        nn.init.xavier_uniform_(self.item_embedding.weight)
+        
+        # Apply configured initialization
+        if self.init_method == 'xavier_uniform':
+            nn.init.xavier_uniform_(self.user_embedding.weight)
+            nn.init.xavier_uniform_(self.item_embedding.weight)
+        elif self.init_method == 'xavier_normal':
+            nn.init.xavier_normal_(self.user_embedding.weight)
+            nn.init.xavier_normal_(self.item_embedding.weight)
+        elif self.init_method == 'kaiming_uniform':
+            nn.init.kaiming_uniform_(self.user_embedding.weight, nonlinearity='relu')
+            nn.init.kaiming_uniform_(self.item_embedding.weight, nonlinearity='relu')
+        elif self.init_method == 'kaiming_normal':
+            nn.init.kaiming_normal_(self.user_embedding.weight, nonlinearity='relu')
+            nn.init.kaiming_normal_(self.item_embedding.weight, nonlinearity='relu')
+        else:
+            # Default to xavier_uniform
+            nn.init.xavier_uniform_(self.user_embedding.weight)
+            nn.init.xavier_uniform_(self.item_embedding.weight)
 
     def _init_vision_model(self, model_key: str, freeze: bool):
         """Initializes the vision model based on the provided key."""
@@ -77,9 +119,8 @@ class PretrainedMultimodalRecommender(nn.Module):
             for param in self.vision_model.parameters():
                 param.requires_grad = False
         if hasattr(self, 'clip_text_model') and self.clip_text_model and freeze:
-             for param in self.clip_text_model.parameters():
+            for param in self.clip_text_model.parameters():
                 param.requires_grad = False
-
 
     def _init_language_model(self, model_key: str, freeze: bool):
         """Initializes the language model based on the provided key."""
@@ -90,51 +131,111 @@ class PretrainedMultimodalRecommender(nn.Module):
                 param.requires_grad = False
 
     def _init_projection_layers(self):
-        """Initializes linear projection layers for modality features."""
-        self.vision_projection = nn.Sequential(
-            nn.Linear(self.vision_config['dim'], self.embedding_dim),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate)
-        )
-        self.language_projection = nn.Sequential(
-            nn.Linear(self.language_config['dim'], self.embedding_dim),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate)
-        )
-        self.numerical_projection = nn.Sequential(
-            nn.Linear(self.num_numerical_features, self.embedding_dim),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate)
-        )
+        """Initializes linear projection layers for modality features with optional hidden layers."""
+        activation = self._get_activation(self.fusion_activation)
+        
+        # Vision projection
+        if self.projection_hidden_dim:
+            self.vision_projection = nn.Sequential(
+                nn.Linear(self.vision_config['dim'], self.projection_hidden_dim),
+                activation,
+                nn.Dropout(self.dropout_rate),
+                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
+        else:
+            self.vision_projection = nn.Sequential(
+                nn.Linear(self.vision_config['dim'], self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
+        
+        # Language projection
+        if self.projection_hidden_dim:
+            self.language_projection = nn.Sequential(
+                nn.Linear(self.language_config['dim'], self.projection_hidden_dim),
+                activation,
+                nn.Dropout(self.dropout_rate),
+                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
+        else:
+            self.language_projection = nn.Sequential(
+                nn.Linear(self.language_config['dim'], self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
+        
+        # Numerical projection
+        if self.projection_hidden_dim:
+            self.numerical_projection = nn.Sequential(
+                nn.Linear(self.num_numerical_features, self.projection_hidden_dim),
+                activation,
+                nn.Dropout(self.dropout_rate),
+                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
+        else:
+            self.numerical_projection = nn.Sequential(
+                nn.Linear(self.num_numerical_features, self.embedding_dim),
+                activation,
+                nn.Dropout(self.dropout_rate)
+            )
 
         if self.use_contrastive:
             self.vision_contrastive_projection = nn.Linear(
                 self.vision_config['dim'],
                 self.embedding_dim
             )
-            # Assumed raw output dimension of CLIPTextModel's pooler_output.
-            # Based on previous error analysis, this appeared to be 512.
-            # Standard 'openai/clip-vit-base-patch32' text encoder output is 768.
-            # This value should be verified for the specific model checkpoint used.
+            # For CLIP text model output dimension
             clip_text_model_raw_output_dim = 512 
             self.text_contrastive_projection = nn.Linear(
                 clip_text_model_raw_output_dim, 
                 self.embedding_dim
             )
-            self.temperature = nn.Parameter(torch.tensor(0.07))
-
+            self.temperature = nn.Parameter(torch.tensor(self.contrastive_temperature))
 
     def _init_fusion_network(self):
-        """Initializes the attention-based fusion network and final prediction layers."""
+        """Initializes the attention-based fusion network and final prediction layers with configurable architecture."""
+        # Multi-head attention with configurable parameters
         self.attention = nn.MultiheadAttention(
-            embed_dim=self.embedding_dim, num_heads=4, dropout=self.dropout_rate
+            embed_dim=self.embedding_dim,
+            num_heads=self.num_attention_heads,
+            dropout=self.attention_dropout,
+            batch_first=False  # We'll handle the dimension ordering
         )
-        self.fusion = nn.Sequential(
-            nn.Linear(self.embedding_dim * 5, 512), nn.ReLU(), nn.Dropout(self.dropout_rate), nn.BatchNorm1d(512),
-            nn.Linear(512, 256), nn.ReLU(), nn.Dropout(self.dropout_rate), nn.BatchNorm1d(256),
-            nn.Linear(256, 128), nn.ReLU(),
-            nn.Linear(128, 1), nn.Sigmoid()
-        )
+        
+        # Build fusion network layers dynamically
+        activation = self._get_activation(self.fusion_activation)
+        fusion_layers = []
+        
+        # Input dimension is 5 * embedding_dim (user, item, vision, language, numerical)
+        input_dim = self.embedding_dim * 5
+        
+        for i, hidden_dim in enumerate(self.fusion_hidden_dims):
+            fusion_layers.append(nn.Linear(input_dim, hidden_dim))
+            fusion_layers.append(activation)
+            fusion_layers.append(nn.Dropout(self.dropout_rate))
+            
+            if self.use_batch_norm:
+                fusion_layers.append(nn.BatchNorm1d(hidden_dim))
+            
+            input_dim = hidden_dim
+        
+        # Final prediction layer
+        fusion_layers.append(nn.Linear(input_dim, 1))
+        
+        # Add final activation if specified
+        if self.final_activation == 'sigmoid':
+            fusion_layers.append(nn.Sigmoid())
+        elif self.final_activation == 'tanh':
+            fusion_layers.append(nn.Tanh())
+        # If 'none', no activation is added
+        
+        self.fusion = nn.Sequential(*fusion_layers)
     
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
         """Extracts vision features from the image tensor using the vision model."""
@@ -184,7 +285,7 @@ class PretrainedMultimodalRecommender(nn.Module):
         numerical_features: torch.Tensor,
         clip_text_input_ids: Optional[torch.Tensor] = None, 
         clip_text_attention_mask: Optional[torch.Tensor] = None, 
-        return_embeddings: bool = False # Default is False
+        return_embeddings: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         batch_size = user_idx.size(0)
 
@@ -193,13 +294,13 @@ class PretrainedMultimodalRecommender(nn.Module):
 
         raw_vision_output = self._get_vision_features(image) 
         
-        # --- Features for Main Recommendation Task ---
+        # Features for Main Recommendation Task
         projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
         projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
         projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
 
-        # --- Features for Contrastive Loss (only if return_embeddings is True) ---
+        # Features for Contrastive Loss (only if return_embeddings is True)
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
 
@@ -214,14 +315,12 @@ class PretrainedMultimodalRecommender(nn.Module):
                     if hasattr(self, 'text_contrastive_projection') and raw_clip_text_output is not None:
                         text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
                 else:
-                    # This error is raised if embeddings are requested for contrastive loss,
-                    # contrastive learning is enabled, but necessary CLIP text inputs are missing.
                     raise ValueError(
                         "CLIP text input IDs and attention mask must be provided "
                         "when 'use_contrastive' is True and 'return_embeddings' is True."
                     )
         
-        # --- Fusion and Prediction for Main Task ---
+        # Fusion and Prediction for Main Task
         combined_features = self._apply_attention_fusion(
             user_emb, item_emb, projected_vision_emb_main_task,
             projected_language_emb_main_task, projected_numerical_emb_main_task, batch_size
@@ -231,7 +330,7 @@ class PretrainedMultimodalRecommender(nn.Module):
         if return_embeddings:
             return output, vision_features_for_contrastive_loss, text_features_for_contrastive_loss, projected_vision_emb_main_task
         
-        return output # Default return: only the prediction output
+        return output
 
     def get_item_embedding(
         self, item_idx: torch.Tensor, image: torch.Tensor, text_input_ids: torch.Tensor,
@@ -258,19 +357,50 @@ class PretrainedMultimodalRecommender(nn.Module):
 
 class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
     """
-    An enhanced version of the multimodal recommender, potentially incorporating
-    additional mechanisms like cross-modal attention.
+    An enhanced version of the multimodal recommender with cross-modal attention.
+    Inherits all configurable parameters from PretrainedMultimodalRecommender.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self, 
+        *args, 
+        use_cross_modal_attention: bool = True,
+        cross_modal_attention_weight: float = 0.5,
+        **kwargs
+    ):
         """
         Initializes the EnhancedMultimodalRecommender.
-        Inherits from PretrainedMultimodalRecommender and may add or override components.
+        
+        Args:
+            use_cross_modal_attention: Whether to use cross-modal attention
+            cross_modal_attention_weight: Weight for cross-modal attention contribution
+            *args, **kwargs: Arguments passed to parent class
         """
         super().__init__(*args, **kwargs)
-
-        from .layers import CrossModalAttention 
-        self.vision_text_attention = CrossModalAttention(self.embedding_dim)
-        self.text_vision_attention = CrossModalAttention(self.embedding_dim)
+        
+        self.use_cross_modal_attention = use_cross_modal_attention
+        self.cross_modal_attention_weight = cross_modal_attention_weight
+        
+        if self.use_cross_modal_attention:
+            from .layers import CrossModalAttention 
+            self.vision_text_attention = CrossModalAttention(self.embedding_dim)
+            self.text_vision_attention = CrossModalAttention(self.embedding_dim)
+    
+    def _apply_attention_fusion(
+        self, user_emb: torch.Tensor, item_emb: torch.Tensor, vision_emb: torch.Tensor,
+        language_emb: torch.Tensor, numerical_emb: torch.Tensor, batch_size: int
+    ) -> torch.Tensor:
+        """Override to add cross-modal attention if enabled."""
+        
+        # Apply cross-modal attention if enabled
+        if self.use_cross_modal_attention and hasattr(self, 'vision_text_attention'):
+            vision_enhanced, text_enhanced = self._apply_cross_modal_fusion(vision_emb, language_emb)
+            vision_emb = vision_enhanced
+            language_emb = text_enhanced
+        
+        # Continue with standard attention fusion
+        return super()._apply_attention_fusion(
+            user_emb, item_emb, vision_emb, language_emb, numerical_emb, batch_size
+        )
         
     def _apply_cross_modal_fusion(
         self, vision_emb: torch.Tensor, language_emb: torch.Tensor
@@ -288,7 +418,8 @@ class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
         vision_contextualized_by_text = self.vision_text_attention(vision_emb, language_emb)
         text_contextualized_by_vision = self.text_vision_attention(language_emb, vision_emb)
 
-        vision_enhanced = vision_emb + 0.5 * vision_contextualized_by_text
-        text_enhanced = language_emb + 0.5 * text_contextualized_by_vision
+        # Weighted combination with original embeddings
+        vision_enhanced = vision_emb + self.cross_modal_attention_weight * vision_contextualized_by_text
+        text_enhanced = language_emb + self.cross_modal_attention_weight * text_contextualized_by_vision
 
         return vision_enhanced, text_enhanced
