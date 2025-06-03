@@ -166,21 +166,173 @@ class Recommender:
     def _score_items(
         self, 
         user_idx: int, 
-        items: List[str]
+        items: List[str],
+        batch_size: int = 32  # Process items in batches
     ) -> List[Tuple[str, float]]:
-        """Score a list of items for a user"""
+        """Score a list of items for a user using batched processing"""
         scores = []
         
+        # Process items in batches for efficiency
         with torch.no_grad():
-            for item_id in tqdm(items, desc="Scoring items"):
-                try:
-                    score = self._score_single_item(user_idx, item_id)
-                    scores.append((item_id, score))
-                except Exception: # Catch more specific exception if possible
-                    # Optionally log the error for item_id
-                    continue # Skip item if scoring fails
+            for i in tqdm(range(0, len(items), batch_size), desc="Scoring items"):
+                batch_items = items[i:i + batch_size]
+                batch_scores = self._score_item_batch(user_idx, batch_items)
+                scores.extend(batch_scores)
         
         return scores
+    
+    def _score_item_batch(self, user_idx: int, item_ids: List[str]) -> List[Tuple[str, float]]:
+        """Score a batch of items efficiently"""
+        batch_size = len(item_ids)
+        
+        # Prepare batch tensors
+        user_indices = torch.full((batch_size,), user_idx, dtype=torch.long).to(self.device)
+        item_indices = []
+        valid_items = []
+        valid_indices = []
+        
+        # Get item indices and filter invalid items
+        for idx, item_id in enumerate(item_ids):
+            try:
+                item_idx = self.dataset.item_encoder.transform([item_id])[0]
+                item_indices.append(item_idx)
+                valid_items.append(item_id)
+                valid_indices.append(idx)
+            except:
+                continue
+        
+        if not item_indices:
+            return []
+        
+        # Create tensors for valid items
+        item_indices_tensor = torch.tensor(item_indices, dtype=torch.long).to(self.device)
+        user_indices_valid = user_indices[:len(item_indices)]
+        
+        # Batch process features
+        batch_images = []
+        batch_text_ids = []
+        batch_text_masks = []
+        batch_numerical = []
+        
+        # Get expected dimensions from first successful item or model
+        expected_num_features = 7  # Default
+        img_height = img_width = 224  # Default
+        max_text_length = 128  # Default
+        
+        # Try to get dimensions from model
+        if hasattr(self.model, 'numerical_projection') and isinstance(self.model.numerical_projection, nn.Sequential):
+            first_layer = self.model.numerical_projection[0]
+            if hasattr(first_layer, 'in_features'):
+                expected_num_features = first_layer.in_features
+        
+        # Process each item
+        for item_id in valid_items:
+            features = self._get_item_features(item_id)
+            
+            if features is None:
+                # Create dummy features with correct dimensions
+                features = {
+                    'image': torch.zeros(3, img_height, img_width),
+                    'text_ids': torch.zeros(max_text_length, dtype=torch.long),
+                    'text_mask': torch.zeros(max_text_length, dtype=torch.long),
+                    'numerical': torch.zeros(expected_num_features, dtype=torch.float32)
+                }
+            else:
+                # Update expected dimensions from first successful item
+                if len(batch_images) == 0:  # First item
+                    img_height, img_width = features['image'].shape[1], features['image'].shape[2]
+                    max_text_length = features['text_ids'].shape[0]
+                    expected_num_features = features['numerical'].shape[0]
+            
+            # Ensure numerical features have correct shape
+            if features['numerical'].numel() == 0:
+                features['numerical'] = torch.zeros(expected_num_features, dtype=torch.float32)
+            
+            batch_images.append(features['image'])
+            batch_text_ids.append(features['text_ids'])
+            batch_text_masks.append(features['text_mask'])
+            batch_numerical.append(features['numerical'])
+        
+        # Stack all features
+        images_tensor = torch.stack(batch_images).to(self.device)
+        text_ids_tensor = torch.stack(batch_text_ids).to(self.device)
+        text_masks_tensor = torch.stack(batch_text_masks).to(self.device)
+        numerical_tensor = torch.stack(batch_numerical).to(self.device)
+        
+        # Get batch predictions
+        with torch.no_grad():
+            batch_scores = self.model(
+                user_idx=user_indices_valid,
+                item_idx=item_indices_tensor,
+                image=images_tensor,
+                text_input_ids=text_ids_tensor,
+                text_attention_mask=text_masks_tensor,
+                numerical_features=numerical_tensor
+            ).squeeze()
+        
+        # Handle single item case
+        if batch_scores.dim() == 0:
+            batch_scores = batch_scores.unsqueeze(0)
+        
+        # Pair items with scores
+        results = []
+        for item_id, score in zip(valid_items, batch_scores.cpu().numpy()):
+            results.append((item_id, float(score)))
+        
+        return results
+        
+        # Create tensors for valid items
+        item_indices_tensor = torch.tensor(item_indices, dtype=torch.long).to(self.device)
+        user_indices_valid = user_indices[:len(item_indices)]
+        
+        # Batch process features
+        batch_images = []
+        batch_text_ids = []
+        batch_text_masks = []
+        batch_numerical = []
+        
+        for item_id in valid_items:
+            features = self._get_item_features(item_id)
+            if features is None:
+                # Create dummy features
+                features = {
+                    'image': torch.zeros(3, 224, 224),
+                    'text_ids': torch.zeros(128, dtype=torch.long),
+                    'text_mask': torch.zeros(128, dtype=torch.long),
+                    'numerical': torch.zeros(7)
+                }
+            
+            batch_images.append(features['image'])
+            batch_text_ids.append(features['text_ids'])
+            batch_text_masks.append(features['text_mask'])
+            batch_numerical.append(features['numerical'])
+        
+        # Stack all features
+        images_tensor = torch.stack(batch_images).to(self.device)
+        text_ids_tensor = torch.stack(batch_text_ids).to(self.device)
+        text_masks_tensor = torch.stack(batch_text_masks).to(self.device)
+        numerical_tensor = torch.stack(batch_numerical).to(self.device)
+        
+        # Get batch predictions
+        batch_scores = self.model(
+            user_idx=user_indices_valid,
+            item_idx=item_indices_tensor,
+            image=images_tensor,
+            text_input_ids=text_ids_tensor,
+            text_attention_mask=text_masks_tensor,
+            numerical_features=numerical_tensor
+        ).squeeze()
+        
+        # Handle single item case
+        if batch_scores.dim() == 0:
+            batch_scores = batch_scores.unsqueeze(0)
+        
+        # Pair items with scores
+        results = []
+        for item_id, score in zip(valid_items, batch_scores.cpu().numpy()):
+            results.append((item_id, float(score)))
+        
+        return results
     
     def _score_single_item(self, user_idx: int, item_id: str) -> float:
         """Score a single item for a user"""
@@ -219,63 +371,150 @@ class Recommender:
     def _score_items_with_embeddings(
         self, 
         user_idx: int, 
-        items: List[str]
+        items: List[str],
+        batch_size: int = 32
     ) -> List[Dict[str, any]]:
-        """Score items and return with embeddings and other info"""
-        scored_items_list = [] # Renamed to avoid conflict
+        """Score items and return with embeddings and other info using batched processing"""
+        scored_items_list = []
         
         with torch.no_grad():
-            for item_id in tqdm(items, desc="Scoring items with embeddings"):
-                try:
-                    # Get item features
-                    item_features = self._get_item_features(item_id)
-                    if item_features is None:
-                        continue
-                    
-                    # Get item index
-                    item_idx_arr = self.dataset.item_encoder.transform([item_id])
-                    if len(item_idx_arr) == 0: continue
-                    item_idx = item_idx_arr[0]
-                    
-                    # Create tensors
-                    user_tensor = torch.tensor([user_idx], dtype=torch.long).to(self.device)
-                    item_tensor = torch.tensor([item_idx], dtype=torch.long).to(self.device)
-                    
-                    # Get score and embedding
-                    # The model's forward method needs to support return_embeddings=True
-                    output_tuple = self.model(
-                        user_idx=user_tensor,
-                        item_idx=item_tensor,
-                        image=item_features['image'].unsqueeze(0).to(self.device),
-                        text_input_ids=item_features['text_ids'].unsqueeze(0).to(self.device),
-                        text_attention_mask=item_features['text_mask'].unsqueeze(0).to(self.device),
-                        numerical_features=item_features['numerical'].unsqueeze(0).to(self.device),
-                        return_embeddings=True 
-                    ) #
-                    
-                    # Unpack the tuple carefully based on model's output structure when return_embeddings=True
-                    # Assuming: score, vision_output_raw, clip_text_features_raw, item_representation_for_diversity
-                    # The 'item_emb' for diversity should be a consistent representation of the item.
-                    # Let's assume the fourth element is the desired item representation.
-                    score = output_tuple[0] 
-                    item_representation_for_diversity = output_tuple[3] # This is vision_emb from model forward pass
-
-                    # Get item popularity from NoveltyMetrics instance
-                    popularity = self.novelty_metrics.item_popularity.get(item_id, 0.0) 
-                    
-                    scored_items_list.append({
-                        'item_id': item_id,
-                        'score': score.item(),
-                        'embedding': item_representation_for_diversity.cpu().numpy().squeeze(), # Ensure it's a 1D array
-                        'popularity': popularity
-                    })
-                    
-                except Exception: # Catch more specific exception if possible
-                    # Optionally log the error for item_id
-                    continue
+            for i in tqdm(range(0, len(items), batch_size), desc="Scoring items with embeddings"):
+                batch_items = items[i:i + batch_size]
+                batch_results = self._score_item_batch_with_embeddings(user_idx, batch_items)
+                scored_items_list.extend(batch_results)
         
         return scored_items_list
     
+
+    def _score_item_batch_with_embeddings(self, user_idx: int, item_ids: List[str]) -> List[Dict[str, any]]:
+        """Score a batch of items and return embeddings efficiently"""
+        batch_size = len(item_ids)
+        results = []
+        
+        # Prepare batch tensors
+        user_indices = torch.full((batch_size,), user_idx, dtype=torch.long).to(self.device)
+        item_indices = []
+        valid_items = []
+        valid_indices = []
+        
+        # Get item indices and filter invalid items
+        for idx, item_id in enumerate(item_ids):
+            try:
+                item_idx = self.dataset.item_encoder.transform([item_id])[0]
+                item_indices.append(item_idx)
+                valid_items.append(item_id)
+                valid_indices.append(idx)
+            except:
+                continue
+        
+        if not item_indices:
+            return []
+        
+        # Create tensors for valid items
+        item_indices_tensor = torch.tensor(item_indices, dtype=torch.long).to(self.device)
+        user_indices_valid = user_indices[:len(item_indices)]
+        
+        # Batch process features
+        batch_images = []
+        batch_text_ids = []
+        batch_text_masks = []
+        batch_numerical = []
+        
+        # Get the expected number of numerical features
+        expected_num_features = 7  # Default value from config
+        if hasattr(self.dataset, 'numerical_feat_cols') and self.dataset.numerical_feat_cols:
+            expected_num_features = len(self.dataset.numerical_feat_cols)
+        elif hasattr(self.model, 'numerical_projection') and hasattr(self.model.numerical_projection[0], 'in_features'):
+            expected_num_features = self.model.numerical_projection[0].in_features
+        
+        for item_id in valid_items:
+            features = self._get_item_features(item_id)
+            if features is None:
+                # Create dummy features with correct dimensions
+                # Get image size from the dataset's image processor
+                img_height = img_width = 224  # Default
+                if hasattr(self.dataset, 'image_processor'):
+                    try:
+                        if hasattr(self.dataset.image_processor, 'size'):
+                            processor_size = self.dataset.image_processor.size
+                            if isinstance(processor_size, dict):
+                                if 'height' in processor_size:
+                                    img_height = processor_size['height']
+                                    img_width = processor_size['width']
+                                elif 'shortest_edge' in processor_size:
+                                    img_height = img_width = processor_size['shortest_edge']
+                            elif isinstance(processor_size, (int, float)):
+                                img_height = img_width = int(processor_size)
+                    except:
+                        pass
+                
+                # Get text sequence length from tokenizer
+                max_length = 128
+                if hasattr(self.dataset, 'tokenizer') and hasattr(self.dataset.tokenizer, 'model_max_length'):
+                    max_length = min(self.dataset.tokenizer.model_max_length, 512)
+                    
+                features = {
+                    'image': torch.zeros(3, img_height, img_width),
+                    'text_ids': torch.zeros(max_length, dtype=torch.long),
+                    'text_mask': torch.zeros(max_length, dtype=torch.long),
+                    'numerical': torch.zeros(expected_num_features)
+                }
+            
+            batch_images.append(features['image'])
+            batch_text_ids.append(features['text_ids'])
+            batch_text_masks.append(features['text_mask'])
+            batch_numerical.append(features['numerical'])
+        
+        # Stack all features
+        images_tensor = torch.stack(batch_images).to(self.device)
+        text_ids_tensor = torch.stack(batch_text_ids).to(self.device)
+        text_masks_tensor = torch.stack(batch_text_masks).to(self.device)
+        numerical_tensor = torch.stack(batch_numerical).to(self.device)
+        
+        # Get batch predictions with embeddings
+        with torch.no_grad():
+            output_tuple = self.model(
+                user_idx=user_indices_valid,
+                item_idx=item_indices_tensor,
+                image=images_tensor,
+                text_input_ids=text_ids_tensor,
+                text_attention_mask=text_masks_tensor,
+                numerical_features=numerical_tensor,
+                return_embeddings=True  # This is the key difference
+            )
+        
+        # Unpack the output tuple
+        # Based on the model's forward method, when return_embeddings=True, it returns:
+        # (output, vision_features_for_contrastive, text_features_for_contrastive, vision_emb)
+        if isinstance(output_tuple, tuple) and len(output_tuple) >= 4:
+            batch_scores = output_tuple[0]
+            vision_embeddings = output_tuple[3]  # The main vision embeddings used for diversity
+        else:
+            # Fallback if model doesn't return embeddings properly
+            batch_scores = output_tuple if not isinstance(output_tuple, tuple) else output_tuple[0]
+            # Create dummy embeddings
+            vision_embeddings = torch.randn(len(valid_items), self.model.embedding_dim).to(self.device)
+        
+        # Handle single item case for scores
+        if batch_scores.dim() == 0:
+            batch_scores = batch_scores.unsqueeze(0)
+        
+        # Get item popularity from NoveltyMetrics
+        popularity_dict = self.novelty_metrics.item_popularity
+        
+        # Build results with all required information
+        for i, (item_id, score) in enumerate(zip(valid_items, batch_scores.cpu().numpy())):
+            result = {
+                'item_id': item_id,
+                'score': float(score),
+                'embedding': vision_embeddings[i].cpu().numpy() if i < len(vision_embeddings) else np.zeros(self.model.embedding_dim),
+                'popularity': popularity_dict.get(item_id, 0.0)
+            }
+            results.append(result)
+        
+        return results
+    
+
     def _get_item_features(self, item_id: str) -> Optional[Dict[str, torch.Tensor]]:
         """Get preprocessed features for an item, using cache if available."""
         # Check cache first
@@ -296,8 +535,37 @@ class Recommender:
                 return_tensors='pt'
             )
             
-            numerical_features_tensor = self.dataset._get_numerical_features(item_info_series) #
-            image_tensor = self.dataset._load_and_process_image(item_id) #
+            # Get numerical features - check if dataset has the method we added
+            if hasattr(self.dataset, '_get_numerical_features'):
+                numerical_features_tensor = self.dataset._get_numerical_features(item_info_series)
+            else:
+                # Fallback: create features manually
+                if hasattr(self.dataset, 'numerical_feat_cols') and self.dataset.numerical_feat_cols:
+                    raw_features = []
+                    for col in self.dataset.numerical_feat_cols:
+                        val = item_info_series.get(col, 0) if pd.notna(item_info_series.get(col, 0)) else 0
+                        raw_features.append(float(val))
+                    numerical_features_tensor = torch.tensor(raw_features, dtype=torch.float32)
+                else:
+                    numerical_features_tensor = torch.zeros(7, dtype=torch.float32)  # Default to 7
+            
+            # Ensure numerical features have the correct shape
+            if numerical_features_tensor.numel() == 0:  # Empty tensor
+                # Get expected size from model
+                expected_size = 7  # Default
+                if hasattr(self.model, 'numerical_projection'):
+                    # Check if it's a Sequential module
+                    if isinstance(self.model.numerical_projection, nn.Sequential):
+                        # Get the first layer's input features
+                        first_layer = self.model.numerical_projection[0]
+                        if hasattr(first_layer, 'in_features'):
+                            expected_size = first_layer.in_features
+                    elif hasattr(self.model.numerical_projection, 'in_features'):
+                        expected_size = self.model.numerical_projection.in_features
+                
+                numerical_features_tensor = torch.zeros(expected_size, dtype=torch.float32)
+            
+            image_tensor = self.dataset._load_and_process_image(item_id)
             
             features = {
                 'text_ids': text_tokens['input_ids'].squeeze(),
@@ -311,8 +579,9 @@ class Recommender:
             
             return features
             
-        except Exception: # Catch more specific exception if possible
-             # Optionally log this error
+        except Exception as e:
+            print(f"Error getting features for item {item_id}: {e}")
+            # Return None to be handled by the calling method
             return None
     
     def _rerank_for_diversity(

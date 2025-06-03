@@ -34,8 +34,15 @@ def evaluate_recommendations(recommender, test_data, config):
     top_k = int(config.recommendation.top_k)
 
     unique_users_in_test = test_data['user_id'].unique()
+
     # Limit evaluation to a subset of users for efficiency, if necessary
-    users_to_evaluate = unique_users_in_test[:100] 
+    max_users_to_evaluate = min(100, len(unique_users_in_test))  # Adjust this number
+    if len(unique_users_in_test) > max_users_to_evaluate:
+        print(f"Sampling {max_users_to_evaluate} users from {len(unique_users_in_test)} for evaluation")
+        np.random.seed(42)
+        users_to_evaluate = np.random.choice(unique_users_in_test, max_users_to_evaluate, replace=False)
+    else:
+        users_to_evaluate = unique_users_in_test
     
     print(f"Evaluating on {len(users_to_evaluate)} users with top_k={top_k}...")
 
@@ -145,14 +152,30 @@ def main():
         )
 
     print("Creating dataset instance...")
+    
+    # Load numerical scaler if needed
+    numerical_scaler = None
+    if config.data.numerical_normalization_method in ['standardization', 'min_max']:
+        scaler_path = Path(config.data.scaler_path)
+        if scaler_path.exists():
+            print(f"Loading numerical scaler from {scaler_path}...")
+            with open(scaler_path, 'rb') as f:
+                numerical_scaler = pickle.load(f)
+        else:
+            print(f"Warning: Numerical scaler not found at {scaler_path}. Proceeding without scaling.")
+    
     dataset = MultimodalDataset(
         interactions_df=interactions_df_for_dataset_init, 
         item_info_df=item_info_df,
-        image_folder=config.data.image_folder, #
-        vision_model_name=config.model.vision_model, #
-        language_model_name=config.model.language_model, #
-        create_negative_samples=False 
-    ) #
+        image_folder=config.data.image_folder,
+        vision_model_name=config.model.vision_model,
+        language_model_name=config.model.language_model,
+        create_negative_samples=False,
+        numerical_feat_cols=config.data.numerical_features_cols,
+        numerical_normalization_method=config.data.numerical_normalization_method,
+        numerical_scaler=numerical_scaler,
+        cache_processed_images=False  # Disable caching for evaluation
+    )
     
     # Load encoders
     encoders_dir = Path(config.checkpoint_dir) / 'encoders' #
