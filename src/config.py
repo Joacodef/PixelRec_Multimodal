@@ -175,6 +175,9 @@ class DataConfig:
     processed_image_destination_folder: Optional[str] = 'data/processed/images_for_training'
     processed_item_info_path: str = 'data/processed/item_info_processed.csv'
     processed_interactions_path: str = 'data/processed/interactions_processed.csv'
+    train_data_path: str = "data/splits/split_1/train.csv"
+    val_data_path: str = "data/splits/split_1/val.csv"
+    test_data_path: str = "data/splits/split_1/test.csv"
     scaler_path: str = 'data/processed/numerical_scaler.pkl'
     sample_size: Optional[int] = None
     negative_sampling_ratio: float = 1.0

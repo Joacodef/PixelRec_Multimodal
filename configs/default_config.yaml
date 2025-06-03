@@ -77,6 +77,11 @@ data:
   scaler_path: data/processed/numerical_scaler.pkl
   processed_image_destination_folder: data/processed/images
 
+  # Split data paths
+  train_data_path: data/splits/split_1/train.csv
+  val_data_path: data/splits/split_1/val.csv
+  test_data_path: data/splits/split_1/test.csv
+
   cache_processed_images: true
   
   # Offline image compression settings
