@@ -142,12 +142,21 @@ class OfflineTextCleaningConfig:
 class DataSplittingConfig:
     """Configuration for data splitting strategies"""
     strategy: str = 'stratified'  # 'user', 'item', 'temporal', 'stratified', 'leave_one_out', 'mixed'
-    train_ratio: float = 0.8
+    
+    # Global random state for reproducibility of splits
     random_state: int = 42
     
-    # Strategy-specific parameters
+    # Final desired ratios for Train, Validation, Test splits
+    # These should sum to 1.0
+    train_final_ratio: float = 0.6
+    val_final_ratio: float = 0.2
+    test_final_ratio: float = 0.2
+
+    # Minimum interactions required per user/item for filtering before splitting
     min_interactions_per_user: int = 5
     min_interactions_per_item: int = 3
+    
+    # Specific parameters for certain strategies (if applicable)
     timestamp_col: Optional[str] = None  # For temporal split
     leave_one_out_strategy: str = 'random'  # 'random' or 'latest'
     
