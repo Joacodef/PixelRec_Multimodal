@@ -49,14 +49,45 @@ MODEL_CONFIGS = {
 
 @dataclass
 class ModelConfig:
-    """Model configuration parameters"""
+    """Model configuration parameters with all architectural details"""
+    # Model selection
+    model_class: str = 'pretrained'  # 'pretrained' or 'enhanced'
     vision_model: str = 'clip'
     language_model: str = 'sentence-bert'
+    
+    # Embedding dimensions
     embedding_dim: int = 128
+    
+    # Freezing pre-trained components
     freeze_vision: bool = True
     freeze_language: bool = True
+    
+    # Contrastive learning
     use_contrastive: bool = True
+    contrastive_temperature: float = 0.07
+    
+    # Regularization
     dropout_rate: float = 0.3
+    
+    # Architecture details
+    num_attention_heads: int = 4
+    attention_dropout: float = 0.1
+    
+    # Fusion network architecture
+    fusion_hidden_dims: List[int] = field(default_factory=lambda: [512, 256, 128])
+    fusion_activation: str = 'relu'  # 'relu', 'gelu', 'tanh'
+    use_batch_norm: bool = True
+    
+    # Projection layer dimensions
+    projection_hidden_dim: Optional[int] = None  # If None, no hidden layer in projections
+    
+    # Cross-modal attention (for enhanced model)
+    use_cross_modal_attention: bool = True
+    cross_modal_attention_weight: float = 0.5
+    
+    # Additional architectural choices
+    final_activation: str = 'sigmoid'  # 'sigmoid' or 'none'
+    init_method: str = 'xavier_uniform'  # 'xavier_uniform', 'xavier_normal', 'kaiming_uniform', 'kaiming_normal'
 
 @dataclass
 class TrainingConfig:
@@ -70,6 +101,19 @@ class TrainingConfig:
     num_workers: int = 4
     contrastive_weight: float = 0.1
     bce_weight: float = 1.0
+    
+    # Learning rate scheduling
+    use_lr_scheduler: bool = True
+    lr_scheduler_type: str = 'reduce_on_plateau'  # 'reduce_on_plateau', 'cosine', 'step'
+    lr_scheduler_patience: int = 2
+    lr_scheduler_factor: float = 0.5
+    lr_scheduler_min_lr: float = 1e-6
+    
+    # Optimizer settings
+    optimizer_type: str = 'adamw'  # 'adamw', 'adam', 'sgd'
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.999
+    adam_eps: float = 1e-8
 
 @dataclass
 class TextAugmentationConfig:
@@ -130,7 +174,7 @@ class DataConfig:
     numerical_normalization_method: str = 'log1p'
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
-    splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)  # ADD THIS LINE
+    splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)
     numerical_features_cols: List[str] = field(default_factory=lambda: [
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'

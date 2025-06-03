@@ -1,3 +1,4 @@
+# src/data/dataset.py
 """
 Dataset module for multimodal recommendation system
 """
@@ -8,15 +9,14 @@ import numpy as np
 from PIL import Image
 import os
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoTokenizer, AutoImageProcessor
+from transformers import AutoTokenizer, AutoImageProcessor, CLIPTokenizer, CLIPProcessor
 from tqdm import tqdm
 import random
 import pickle
 from typing import Dict, Optional, Tuple, Any, Union, List
-from transformers import CLIPTokenizer
 
-from ..config import MODEL_CONFIGS, TextAugmentationConfig # Import TextAugmentationConfig
-from .preprocessing import augment_text, normalize_features # Import necessary functions
+from ..config import MODEL_CONFIGS, TextAugmentationConfig
+from .preprocessing import augment_text, normalize_features
 
 
 class MultimodalDataset(Dataset):
@@ -31,366 +31,298 @@ class MultimodalDataset(Dataset):
         language_model_name: str = 'sentence-bert',
         create_negative_samples: bool = True,
         negative_sampling_ratio: float = 1.0,
-        text_augmentation_config: Optional[TextAugmentationConfig] = None, # Added
-        numerical_feat_cols: List[str] = [], # Added
-        numerical_normalization_method: str = 'none', # Added
-        numerical_scaler: Optional[Any] = None, # Added for pre-fitted scaler
-        is_train_mode: bool = False # Added to control augmentation
+        text_augmentation_config: Optional[TextAugmentationConfig] = None,
+        numerical_feat_cols: List[str] = [],
+        numerical_normalization_method: str = 'none',
+        numerical_scaler: Optional[Any] = None,
+        is_train_mode: bool = False
     ):
-        """
-        Initialize the multimodal dataset.
-        # ... (otros argumentos)
-        Args:
-            # ...
-            text_augmentation_config: Configuration for text augmentation.
-            numerical_feat_cols: List of column names for numerical features.
-            numerical_normalization_method: Method for normalizing numerical features.
-            numerical_scaler: Pre-fitted scaler for numerical features.
-            is_train_mode: Boolean indicating if the dataset is for training (enables augmentation).
-        """
         self.interactions = interactions_df.copy()
         self.item_info = item_info_df.set_index('item_id')
         self.image_folder = image_folder
-        self.negative_sampling_ratio = negative_sampling_ratio
+        
+        self._create_negative_samples_flag = create_negative_samples
+        self._negative_sampling_ratio = negative_sampling_ratio 
+
         self.text_augmentation_config = text_augmentation_config
         self.numerical_feat_cols = numerical_feat_cols
         self.numerical_normalization_method = numerical_normalization_method
-        self.numerical_scaler = numerical_scaler # Store the pre-fitted scaler
+        self.numerical_scaler = numerical_scaler
         self.is_train_mode = is_train_mode
 
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
 
-        self._init_processors(vision_model_name)
+        self._init_processors(vision_model_name) 
 
         self.user_encoder = LabelEncoder()
         self.item_encoder = LabelEncoder()
 
-        self.interactions['user_idx'] = self.user_encoder.fit_transform(self.interactions['user_id'])
-        self.interactions['item_idx'] = self.item_encoder.fit_transform(self.interactions['item_id'])
+        if not self.interactions.empty and 'user_id' in self.interactions.columns:
+            self.interactions['user_idx'] = self.user_encoder.fit_transform(self.interactions['user_id'])
+        elif 'user_idx' not in self.interactions.columns:
+            self.interactions['user_idx'] = pd.Series(dtype=int)
 
-        self.n_users = len(self.user_encoder.classes_)
-        self.n_items = len(self.item_encoder.classes_)
-
+        if not self.interactions.empty and 'item_id' in self.interactions.columns:
+            self.interactions['item_idx'] = self.item_encoder.fit_transform(self.interactions['item_id'])
+        elif 'item_idx' not in self.interactions.columns:
+            self.interactions['item_idx'] = pd.Series(dtype=int)
+        
+        self.n_users = len(self.user_encoder.classes_) if hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None else 0
+        self.n_items = len(self.item_encoder.classes_) if hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None else 0
+        
         self.vision_model_name = vision_model_name
-
-        self.language_config = MODEL_CONFIGS['language'][language_model_name] # Ensure MODEL_CONFIGS is loaded
         self.tokenizer = AutoTokenizer.from_pretrained(self.language_config['name'])
 
         self.clip_tokenizer_for_contrastive = None
-        if self.vision_model_name == 'clip': # Check if vision model is CLIP
-            from transformers import CLIPTokenizer # Specific import
+        if self.vision_model_name == 'clip':
             clip_model_hf_name = MODEL_CONFIGS['vision']['clip']['name']
             self.clip_tokenizer_for_contrastive = CLIPTokenizer.from_pretrained(clip_model_hf_name)
         
-        # Pre-process and cache numerical features from item_info if they are to be used
-        # This helps in applying normalization consistently if a scaler is fitted on training data
         if self.numerical_feat_cols and self.numerical_normalization_method != 'none':
             self._preprocess_all_item_numerical_features()
 
-
-        if create_negative_samples:
-            self.all_samples = self._create_samples_with_labels()
-        else:
-            self.all_samples = self.interactions.copy()
-            if 'label' not in self.all_samples.columns: # Ensure label column exists
-                 self.all_samples['label'] = 1 # Assuming these are positive interactions
+        self.all_samples = pd.DataFrame()
 
     def _init_processors(self, vision_model_name: str):
         if vision_model_name == 'clip':
-            from transformers import CLIPProcessor
-            # Use CLIPProcessor for both image and text if vision is CLIP and language is compatible
-            # For this example, sticking to separate processors as per original structure
             self.image_processor = CLIPProcessor.from_pretrained(self.vision_config['name']).image_processor
         else:
             self.image_processor = AutoImageProcessor.from_pretrained(self.vision_config['name'])
+        # Add a debug print to confirm processor type
+        # print(f"DEBUG: Initialized self.image_processor: {type(self.image_processor)}")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.language_config['name'])
 
-    def _preprocess_all_item_numerical_features(self):
-        """
-        Pre-processes numerical features for all items in item_info.
-        This is useful if a scaler was fitted on training data and needs to be applied.
-        """
-        print("Preprocessing numerical features for all items in item_info...")
-        processed_numerical_data = {}
-        for item_id, row in tqdm(self.item_info.iterrows(), total=len(self.item_info), desc="Processing item numericals"):
-            raw_features = []
-            for col in self.numerical_feat_cols:
-                val = row[col] if pd.notna(row[col]) and col in row else 0
-                raw_features.append(float(val))
-            
-            raw_features_np = np.array(raw_features).reshape(1, -1) # Reshape for scaler
-            
-            if self.numerical_normalization_method != 'none' and self.numerical_normalization_method != 'log1p_hardcoded':
-                 # log1p_hardcoded is a placeholder if you keep the old method as an option
-                normalized_vals_np, _ = normalize_features(
-                    raw_features_np,
-                    method=self.numerical_normalization_method,
-                    scaler=self.numerical_scaler # Use the pre-fitted scaler
-                )
-                processed_numerical_data[item_id] = torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
-            elif self.numerical_normalization_method == 'log1p_hardcoded': # Example for keeping old way
-                processed_numerical_data[item_id] = torch.tensor([np.log1p(f) for f in raw_features], dtype=torch.float32)
-            else: # 'none' or unhandled
-                processed_numerical_data[item_id] = torch.tensor(raw_features, dtype=torch.float32)
-
-        self.item_info['_processed_numerical_features'] = pd.Series(processed_numerical_data)
-
+    def finalize_setup(self):
+        if self._create_negative_samples_flag:
+            if not (hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0 and \
+                    hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None and len(self.item_encoder.classes_) > 0):
+                if self.interactions.empty:
+                    self.all_samples = pd.DataFrame()
+                    for col in ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']:
+                        if col not in self.all_samples.columns: self.all_samples[col] = pd.Series(dtype=object if col in ['user_id', 'item_id'] else int)
+                    return
+                self.all_samples = self.interactions.copy()
+                if 'label' not in self.all_samples.columns and not self.all_samples.empty: self.all_samples['label'] = 1
+                return
+            self.all_samples = self._create_samples_with_labels()
+        else:
+            self.all_samples = self.interactions.copy()
+            if 'label' not in self.all_samples.columns and not self.all_samples.empty: self.all_samples['label'] = 1
+            elif self.all_samples.empty and 'label' not in self.all_samples.columns: self.all_samples['label'] = pd.Series(dtype=int)
 
     def _create_samples_with_labels(self):
-        """
-        Creates positive and negative samples for training, ensuring original
-        user_id and item_id string identifiers are preserved alongside their indices.
-        """
-        # self.interactions (a copy of the input interactions_df) at this point should have:
-        # 'user_id', 'item_id', and after encoder fitting in __init__: 'user_idx', 'item_idx'.
-        positive_df = self.interactions.copy()
+        current_interactions = self.interactions.copy()
+        if not current_interactions.empty:
+            if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
+                if 'user_id' in current_interactions.columns and hasattr(self.user_encoder, 'classes_') and len(self.user_encoder.classes_) > 0:
+                    try:
+                        known_users = list(self.user_encoder.classes_)
+                        current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()
+                        if not current_interactions.empty: current_interactions.loc[:, 'user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
+                        else: current_interactions['user_idx'] = pd.Series(dtype=int)
+                    except Exception as e: current_interactions['user_idx'] = pd.Series(dtype=int)
+                elif 'user_idx' not in current_interactions.columns : current_interactions['user_idx'] = pd.Series(dtype=int)
+            if 'item_idx' not in current_interactions.columns or current_interactions['item_idx'].isnull().all():
+                if 'item_id' in current_interactions.columns and hasattr(self.item_encoder, 'classes_') and len(self.item_encoder.classes_) > 0:
+                    try:
+                        known_items = list(self.item_encoder.classes_)
+                        current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()
+                        if not current_interactions.empty: current_interactions.loc[:, 'item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
+                        else: current_interactions['item_idx'] = pd.Series(dtype=int)
+                    except Exception as e: current_interactions['item_idx'] = pd.Series(dtype=int)
+                elif 'item_idx' not in current_interactions.columns: current_interactions['item_idx'] = pd.Series(dtype=int)
+        else:
+            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+            empty_df = pd.DataFrame(columns=cols)
+            for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
+            for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
+            return empty_df
+        if current_interactions.empty or 'user_idx' not in current_interactions.columns or 'item_idx' not in current_interactions.columns or \
+           current_interactions['user_idx'].isnull().all() or current_interactions['item_idx'].isnull().all():
+            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+            empty_df = pd.DataFrame(columns=cols)
+            for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
+            for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
+            return empty_df
+        positive_df = current_interactions.copy()
         positive_df['label'] = 1
-
-        # Prepare mappings from indices back to original string IDs for negative samples
-        # These encoders (self.user_encoder, self.item_encoder) should have been fitted
-        # in the __init__ method on the full interactions_df before this method is called.
         idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
         idx_to_item_id = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
-
-        all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_)) # Use all known item indices
-        user_item_interaction_dict = self.interactions.groupby('user_idx')['item_idx'].apply(set).to_dict()
-
+        all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_))
+        user_item_interaction_dict = positive_df.groupby('user_idx')['item_idx'].apply(set).to_dict()
         negative_samples_list = []
-        print("Creating negative samples...")
-        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
+        for user_idx, interacted_item_indices in user_item_interaction_dict.items():
             possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
-
             num_positive = len(interacted_item_indices)
-            num_negative_to_sample = min(
-                int(num_positive * self.negative_sampling_ratio),
-                len(possible_negative_indices)
-            )
-
+            num_negative_to_sample = min(int(num_positive * self._negative_sampling_ratio), len(possible_negative_indices))
             if num_negative_to_sample > 0:
                 sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
-                current_user_id_str = idx_to_user_id[user_idx] # Get original string user_id
-
+                if user_idx not in idx_to_user_id: continue
+                current_user_id_str = idx_to_user_id[user_idx] 
                 for neg_item_idx in sampled_negative_indices:
-                    current_item_id_str = idx_to_item_id[neg_item_idx] # Get original string item_id
-                    negative_samples_list.append({
-                        'user_id': current_user_id_str,    # Include string user_id
-                        'item_id': current_item_id_str,    # Include string item_id
-                        'user_idx': user_idx,              # Include user_idx
-                        'item_idx': neg_item_idx,            # Include item_idx
-                        'label': 0                         # Label for negative sample
-                    })
-
+                    if neg_item_idx not in idx_to_item_id: continue
+                    current_item_id_str = idx_to_item_id[neg_item_idx]
+                    negative_samples_list.append({'user_id': current_user_id_str, 'item_id': current_item_id_str, 'user_idx': user_idx, 'item_idx': neg_item_idx, 'label': 0})
         negative_df = pd.DataFrame(negative_samples_list)
-
-        # Define columns to select from positive_df. It already has all required columns.
-        # Ensure 'user_id', 'item_id', 'user_idx', 'item_idx', 'label' are present.
         columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-        
-        # Verify positive_df has these columns (it should from self.interactions)
         for col in columns_for_concat:
-            if col not in positive_df.columns and col != 'label': # label is added just above
-                 # This case should ideally not happen if __init__ populates idx correctly
-                raise ValueError(f"Missing column '{col}' in positive_df during _create_samples_with_labels. Check MultimodalDataset __init__ regarding idx creation.")
-
-
-        # Concatenate positive and negative samples
+            if col not in positive_df.columns:
+                if col == 'label': positive_df['label'] = 1
+                elif col in ['user_idx', 'item_idx']: positive_df[col] = pd.Series(dtype=int)
+                else: positive_df[col] = pd.Series(dtype=object)
         if not negative_df.empty:
+            for col in columns_for_concat:
+                if col not in negative_df.columns:
+                    if col in ['user_idx', 'item_idx', 'label']: negative_df[col] = pd.Series(dtype=int)
+                    else: negative_df[col] = pd.Series(dtype=object)
             all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
-        else: # Handle case where no negative samples were generated
-            all_samples_df = positive_df[columns_for_concat].copy()
-
-
-        # Drop rows if any crucial ID mapping might have failed or resulted in NaNs
-        # (though with the current logic, NaNs in these ID columns are less likely)
-        all_samples_df.dropna(subset=['user_id', 'item_id', 'user_idx', 'item_idx'], inplace=True)
-
-        # Shuffle the combined samples
-        return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True)
-
+        else: all_samples_df = positive_df[columns_for_concat].copy()
+        if not all_samples_df.empty:
+            all_samples_df.dropna(subset=['user_idx', 'item_idx'], inplace=True)
+            if not all_samples_df.empty:
+                all_samples_df['user_idx'] = all_samples_df['user_idx'].astype(int)
+                all_samples_df['item_idx'] = all_samples_df['item_idx'].astype(int)
+            else:
+                all_samples_df = pd.DataFrame(columns=columns_for_concat)
+                for col_name in ['user_idx', 'item_idx', 'label']: all_samples_df[col_name] = all_samples_df[col_name].astype(int)
+                for col_name in ['user_id', 'item_id']: all_samples_df[col_name] = all_samples_df[col_name].astype(object)
+        return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True) if not all_samples_df.empty else all_samples_df
 
     def __len__(self) -> int:
         return len(self.all_samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        if self.all_samples.empty or idx >= len(self.all_samples):
+            raise IndexError(f"Dataset is empty or index {idx} is out of bounds for length {len(self.all_samples)}.")
         row = self.all_samples.iloc[idx]
-        user_idx_val = row['user_idx']
-        item_idx_val = row['item_idx']
-        item_id_val = row['item_id'] # Get item_id from the processed samples
-        label_val = row['label']
-
+        user_idx_val, item_idx_val, item_id_val, label_val = row['user_idx'], row['item_idx'], row['item_id'], row['label']
         item_info_series = self._get_item_info(item_id_val)
-
-        # Process text
         text_content = self._get_item_text(item_info_series)
         if self.is_train_mode and self.text_augmentation_config and self.text_augmentation_config.enabled:
-            text_content = augment_text(
-                text_content,
-                augmentation_type=self.text_augmentation_config.augmentation_type,
-                delete_prob=self.text_augmentation_config.delete_prob,
-                swap_prob=self.text_augmentation_config.swap_prob
-            )
-        
-        text_tokens = self.tokenizer(
-            text_content,
-            padding='max_length',
-            truncation=True,
-            max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') else 128,
-            return_tensors='pt'
-        )
-
-        # Get numerical features
+            text_content = augment_text(text_content, augmentation_type=self.text_augmentation_config.augmentation_type, delete_prob=self.text_augmentation_config.delete_prob, swap_prob=self.text_augmentation_config.swap_prob)
+        text_tokens = self.tokenizer(text_content, padding='max_length', truncation=True, max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') and self.tokenizer.model_max_length else 128, return_tensors='pt')
         numerical_features_tensor = self._get_item_numerical_features(item_id_val, item_info_series)
-
-        # Load and process image
         image_tensor = self._load_and_process_image(item_id_val)
-
-        # Initialize the batch dictionary
-        batch = {
-            'user_idx': torch.tensor(user_idx_val, dtype=torch.long),
-            'item_idx': torch.tensor(item_idx_val, dtype=torch.long),
-            'image': image_tensor,
-            'text_input_ids': text_tokens['input_ids'].squeeze(0), # Squeeze batch dim
-            'text_attention_mask': text_tokens['attention_mask'].squeeze(0), # Squeeze batch dim
-            'numerical_features': numerical_features_tensor,
-            'label': torch.tensor(label_val, dtype=torch.float32)
-        }
-        
-        # CLIP-specific tokenization
-        # This condition (self.clip_tokenizer_for_contrastive) is true if vision_model_name was 'clip'
+        batch = {'user_idx': torch.tensor(user_idx_val, dtype=torch.long), 'item_idx': torch.tensor(item_idx_val, dtype=torch.long), 'image': image_tensor, 'text_input_ids': text_tokens['input_ids'].squeeze(0), 'text_attention_mask': text_tokens['attention_mask'].squeeze(0), 'numerical_features': numerical_features_tensor, 'label': torch.tensor(label_val, dtype=torch.float32)}
         if self.clip_tokenizer_for_contrastive:
-            clip_tokens = self.clip_tokenizer_for_contrastive(
-                text_content, # Uses the same text_content as the primary tokenizer
-                padding='max_length',
-                truncation=True,
-                max_length=77,  # Standard CLIP max length
-                return_tensors='pt'
-            )
-            batch['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
-            batch['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
-
+            clip_tokens = self.clip_tokenizer_for_contrastive(text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt')
+            batch['clip_text_input_ids'], batch['clip_text_attention_mask'] = clip_tokens['input_ids'].squeeze(0), clip_tokens['attention_mask'].squeeze(0)
         return batch
+
+    def _preprocess_all_item_numerical_features(self):
+        print("Preprocessing numerical features for all items in item_info...")
+        processed_numerical_data = {}
+        for item_id, row in tqdm(self.item_info.iterrows(), total=len(self.item_info), desc="Processing item numericals"):
+            raw_features = [float(row.get(col, 0) if pd.notna(row.get(col)) else 0) for col in self.numerical_feat_cols]
+            raw_features_np = np.array(raw_features).reshape(1, -1)
+            if self.numerical_normalization_method != 'none':
+                normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
+                processed_numerical_data[item_id] = torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
+            else: processed_numerical_data[item_id] = torch.tensor(raw_features, dtype=torch.float32)
+        self.item_info['_processed_numerical_features'] = pd.Series(processed_numerical_data, index=processed_numerical_data.keys())
 
     def _get_item_info(self, item_id: str) -> pd.Series:
         try:
+            if item_id not in self.item_info.index: raise KeyError
             return self.item_info.loc[item_id]
         except KeyError:
-            # Fallback for missing items
-            # Ensure all expected columns, including numerical ones, are present for fallback
-            fallback_data = {
-                'title': '', 'tag': '', 'description': ''
-            }
-            for col in self.numerical_feat_cols:
-                fallback_data[col] = 0
-            # If _processed_numerical_features is expected, provide a fallback tensor
-            if '_processed_numerical_features' in self.item_info.columns:
-                 fallback_data['_processed_numerical_features'] = torch.zeros(len(self.numerical_feat_cols), dtype=torch.float32)
-
-            return pd.Series(fallback_data)
-
+            fallback_data = {'title': '', 'tag': '', 'description': ''}
+            for col in self.numerical_feat_cols: fallback_data[col] = 0
+            fallback_data['_processed_numerical_features'] = torch.zeros(len(self.numerical_feat_cols), dtype=torch.float32) if self.numerical_feat_cols else torch.empty(0, dtype=torch.float32)
+            return pd.Series(fallback_data, name=item_id)
 
     def _get_item_text(self, item_info_series: pd.Series) -> str:
-        title = str(item_info_series.get('title', ''))
-        tag = str(item_info_series.get('tag', ''))
-        description = str(item_info_series.get('description', ''))
-        return f"{title} {tag} {description}".strip()
-
+        return f"{str(item_info_series.get('title', ''))} {str(item_info_series.get('tag', ''))} {str(item_info_series.get('description', ''))}".strip()
 
     def _get_item_numerical_features(self, item_id: str, item_info_series: pd.Series) -> torch.Tensor:
-        """Gets numerical features, potentially using pre-processed ones."""
-        if '_processed_numerical_features' in self.item_info.columns and pd.notna(self.item_info.loc[item_id, '_processed_numerical_features']):
-            return self.item_info.loc[item_id, '_processed_numerical_features']
-        else: # Fallback or if not preprocessed
-            raw_features = []
-            for col in self.numerical_feat_cols:
-                val = item_info_series.get(col, 0) if pd.notna(item_info_series.get(col, 0)) else 0
-                raw_features.append(float(val))
-            
-            if not raw_features: # Handle case with no numerical features defined
-                return torch.empty(0, dtype=torch.float32)
-
-            raw_features_np = np.array(raw_features).reshape(1, -1)
-
-            if self.numerical_normalization_method != 'none' and self.numerical_normalization_method != 'log1p_hardcoded':
-                normalized_vals_np, _ = normalize_features(
-                    raw_features_np,
-                    method=self.numerical_normalization_method,
-                    scaler=self.numerical_scaler # Apply scaler (even if it's None for log1p inside normalize_features)
-                )
-                return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
-            elif self.numerical_normalization_method == 'log1p_hardcoded':
-                 return torch.tensor([np.log1p(f) for f in raw_features], dtype=torch.float32)
-            else: # 'none'
-                return torch.tensor(raw_features, dtype=torch.float32)
-
+        if '_processed_numerical_features' in self.item_info.columns and item_id in self.item_info.index and pd.notna(self.item_info.loc[item_id, '_processed_numerical_features']):
+            processed_feature = self.item_info.loc[item_id, '_processed_numerical_features']
+            if isinstance(processed_feature, torch.Tensor): return processed_feature
+        raw_features = [float(item_info_series.get(col, 0) if pd.notna(item_info_series.get(col,0)) else 0) for col in self.numerical_feat_cols]
+        if not raw_features: return torch.empty(0, dtype=torch.float32)
+        raw_features_np = np.array(raw_features).reshape(1, -1)
+        if self.numerical_normalization_method != 'none':
+            normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
+            return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
+        return torch.tensor(raw_features, dtype=torch.float32)
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
-        # Try to find image with common extensions
-        base_path = os.path.join(self.image_folder, item_id)
+        base_path = os.path.join(self.image_folder, str(item_id))
         image_path_to_load = None
-        
-        # Prefer .jpg, then .png, then .jpeg as an example order
         for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
             current_path = f"{base_path}{ext}"
-            if os.path.exists(current_path):
-                image_path_to_load = current_path
-                break
+            if os.path.exists(current_path): image_path_to_load = current_path; break
         
+        placeholder_size = (224, 224)
         try:
-            if image_path_to_load is None:
-                raise FileNotFoundError (f"Image for {item_id} not found with common extensions.")
+            if hasattr(self.image_processor, 'size'):
+                processor_size = self.image_processor.size
+                if isinstance(processor_size, dict) and 'shortest_edge' in processor_size:
+                    size_val = processor_size['shortest_edge']; placeholder_size = (size_val, size_val)
+                elif isinstance(processor_size, (tuple, list)) and len(processor_size) >= 2: placeholder_size = (processor_size[0], processor_size[1])
+                elif isinstance(processor_size, int): placeholder_size = (processor_size, processor_size)
+        except Exception: pass
+
+        try:
+            if image_path_to_load is None: raise FileNotFoundError (f"Image for {item_id} not found.")
             image = Image.open(image_path_to_load).convert('RGB')
-        except Exception as e:
-            # print(f"Warning: Could not load image for item {item_id} (path: {image_path_to_load}). Using placeholder. Error: {e}")
-            # Determine size from image_processor if possible, else default
-            placeholder_size = (
-                self.image_processor.size['shortest_edge']
-                if hasattr(self.image_processor, 'size') and isinstance(self.image_processor.size, dict)
-                else (224, 224) # Common default
-            )
-            if isinstance(placeholder_size, int): # If shortest_edge gives int
-                placeholder_size = (placeholder_size, placeholder_size)
+        except Exception as e: image = Image.new('RGB', placeholder_size, color='grey')
 
-            image = Image.new('RGB', placeholder_size, color='white')
+        try: processed_output = self.image_processor(images=image, return_tensors='pt')
+        except Exception as proc_err:
+            # print(f"ERROR during image_processor call for item {item_id} with {type(self.image_processor)}. Error: {proc_err}. Using dummy tensor.") # More detailed error
+            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
 
-        # Process image based on processor type
-        # CLIPProcessor might handle images differently (expects a list of images for its .preprocess)
-        if 'CLIPImageProcessor' in str(type(self.image_processor)):
-             # CLIP's image_processor (not the combined CLIPProcessor) typically takes images and return_tensors args
-            processed_output = self.image_processor(images=image, return_tensors='pt')
-            image_tensor = processed_output['pixel_values'].squeeze(0) # Squeeze batch dim
-        elif hasattr(self.image_processor, 'preprocess'): # For older huggingface versions or specific processors
-            image_tensor = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'].squeeze(0)
-        else: # Standard AutoImageProcessor
-            image_tensor = self.image_processor(image, return_tensors='pt')['pixel_values'].squeeze(0)
+        # ----- START DEBUGGING BLOCK -----
+        # print(f"DEBUG: item {item_id}, type(self.image_processor)={type(self.image_processor)}")
+        # print(f"DEBUG: item {item_id}, type(processed_output)={type(processed_output)}")
+        # if hasattr(processed_output, 'keys'):
+        #     print(f"DEBUG: item {item_id}, processed_output.keys()={list(processed_output.keys())}")
+        # else:
+        #     print(f"DEBUG: item {item_id}, processed_output has no 'keys' attribute.")
+        # if hasattr(processed_output, 'data') and isinstance(processed_output.data, dict):
+        #      print(f"DEBUG: item {item_id}, processed_output.data.keys()={list(processed_output.data.keys())}")
+        # ----- END DEBUGGING BLOCK -----
+
+        image_tensor = None
+        if isinstance(processed_output, dict) and 'pixel_values' in processed_output:
+            image_tensor = processed_output['pixel_values']
+            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1 : # Batch of 1
+                 image_tensor = image_tensor.squeeze(0)
+        elif torch.is_tensor(processed_output): 
+            image_tensor = processed_output
+            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1: image_tensor = image_tensor.squeeze(0) 
         
-        return image_tensor
+        if image_tensor is None:
+            # This is where your original warning comes from
+            # print(f"Warning: Image processor output for {item_id} is type {type(processed_output)}, not dict or tensor with 'pixel_values'. Using dummy tensor.")
+            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
 
+        if image_tensor.ndim == 2: image_tensor = image_tensor.unsqueeze(0) # Add channel for grayscale
+        if image_tensor.ndim == 3 and image_tensor.shape[0] == 1: image_tensor = image_tensor.repeat(3,1,1) # Convert grayscale to RGB
+        
+        if image_tensor.ndim != 3 or image_tensor.shape[0] != 3:
+            # print(f"Warning: Final image tensor for {item_id} has unexpected shape {image_tensor.shape}. Using dummy tensor.")
+            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
+        return image_tensor
 
     def get_item_popularity(self) -> Dict[str, float]:
         popularity = {}
-        # Use 'view_number' if available, else default to 0
-        view_col = self.numerical_feat_cols[0] if self.numerical_feat_cols and 'view_number' in self.numerical_feat_cols else None
-        if view_col is None and self.numerical_feat_cols: # Fallback to first numerical col if view_number not primary
-            view_col = self.numerical_feat_cols[0]
-
-
-        for item_id in self.item_info.index:
+        view_col = 'view_number' if 'view_number' in self.numerical_feat_cols else (self.numerical_feat_cols[0] if self.numerical_feat_cols else None)
+        for item_id_val in self.item_info.index:
             if view_col and view_col in self.item_info.columns:
-                pop_val = self.item_info.loc[item_id, view_col]
-                popularity[item_id] = float(pop_val) if pd.notna(pop_val) else 0.0
-            else:
-                popularity[item_id] = 0.0 # Default if no view_number or numerical_cols
+                pop_val = self.item_info.loc[item_id_val, view_col]
+                popularity[item_id_val] = float(pop_val) if pd.notna(pop_val) else 0.0
+            else: popularity[item_id_val] = 0.0
         return popularity
 
     def get_user_history(self, user_id_to_check: str) -> set:
-        # Map user_id string to internal user_idx if necessary
+        if not hasattr(self.user_encoder, 'classes_') or self.user_encoder.classes_ is None: return set()
         try:
+            if user_id_to_check not in self.user_encoder.classes_: return set()
             user_idx_internal = self.user_encoder.transform([user_id_to_check])[0]
-        except ValueError:
-            return set() # User not in encoder
-
-        # Filter interactions by the internal user_idx
+        except ValueError: return set()
+        if 'user_idx' not in self.interactions.columns or self.interactions.empty: return set()
         user_interactions_df = self.interactions[self.interactions['user_idx'] == user_idx_internal]
         return set(user_interactions_df['item_id'].unique())

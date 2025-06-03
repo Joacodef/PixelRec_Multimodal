@@ -304,10 +304,13 @@ class DataSplitter:
         val_df: pd.DataFrame
     ) -> Dict[str, any]:
         """Calculate statistics about the split"""
-        train_users = set(train_df['user_id'].unique())
-        train_items = set(train_df['item_id'].unique())
-        val_users = set(val_df['user_id'].unique())
-        val_items = set(val_df['item_id'].unique())
+        # Check if train_df is not empty and has 'user_id' and 'item_id' columns
+        train_users = set(train_df['user_id'].unique()) if not train_df.empty and 'user_id' in train_df.columns else set()
+        train_items = set(train_df['item_id'].unique()) if not train_df.empty and 'item_id' in train_df.columns else set()
+        
+        # Check if val_df is not empty and has 'user_id' and 'item_id' columns
+        val_users = set(val_df['user_id'].unique()) if not val_df.empty and 'user_id' in val_df.columns else set()
+        val_items = set(val_df['item_id'].unique()) if not val_df.empty and 'item_id' in val_df.columns else set()
         
         return {
             'train_interactions': len(train_df),
@@ -318,8 +321,8 @@ class DataSplitter:
             'val_items': len(val_items),
             'user_overlap': len(train_users & val_users),
             'item_overlap': len(train_items & val_items),
-            'user_overlap_ratio': len(train_users & val_users) / len(val_users) if val_users else 0,
-            'item_overlap_ratio': len(train_items & val_items) / len(val_items) if val_items else 0
+            'user_overlap_ratio': len(train_users & val_users) / len(val_users) if len(val_users) > 0 else 0,
+            'item_overlap_ratio': len(train_items & val_items) / len(val_items) if len(val_items) > 0 else 0
         }
 
 
