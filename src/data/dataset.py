@@ -129,6 +129,9 @@ class MultimodalDataset(Dataset):
             elif self.all_samples.empty and 'label' not in self.all_samples.columns: self.all_samples['label'] = pd.Series(dtype=int)
 
     def _create_samples_with_labels(self):
+        """
+        Generates positive and negative samples for training.
+        """
         current_interactions = self.interactions.copy()
         if not current_interactions.empty:
             if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
@@ -162,48 +165,89 @@ class MultimodalDataset(Dataset):
             for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
             for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
             return empty_df
+        
+        # Mark positive samples with label 1
         positive_df = current_interactions.copy()
         positive_df['label'] = 1
+        
+        # Create mappings from index to original user/item IDs
         idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
         idx_to_item_id = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
+        
+        # Get a set of all possible item indices
         all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_))
+        
+        # Group interactions by user index for efficient lookup
         user_item_interaction_dict = positive_df.groupby('user_idx')['item_idx'].apply(set).to_dict()
+        
         negative_samples_list = []
-        for user_idx, interacted_item_indices in user_item_interaction_dict.items():
+        
+        # Iterate through each user to generate negative samples with a progress bar
+        print("Generating negative samples for training data...")
+        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
+            # Find items not interacted by the current user
             possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
+            
+            # Determine the number of negative samples to draw
             num_positive = len(interacted_item_indices)
             num_negative_to_sample = min(int(num_positive * self._negative_sampling_ratio), len(possible_negative_indices))
+            
             if num_negative_to_sample > 0:
+                # Randomly sample negative items
                 sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
-                if user_idx not in idx_to_user_id: continue
+                
+                # Append negative samples to the list
+                if user_idx not in idx_to_user_id: 
+                    continue # Skip if user_idx is not in encoder (should ideally not happen here)
                 current_user_id_str = idx_to_user_id[user_idx] 
+                
                 for neg_item_idx in sampled_negative_indices:
-                    if neg_item_idx not in idx_to_item_id: continue
+                    if neg_item_idx not in idx_to_item_id: 
+                        continue # Skip if item_idx is not in encoder (should ideally not happen here)
                     current_item_id_str = idx_to_item_id[neg_item_idx]
-                    negative_samples_list.append({'user_id': current_user_id_str, 'item_id': current_item_id_str, 'user_idx': user_idx, 'item_idx': neg_item_idx, 'label': 0})
+                    negative_samples_list.append({
+                        'user_id': current_user_id_str, 
+                        'item_id': current_item_id_str, 
+                        'user_idx': user_idx, 
+                        'item_idx': neg_item_idx, 
+                        'label': 0
+                    })
+        
+        # Create DataFrame from negative samples
         negative_df = pd.DataFrame(negative_samples_list)
+        
+        # Define the common columns required for concatenation
         columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+        
+        # Ensure positive_df has all required columns before concatenation
         for col in columns_for_concat:
             if col not in positive_df.columns:
-                if col == 'label': positive_df['label'] = 1
+                if col == 'label': positive_df['label'] = 1 # Re-add label if somehow missing
                 elif col in ['user_idx', 'item_idx']: positive_df[col] = pd.Series(dtype=int)
                 else: positive_df[col] = pd.Series(dtype=object)
+        
+        # Concatenate positive and negative samples
         if not negative_df.empty:
+            # Ensure negative_df also has all required columns (e.g., if columns were added later)
             for col in columns_for_concat:
                 if col not in negative_df.columns:
                     if col in ['user_idx', 'item_idx', 'label']: negative_df[col] = pd.Series(dtype=int)
                     else: negative_df[col] = pd.Series(dtype=object)
             all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
-        else: all_samples_df = positive_df[columns_for_concat].copy()
+        else:
+            all_samples_df = positive_df[columns_for_concat].copy()
+        
+        # Final cleanup and shuffle
         if not all_samples_df.empty:
             all_samples_df.dropna(subset=['user_idx', 'item_idx'], inplace=True)
             if not all_samples_df.empty:
                 all_samples_df['user_idx'] = all_samples_df['user_idx'].astype(int)
                 all_samples_df['item_idx'] = all_samples_df['item_idx'].astype(int)
-            else:
+            else: # Handle case where all samples were dropped
                 all_samples_df = pd.DataFrame(columns=columns_for_concat)
                 for col_name in ['user_idx', 'item_idx', 'label']: all_samples_df[col_name] = all_samples_df[col_name].astype(int)
                 for col_name in ['user_id', 'item_id']: all_samples_df[col_name] = all_samples_df[col_name].astype(object)
+
         return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True) if not all_samples_df.empty else all_samples_df
 
     def __len__(self) -> int:
