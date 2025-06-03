@@ -66,17 +66,16 @@ training:
   adam_eps: 0.00000001
 
 data:
-  # Data paths
+  # Raw data paths (for preprocessing)
   item_info_path: data/raw/item_info/item_info_sample.csv
   interactions_path: data/raw/interactions/interactions_sample.csv
   image_folder: data/raw/images
 
-  # Processed data paths
-  processed_item_info_path: data/processed/item_info_processed.csv
-  processed_interactions_path: data/processed/interactions_processed.csv
+  # Processed data paths (training, evaluation and recommendation)
+  processed_item_info_path: data/processed/item_info.csv
+  processed_interactions_path: data/processed/interactions.csv
   scaler_path: data/processed/numerical_scaler.pkl
-  # Path for storing processed (e.g., compressed or resized) images
-  processed_image_destination_folder: data/processed/images_for_training
+  processed_image_destination_folder: data/processed/images
 
   cache_processed_images: true
   

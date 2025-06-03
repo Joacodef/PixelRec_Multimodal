@@ -212,7 +212,7 @@ def main():
     args = parser.parse_args()
     
     # Load config
-    config = Config.from_yaml(args.config) #
+    config = Config.from_yaml(args.config) 
     device = torch.device(args.device)
     print(f"Using device: {device}")
     
@@ -222,9 +222,9 @@ def main():
     
     # Initialize model and recommender
     print("Loading item info and interaction data for dataset initialization...")
-    item_info_df = pd.read_csv(config.data.item_info_path) #
-    
-    interactions_df_for_dataset_init = pd.read_csv(config.data.interactions_path) #
+    item_info_df = pd.read_csv(config.data.processed_item_info_path)
+    interactions_df_for_dataset_init = pd.read_csv(config.data.processed_interactions_path)
+
     if config.data.sample_size: 
         interactions_df_for_dataset_init = interactions_df_for_dataset_init.sample(
             n=min(config.data.sample_size, len(interactions_df_for_dataset_init)),

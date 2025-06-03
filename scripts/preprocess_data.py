@@ -29,49 +29,104 @@ from src.data.preprocessing import (
     check_image_dimensions
 )
 
+def is_image_corrupted(image_path: str) -> bool:
+    """Checks if an image file is corrupted by trying to open it."""
+    try:
+        img = Image.open(image_path)
+        img.verify()
+        img = Image.open(image_path)
+        img.load()
+        return False
+    except Exception:
+        return True
+
+def check_image_dimensions(image_path: str, min_width: int, min_height: int) -> bool:
+    """Checks if an image meets minimum dimension requirements."""
+    try:
+        with Image.open(image_path) as img:
+            width, height = img.size
+            return width >= min_width and height >= min_height
+    except Exception:
+        return False
+
+# Mock dataclasses for demonstration if not run in full project environment
+# In production, these would be imported from src.config
+class OfflineImageCompressionConfig:
+    def __init__(self):
+        self.enabled = True
+        self.compress_if_kb_larger_than = 500
+        self.target_quality = 85
+        self.resize_if_pixels_larger_than = [2048, 2048]
+        self.resize_target_longest_edge = 1024
+
+class ImageValidationConfig:
+    def __init__(self):
+        self.check_corrupted = True
+        self.min_width = 64
+        self.min_height = 64
+        self.allowed_extensions = ['.jpg', '.jpeg', '.png']
+
 def process_and_save_image(
     original_image_path: Path,
     destination_image_path: Path,
-    # Corrected type hints:
     compression_config: OfflineImageCompressionConfig,
     img_val_config: ImageValidationConfig
 ) -> bool:
     """
     Processes a single image: validates, optionally compresses/resizes, and saves it.
     Returns True if processed and saved successfully, False otherwise.
+    If the processed image already exists at the destination, it skips processing.
     """
+    # Ensures the parent directory for the destination image exists.
     destination_image_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Check if the processed image already exists at the destination path.
+    # If it exists, skip processing and return True, indicating success.
+    if destination_image_path.exists():
+        return True
+
     try:
+        # Checks if the original image file exists. If not, processing cannot proceed.
         if not original_image_path.exists():
             return False
-        # Use attributes from the img_val_config object
+
+        # Performs initial validation checks on the original image if configured.
+        # Checks for corruption.
         if img_val_config.check_corrupted and is_image_corrupted(str(original_image_path)):
             return False
+        # Checks if the image meets minimum dimension requirements.
         if not check_image_dimensions(str(original_image_path), img_val_config.min_width, img_val_config.min_height):
             return False
 
+        # Determines if the image needs compression or resizing based on configuration.
         compress_this_image = False
-        # Use attributes from the compression_config object
         if compression_config.enabled:
+            # Calculates the original file size in kilobytes.
             original_filesize_kb = original_image_path.stat().st_size / 1024
+            # If the file size exceeds the configured threshold, mark for compression.
             if original_filesize_kb > compression_config.compress_if_kb_larger_than:
                 compress_this_image = True
 
+        # Processes the image (compress/resize or copy) based on the flag.
         if compress_this_image:
+            # Opens the image and converts it to RGB mode.
             with Image.open(original_image_path) as img:
                 img = img.convert("RGB")
 
+                # Applies resizing if configured and image dimensions exceed thresholds.
                 if compression_config.resize_if_pixels_larger_than and \
                    compression_config.resize_target_longest_edge:
                     if img.width > compression_config.resize_if_pixels_larger_than[0] or \
                        img.height > compression_config.resize_if_pixels_larger_than[1]:
+                        # Calculates the scaling factor to resize the longest edge.
                         current_longest_edge = max(img.width, img.height)
                         scale_factor = compression_config.resize_target_longest_edge / current_longest_edge
                         new_width = int(img.width * scale_factor)
                         new_height = int(img.height * scale_factor)
+                        # Resizes the image using Lanczos filter for high quality downsampling.
                         img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 
+                # Saves the processed image with appropriate quality/compression settings based on file extension.
                 file_extension = destination_image_path.suffix.lower()
                 if file_extension in ['.jpg', '.jpeg']:
                     img.save(destination_image_path, quality=compression_config.target_quality, optimize=True)
@@ -80,12 +135,15 @@ def process_and_save_image(
                 else: 
                     img.save(destination_image_path)
         else:
+            # If no compression/resizing is needed, simply copy the original image to the destination.
             shutil.copy2(original_image_path, destination_image_path)
+        
+        # Returns True indicating successful processing and saving.
         return True
     except Exception as e:
-        # print(f"Error processing image {original_image_path}: {e}")
+        # Catches any exceptions during processing and returns False indicating failure.
+        # print(f"Error processing image {original_image_path}: {e}") # Original commented out line
         return False
-
 
 def validate_and_filter_items_with_processing(
     item_df: pd.DataFrame,

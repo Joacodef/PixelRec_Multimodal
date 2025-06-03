@@ -24,8 +24,8 @@ def load_model_and_data(config: Config, device: torch.device):
     """Load trained model and dataset"""
     # Load data
     print("Loading data...")
-    item_info_df = pd.read_csv(config.data.item_info_path)
-    interactions_df = pd.read_csv(config.data.interactions_path)
+    item_info_df = pd.read_csv(config.data.processed_item_info_path)
+    interactions_df = pd.read_csv(config.data.processed_interactions_path)
     
     # Create dataset (without negative sampling for inference)
     dataset = MultimodalDataset(
