@@ -34,28 +34,27 @@ This repository provides a comprehensive framework for building and experimentin
 
 The project is structured as follows:
 
-PixelRec_Multimodal
-├── configs/                  # Configuration files (e.g., default_config.yaml)
-├── data/                     # Placeholder for raw and processed data (paths defined in config)
-│   ├── raw/
-│   └── processed/
-├── models/                   # Placeholder for saved model checkpoints and encoders (paths defined in config)
-├── results/                  # Placeholder for evaluation results, figures, etc. (paths defined in config)
-├── scripts/                  # High-level scripts for executing pipeline stages
-│   ├── preprocess_data.py    # Script for data preprocessing
-│   ├── train.py              # Script for model training
-│   ├── evaluate.py           # Script for evaluating trained models
-│   └── generate_recommendations.py # Script for generating recommendations
-├── src/                      # Source code for the recommender system
-│   ├── config.py             # Dataclasses for managing configurations
-│   ├── data/                 # Modules for dataset handling, preprocessing, splitting, and image caching
-│   ├── evaluation/           # Modules for various evaluation metrics
-│   ├── inference/            # Modules for recommendation generation and serving
-│   ├── models/               # Modules for model architectures, custom layers, and loss functions
-│   └── training/             # Module for the training loop and related utilities
-├── requirements.txt          # List of Python dependencies
-└── setup.py                  # Python package setup script
-
+* `PixelRec_Multimodal/`
+    * `configs/` - Configuration files (e.g., `default_config.yaml`)
+    * `data/` - Placeholder for raw and processed data (paths defined in config)
+        * `raw/`
+        * `processed/`
+    * `models/` - Placeholder for saved model checkpoints and encoders (paths defined in config)
+    * `results/` - Placeholder for evaluation results, figures, etc. (paths defined in config)
+    * `scripts/` - High-level scripts for executing pipeline stages
+        * `preprocess_data.py` - Script for data preprocessing
+        * `train.py` - Script for model training
+        * `evaluate.py` - Script for evaluating trained models
+        * `generate_recommendations.py` - Script for generating recommendations
+    * `src/` - Source code for the recommender system
+        * `config.py` - Dataclasses for managing configurations
+        * `data/` - Modules for dataset handling, preprocessing, splitting, and image caching
+        * `evaluation/` - Modules for various evaluation metrics
+        * `inference/` - Modules for recommendation generation and serving
+        * `models/` - Modules for model architectures, custom layers, and loss functions
+        * `training/` - Module for the training loop and related utilities
+    * `requirements.txt` - List of Python dependencies
+    * `setup.py` - Python package setup script
 
 ---
 
