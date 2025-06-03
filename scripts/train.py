@@ -288,7 +288,20 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=training_config.batch_size, shuffle=False, num_workers=training_config.num_workers, pin_memory=True) if len(val_dataset) > 0 else None
 
 
+        # Save encoders immediately after creating datasets
+        # This ensures they're available even if training is interrupted
+        encoders_dir = Path(config.checkpoint_dir) / 'encoders'
+        encoders_dir.mkdir(parents=True, exist_ok=True)
+        
+        print("\nSaving encoders before training...")
+        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
+            pickle.dump(full_dataset_for_encoders.user_encoder, f)
+        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
+            pickle.dump(full_dataset_for_encoders.item_encoder, f)
+        print(f"Saved encoders to {encoders_dir}")
+
         print("\nInitializing model...")
+        
         model_class_to_use = PretrainedMultimodalRecommender
         if hasattr(model_config, 'model_class') and model_config.model_class == 'enhanced':
             model_class_to_use = EnhancedMultimodalRecommender

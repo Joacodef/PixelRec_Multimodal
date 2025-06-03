@@ -266,6 +266,26 @@ class MultimodalDataset(Dataset):
             return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
         return torch.tensor(raw_features, dtype=torch.float32)
 
+    def _get_numerical_features(self, item_info_series: pd.Series) -> torch.Tensor:
+        """Get numerical features from item info series (without needing item_id).
+        
+        This method is used by the Recommender class during inference.
+        
+        Args:
+            item_info_series: Pandas Series containing item information
+            
+        Returns:
+            torch.Tensor: Normalized numerical features
+        """
+        raw_features = [float(item_info_series.get(col, 0) if pd.notna(item_info_series.get(col, 0)) else 0) for col in self.numerical_feat_cols]
+        if not raw_features: 
+            return torch.empty(0, dtype=torch.float32)
+        raw_features_np = np.array(raw_features).reshape(1, -1)
+        if self.numerical_normalization_method != 'none':
+            normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
+            return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
+        return torch.tensor(raw_features, dtype=torch.float32)
+
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
         # Check cache first if enabled
         if self.image_cache is not None:

@@ -1,7 +1,6 @@
 # src/evaluation/advanced_metrics.py
 
 import numpy as np
-from scipy import stats
 from collections import defaultdict
 from typing import List, Dict, Tuple, Set
 
@@ -32,14 +31,26 @@ class AdvancedMetrics:
                 hits += 1
         return hits / len(recommendations)
     
-    @staticmethod
+    @@staticmethod
     def calculate_gini_coefficient(item_recommendations: Dict[str, int]) -> float:
         """Calculate Gini coefficient for recommendation distribution"""
+        if not item_recommendations:
+            return 0.0
+            
         counts = np.array(list(item_recommendations.values()))
         counts = np.sort(counts)
         n = len(counts)
+        
+        # Handle edge cases
+        if n == 0:
+            return 0.0
+        
+        sum_counts = np.sum(counts)
+        if sum_counts == 0:
+            return 0.0
+            
         index = np.arange(1, n + 1)
-        return (2 * np.sum(index * counts)) / (n * np.sum(counts)) - (n + 1) / n
+        return (2 * np.sum(index * counts)) / (n * sum_counts) - (n + 1) / n
     
     @staticmethod
     def calculate_serendipity(

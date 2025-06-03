@@ -413,26 +413,35 @@ class Recommender:
                 
         return final_recommendations
 
-    def load_item_features_cache(self, cache_path: str):
-        """Loads the item features cache from a pickle file."""
+    def load_embeddings_cache(self, cache_path: str):
+        """Loads the embeddings cache from a pickle file."""
         try:
             with open(cache_path, 'rb') as f:
                 self.item_features_cache = pickle.load(f)
-            print(f"Item features cache loaded from {cache_path}")
+            print(f"Embeddings cache loaded from {cache_path}")
         except FileNotFoundError:
-            print(f"Warning: Item features cache file not found at {cache_path}. Starting with an empty cache.")
+            print(f"Warning: Embeddings cache file not found at {cache_path}. Starting with an empty cache.")
             self.item_features_cache = {}
         except Exception as e:
-            print(f"Error loading item features cache from {cache_path}: {e}")
+            print(f"Error loading embeddings cache from {cache_path}: {e}")
             self.item_features_cache = {}
 
-    def save_item_features_cache(self, cache_path: str):
-        """Saves the current item features cache to a pickle file."""
+    def save_embeddings_cache(self, cache_path: str):
+        """Saves the current embeddings cache to a pickle file."""
         try:
             # Ensure parent directory exists
             Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
             with open(cache_path, 'wb') as f:
                 pickle.dump(self.item_features_cache, f)
-            print(f"Item features cache saved to {cache_path}")
+            print(f"Embeddings cache saved to {cache_path}")
         except Exception as e:
-            print(f"Error saving item features cache to {cache_path}: {e}")
+            print(f"Error saving embeddings cache to {cache_path}: {e}")
+
+    # Keep the old method names as aliases for backward compatibility
+    def load_item_features_cache(self, cache_path: str):
+        """Alias for load_embeddings_cache for backward compatibility."""
+        self.load_embeddings_cache(cache_path)
+    
+    def save_item_features_cache(self, cache_path: str):
+        """Alias for save_embeddings_cache for backward compatibility."""
+        self.save_embeddings_cache(cache_path)

@@ -1,7 +1,6 @@
 import numpy as np
 import random
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-import pickle
 import unicodedata
 import re
 from PIL import Image

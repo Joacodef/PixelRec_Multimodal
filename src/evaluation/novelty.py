@@ -2,7 +2,7 @@
 Novelty and diversity metrics for recommendation evaluation
 """
 import numpy as np
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 from collections import Counter
 import pandas as pd
 
@@ -108,9 +108,11 @@ class NoveltyMetrics:
         for item in items:
             if item in self.item_popularity and self.total_interactions > 0:
                 prob = self.item_popularity[item] / self.total_interactions
-                if prob > 0:
-                    self_info = -np.log2(prob)
-                    self_info_scores.append(self_info)
+                # Add epsilon to avoid log(0) and handle floating point precision issues
+                epsilon = 1e-10
+                prob = max(prob, epsilon)
+                self_info = -np.log2(prob)
+                self_info_scores.append(self_info)
         
         return np.mean(self_info_scores) if self_info_scores else 0.0
     
@@ -125,7 +127,8 @@ class NoveltyMetrics:
             if item in self.item_user_counts and self.n_users > 0:
                 user_count = self.item_user_counts[item]
                 if user_count > 0:
-                    iif = np.log(self.n_users / user_count)
+                    # Add small epsilon to avoid potential floating point issues
+                    iif = np.log(self.n_users / (user_count + 1e-10))
                     iif_scores.append(iif)
         
         return np.mean(iif_scores) if iif_scores else 0.0
@@ -238,10 +241,18 @@ class DiversityCalculator:
                     
                     if metric == 'cosine':
                         # Cosine distance = 1 - cosine similarity
-                        similarity = np.dot(emb_i, emb_j) / (
-                            np.linalg.norm(emb_i) * np.linalg.norm(emb_j)
-                        )
-                        distance = 1 - similarity
+                        # Add epsilon to denominators to avoid division by zero
+                        norm_i = np.linalg.norm(emb_i)
+                        norm_j = np.linalg.norm(emb_j)
+                        
+                        # Handle zero vectors
+                        if norm_i < 1e-10 or norm_j < 1e-10:
+                            distance = 1.0  # Maximum distance for zero vectors
+                        else:
+                            similarity = np.dot(emb_i, emb_j) / (norm_i * norm_j)
+                            # Clip to [-1, 1] to handle floating point errors
+                            similarity = np.clip(similarity, -1.0, 1.0)
+                            distance = 1 - similarity
                     else:  # euclidean
                         distance = np.linalg.norm(emb_i - emb_j)
                     
