@@ -109,11 +109,18 @@ class PretrainedMultimodalRecommender(nn.Module):
                 self.clip_text_model = CLIPTextModel.from_pretrained(hf_model_name)
         elif model_key == 'dino': 
             self.vision_model = Dinov2Model.from_pretrained(hf_model_name)
+        elif model_key == 'resnet' or model_key == 'convnext': # Handle resnet and convnext specifically
+            # Load as a base model to get features before a classification head
+            self.vision_model = AutoModel.from_pretrained(hf_model_name)
         else: 
+            # Fallback for any other vision model not explicitly handled,
+            # or if you intend to use AutoModelForImageClassification for some.
+            # This was your original 'else' logic.
+            print(f"Warning: Vision model key '{model_key}' not explicitly handled for base model loading. Defaulting to AutoModelForImageClassification.")
             self.vision_model = AutoModelForImageClassification.from_pretrained(
                 hf_model_name,
                 num_labels=self.vision_config['dim'], 
-                ignore_mismatched_sizes=True
+                ignore_mismatched_sizes=True # This might be relevant if using num_labels
             )
         if freeze:
             for param in self.vision_model.parameters():
@@ -240,17 +247,64 @@ class PretrainedMultimodalRecommender(nn.Module):
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
         """Extracts vision features from the image tensor using the vision model."""
         model_input = {'pixel_values': image}
-        
-        if hasattr(self.vision_model, 'get_image_features'): 
+        vision_output = None
+
+        # Check if the model is a CLIP vision model and has 'get_image_features'
+        # The vision_config might be more reliable than model_key if self.vision_model is already instantiated
+        is_clip_model_type = 'clip' in self.vision_config.get('name', '').lower() # Check against HF name
+
+        if is_clip_model_type and hasattr(self.vision_model, 'get_image_features'):
             vision_output = self.vision_model.get_image_features(**model_input)
         else:
+            # For other models like ResNet, DINOv2, ConvNeXT loaded as AutoModel or their specific model class
             outputs = self.vision_model(**model_input)
+            
             if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
                 vision_output = outputs.pooler_output
-            elif hasattr(outputs, 'last_hidden_state'): 
-                vision_output = outputs.last_hidden_state.mean(dim=1)
+            elif hasattr(outputs, 'last_hidden_state'):
+                lhs = outputs.last_hidden_state
+                if lhs.ndim == 4:  # Typical for CNN feature maps (batch_size, num_channels, height, width)
+                    # Global average pooling across spatial dimensions
+                    vision_output = torch.nn.functional.adaptive_avg_pool2d(lhs, (1, 1)).squeeze(-1).squeeze(-1)
+                elif lhs.ndim == 3:  # Typical for ViT-like sequence outputs (batch_size, seq_len, hidden_dim)
+                    vision_output = lhs.mean(dim=1)  # Pool over sequence length
+                else:
+                    raise ValueError(f"Unsupported ndim for last_hidden_state: {lhs.ndim}")
             else:
-                raise ValueError("Vision model output structure not recognized for feature extraction.")
+                # If neither pooler_output nor last_hidden_state is found
+                # For some AutoModelForImageClassification outputs, the features might be directly in 'logits'
+                # or hidden states if output_hidden_states=True was passed during model init (not the case here)
+                # This path indicates a fundamental mismatch in output structure.
+                raise ValueError(
+                    "Vision model output structure not recognized. No 'pooler_output' or 'last_hidden_state'."
+                )
+        
+        if vision_output is None: # Should ideally be caught by exceptions above
+            raise ValueError("Failed to extract vision_output.")
+
+        # Ensure the output is 2D: (batch_size, feature_dim)
+        # This is a critical check. If it's not 2D here, the projection layer will fail.
+        if vision_output.ndim != 2:
+            # Attempt to view it as (batch_size, -1) if it's a product that makes sense,
+            # but this is risky and indicates an issue in feature extraction logic.
+            # For example, if it's (batch_size, features, 1, 1), squeeze it.
+            if vision_output.ndim == 4 and vision_output.shape[2] == 1 and vision_output.shape[3] == 1:
+                vision_output = vision_output.squeeze(-1).squeeze(-1)
+            else:
+                # If it's already something like (131072, 1), this means the problem is deeper
+                # or happened inside the Hugging Face model's forward pass for this specific model type.
+                raise ValueError(
+                    f"Vision output from _get_vision_features is not 2D (batch_size, feature_dim). "
+                    f"Got shape: {vision_output.shape}. Expected feature dim: {self.vision_config['dim']}"
+                )
+        
+        # Final check on the feature dimension
+        if vision_output.shape[1] != self.vision_config['dim']:
+            raise ValueError(
+                f"Vision output feature dimension ({vision_output.shape[1]}) "
+                f"does not match expected config dimension ({self.vision_config['dim']})."
+            )
+            
         return vision_output
 
     def _get_language_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -292,8 +346,8 @@ class PretrainedMultimodalRecommender(nn.Module):
         user_emb = self.user_embedding(user_idx)
         item_emb = self.item_embedding(item_idx)
 
-        raw_vision_output = self._get_vision_features(image) 
-        
+        raw_vision_output = self._get_vision_features(image)
+
         # Features for Main Recommendation Task
         projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)

@@ -24,16 +24,6 @@ def extract_encoders(config_path: str):
     item_info_df = pd.read_csv(data_config.processed_item_info_path)
     interactions_df = pd.read_csv(data_config.processed_interactions_path)
     
-    # Apply same sampling if it was used
-    if data_config.sample_size:
-        print(f"Sampling {data_config.sample_size} interactions...")
-        interactions_df = interactions_df.sample(
-            n=min(data_config.sample_size, len(interactions_df)), 
-            random_state=data_config.splitting.random_state
-        ).reset_index(drop=True)
-        sampled_item_ids = set(interactions_df['item_id'].unique())
-        item_info_df = item_info_df[item_info_df['item_id'].isin(sampled_item_ids)].reset_index(drop=True)
-    
     # Create dataset to fit encoders
     print("Creating dataset to fit encoders...")
     dataset = MultimodalDataset(

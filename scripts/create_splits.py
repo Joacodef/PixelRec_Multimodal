@@ -46,7 +46,7 @@ def filter_by_activity(interactions_df: pd.DataFrame, min_user_interactions: int
     return interactions_df
 
 
-def create_splits(config_path, output_dir="data/splits"):
+def create_splits(config_path):
     """
     Creates standardized train/validation/test splits for fair evaluation of recommender systems.
 
@@ -56,7 +56,6 @@ def create_splits(config_path, output_dir="data/splits"):
 
     Args:
         config_path: Path to the YAML configuration file.
-        output_dir: Directory where the generated splits and metadata will be saved.
     """
     
     # Load configuration from the specified YAML file.
@@ -69,7 +68,7 @@ def create_splits(config_path, output_dir="data/splits"):
     interactions_df = pd.read_csv(config.data.processed_interactions_path)
     
     # Ensure the output directory for splits exists.
-    output_path = Path(output_dir)
+    output_path = Path(config.data.split_data_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Filter interactions based on minimum activity criteria as specified in the config.

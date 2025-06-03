@@ -224,13 +224,7 @@ def main():
     print("Loading item info and interaction data for dataset initialization...")
     item_info_df = pd.read_csv(config.data.processed_item_info_path)
     interactions_df_for_dataset_init = pd.read_csv(config.data.processed_interactions_path)
-
-    if config.data.sample_size: 
-        interactions_df_for_dataset_init = interactions_df_for_dataset_init.sample(
-            n=min(config.data.sample_size, len(interactions_df_for_dataset_init)),
-            random_state=42 
-        )
-
+    
     print("Creating dataset instance...")
     
     # Load numerical scaler if needed

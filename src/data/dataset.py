@@ -130,34 +130,38 @@ class MultimodalDataset(Dataset):
 
     def _create_samples_with_labels(self):
         """
-        Generates positive and negative samples for training.
+        Generates positive and negative samples for training,
+        optimized for speed in per-user sampling and DataFrame creation.
         """
         current_interactions = self.interactions.copy()
-        if not current_interactions.empty:
-            if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
-                if 'user_id' in current_interactions.columns and hasattr(self.user_encoder, 'classes_') and len(self.user_encoder.classes_) > 0:
-                    try:
-                        known_users = list(self.user_encoder.classes_)
-                        current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()
-                        if not current_interactions.empty: current_interactions.loc[:, 'user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
-                        else: current_interactions['user_idx'] = pd.Series(dtype=int)
-                    except Exception as e: current_interactions['user_idx'] = pd.Series(dtype=int)
-                elif 'user_idx' not in current_interactions.columns : current_interactions['user_idx'] = pd.Series(dtype=int)
-            if 'item_idx' not in current_interactions.columns or current_interactions['item_idx'].isnull().all():
-                if 'item_id' in current_interactions.columns and hasattr(self.item_encoder, 'classes_') and len(self.item_encoder.classes_) > 0:
-                    try:
-                        known_items = list(self.item_encoder.classes_)
-                        current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()
-                        if not current_interactions.empty: current_interactions.loc[:, 'item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
-                        else: current_interactions['item_idx'] = pd.Series(dtype=int)
-                    except Exception as e: current_interactions['item_idx'] = pd.Series(dtype=int)
-                elif 'item_idx' not in current_interactions.columns: current_interactions['item_idx'] = pd.Series(dtype=int)
-        else:
+        # Initial checks and idx creation from your uploaded file
+        if current_interactions.empty:
             cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
             empty_df = pd.DataFrame(columns=cols)
             for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
             for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
             return empty_df
+
+        if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
+            if 'user_id' in current_interactions.columns and hasattr(self.user_encoder, 'classes_') and len(self.user_encoder.classes_) > 0:
+                try:
+                    known_users = list(self.user_encoder.classes_)
+                    current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()
+                    if not current_interactions.empty: current_interactions.loc[:, 'user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
+                    else: current_interactions['user_idx'] = pd.Series(dtype=int)
+                except Exception as e: current_interactions['user_idx'] = pd.Series(dtype=int)
+            elif 'user_idx' not in current_interactions.columns : current_interactions['user_idx'] = pd.Series(dtype=int)
+        
+        if 'item_idx' not in current_interactions.columns or current_interactions['item_idx'].isnull().all():
+            if 'item_id' in current_interactions.columns and hasattr(self.item_encoder, 'classes_') and len(self.item_encoder.classes_) > 0:
+                try:
+                    known_items = list(self.item_encoder.classes_)
+                    current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()
+                    if not current_interactions.empty: current_interactions.loc[:, 'item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
+                    else: current_interactions['item_idx'] = pd.Series(dtype=int)
+                except Exception as e: current_interactions['item_idx'] = pd.Series(dtype=int)
+            elif 'item_idx' not in current_interactions.columns: current_interactions['item_idx'] = pd.Series(dtype=int)
+        
         if current_interactions.empty or 'user_idx' not in current_interactions.columns or 'item_idx' not in current_interactions.columns or \
            current_interactions['user_idx'].isnull().all() or current_interactions['item_idx'].isnull().all():
             cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
@@ -165,91 +169,106 @@ class MultimodalDataset(Dataset):
             for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
             for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
             return empty_df
-        
-        # Mark positive samples with label 1
+
+        current_interactions.dropna(subset=['user_idx', 'item_idx'], inplace=True) # Added from your original file
+        if not current_interactions.empty: # Added from your original file
+            current_interactions['user_idx'] = current_interactions['user_idx'].astype(int)
+            current_interactions['item_idx'] = current_interactions['item_idx'].astype(int)
+        else: # Handle case where all samples were dropped (added from your original file)
+            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+            empty_df = pd.DataFrame(columns=cols)
+            for col_name in ['user_idx', 'item_idx', 'label']: empty_df[col_name] = empty_df[col_name].astype(int)
+            for col_name in ['user_id', 'item_id']: empty_df[col_name] = empty_df[col_name].astype(object)
+            return empty_df
+
+
         positive_df = current_interactions.copy()
         positive_df['label'] = 1
         
-        # Create mappings from index to original user/item IDs
+        if not (hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0 and \
+                hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None and len(self.item_encoder.classes_) > 0):
+            # This part is from your original file, slightly adapted
+            print("Warning: User or item encoder not fitted or empty. Cannot generate negative samples effectively.")
+            # Ensure 'user_id', 'item_id' are present if they were in original positive_df
+            cols_to_return = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+            for col_ in cols_to_return:
+                if col_ not in positive_df.columns:
+                     # Add missing columns with appropriate default or NaN if necessary
+                     if col_ in ['user_idx', 'item_idx', 'label']: positive_df[col_] = 0 # Or appropriate default
+                     else: positive_df[col_] = None
+            return positive_df[cols_to_return].sample(frac=1, random_state=42).reset_index(drop=True)
+
         idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
         idx_to_item_id = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
         
-        # Get a set of all possible item indices
         all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_))
         
-        # Group interactions by user index for efficient lookup
         user_item_interaction_dict = positive_df.groupby('user_idx')['item_idx'].apply(set).to_dict()
         
-        negative_samples_list = []
+        # Prepare lists to hold column data for negative samples
+        neg_user_ids_col = []
+        neg_item_ids_col = []
+        neg_user_idx_col = []
+        neg_item_idx_col = []
         
-        # Iterate through each user to generate negative samples with a progress bar
-        print("Generating negative samples for training data...")
-        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
-            # Find items not interacted by the current user
+        print("Generating negative samples for training data (optimized collection)...") # Message from your original file
+        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"): # Loop from your original file
             possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
             
-            # Determine the number of negative samples to draw
             num_positive = len(interacted_item_indices)
             num_negative_to_sample = min(int(num_positive * self._negative_sampling_ratio), len(possible_negative_indices))
             
             if num_negative_to_sample > 0:
-                # Randomly sample negative items
                 sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
                 
-                # Append negative samples to the list
-                if user_idx not in idx_to_user_id: 
-                    continue # Skip if user_idx is not in encoder (should ideally not happen here)
-                current_user_id_str = idx_to_user_id[user_idx] 
-                
+                current_user_id_str = idx_to_user_id.get(user_idx) # Use .get for safety
+                if current_user_id_str is None:
+                    continue # Should not happen if user_idx comes from positive_df
+
                 for neg_item_idx in sampled_negative_indices:
-                    if neg_item_idx not in idx_to_item_id: 
-                        continue # Skip if item_idx is not in encoder (should ideally not happen here)
-                    current_item_id_str = idx_to_item_id[neg_item_idx]
-                    negative_samples_list.append({
-                        'user_id': current_user_id_str, 
-                        'item_id': current_item_id_str, 
-                        'user_idx': user_idx, 
-                        'item_idx': neg_item_idx, 
-                        'label': 0
-                    })
+                    current_item_id_str = idx_to_item_id.get(neg_item_idx) # Use .get for safety
+                    if current_item_id_str is None:
+                        continue # Should not happen if neg_item_idx comes from all_item_indices_set
+
+                    neg_user_ids_col.append(current_user_id_str)
+                    neg_item_ids_col.append(current_item_id_str)
+                    neg_user_idx_col.append(user_idx)
+                    neg_item_idx_col.append(neg_item_idx)
         
-        # Create DataFrame from negative samples
-        negative_df = pd.DataFrame(negative_samples_list)
+        negative_df = pd.DataFrame({
+            'user_id': neg_user_ids_col,
+            'item_id': neg_item_ids_col,
+            'user_idx': neg_user_idx_col,
+            'item_idx': neg_item_idx_col,
+            'label': 0  # All these are negative samples
+        })
         
-        # Define the common columns required for concatenation
         columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
         
-        # Ensure positive_df has all required columns before concatenation
-        for col in columns_for_concat:
+        for col in columns_for_concat: # Ensure positive_df has all columns
             if col not in positive_df.columns:
-                if col == 'label': positive_df['label'] = 1 # Re-add label if somehow missing
+                if col == 'label': positive_df['label'] = 1
                 elif col in ['user_idx', 'item_idx']: positive_df[col] = pd.Series(dtype=int)
                 else: positive_df[col] = pd.Series(dtype=object)
-        
-        # Concatenate positive and negative samples
+
         if not negative_df.empty:
-            # Ensure negative_df also has all required columns (e.g., if columns were added later)
-            for col in columns_for_concat:
-                if col not in negative_df.columns:
-                    if col in ['user_idx', 'item_idx', 'label']: negative_df[col] = pd.Series(dtype=int)
-                    else: negative_df[col] = pd.Series(dtype=object)
             all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
         else:
             all_samples_df = positive_df[columns_for_concat].copy()
         
-        # Final cleanup and shuffle
         if not all_samples_df.empty:
-            all_samples_df.dropna(subset=['user_idx', 'item_idx'], inplace=True)
-            if not all_samples_df.empty:
+            all_samples_df.dropna(subset=['user_idx', 'item_idx'], inplace=True) # From your original file
+            if not all_samples_df.empty: # From your original file
                 all_samples_df['user_idx'] = all_samples_df['user_idx'].astype(int)
                 all_samples_df['item_idx'] = all_samples_df['item_idx'].astype(int)
-            else: # Handle case where all samples were dropped
+            else: # Handle case where all samples were dropped (added from your original file)
                 all_samples_df = pd.DataFrame(columns=columns_for_concat)
                 for col_name in ['user_idx', 'item_idx', 'label']: all_samples_df[col_name] = all_samples_df[col_name].astype(int)
                 for col_name in ['user_id', 'item_id']: all_samples_df[col_name] = all_samples_df[col_name].astype(object)
 
         return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True) if not all_samples_df.empty else all_samples_df
 
+        
     def __len__(self) -> int:
         return len(self.all_samples)
 

@@ -136,13 +136,6 @@ def main():
         item_info_df_full = pd.read_csv(data_config.processed_item_info_path)
         interactions_df_full = pd.read_csv(data_config.processed_interactions_path)
 
-        # Apply data sampling if configured for the full dataset used for encoder fitting
-        if data_config.sample_size:
-            print(f"Sampling {data_config.sample_size} interactions from processed data for encoder fitting...")
-            interactions_df_full = interactions_df_full.sample(n=min(data_config.sample_size, len(interactions_df_full)), random_state=data_config.splitting.random_state).reset_index(drop=True)
-            sampled_item_ids = set(interactions_df_full['item_id'].unique())
-            item_info_df_full = item_info_df_full[item_info_df_full['item_id'].isin(sampled_item_ids)].reset_index(drop=True)
-
         # Initialize and manage the shared image cache
         shared_image_cache = None
         if cache_images_flag:
