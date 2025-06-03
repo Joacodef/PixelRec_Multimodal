@@ -159,19 +159,31 @@ class DataSplittingConfig:
     validate_no_leakage: bool = True  # Check for user/item leakage
 
 @dataclass
+class OfflineImageCompressionConfig: # Ensure this dataclass is defined
+    """Configuration for offline image compression."""
+    enabled: bool = True
+    compress_if_kb_larger_than: int = 500
+    target_quality: int = 85
+    resize_if_pixels_larger_than: Optional[List[int]] = field(default_factory=lambda: [2048, 2048])
+    resize_target_longest_edge: Optional[int] = 1024
+
+@dataclass
 class DataConfig:
     """Data loading and preprocessing configuration parameters"""
     item_info_path: str = 'data/raw/item_info/Pixel200K.csv'
     interactions_path: str = 'data/raw/interactions/Pixel200K.csv'
     image_folder: str = 'data/raw/images'
+    processed_image_destination_folder: Optional[str] = 'data/processed/images_for_training'
     processed_item_info_path: str = 'data/processed/item_info_processed.csv'
     processed_interactions_path: str = 'data/processed/interactions_processed.csv'
     scaler_path: str = 'data/processed/numerical_scaler.pkl'
     sample_size: Optional[int] = None
     negative_sampling_ratio: float = 1.0
-    train_val_split: float = 0.8
+    # train_val_split: float = 0.8 # This seems to be an old field
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
     numerical_normalization_method: str = 'log1p'
+    # Ensure the type hint uses the defined dataclass name
+    offline_image_compression: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
     splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)
@@ -179,6 +191,7 @@ class DataConfig:
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
+    cache_processed_images: bool = False
 
 @dataclass
 class RecommendationConfig:
@@ -206,13 +219,16 @@ class Config:
             yaml_config = yaml.safe_load(f)
 
         def _create_dataclass_from_dict(dc_type: Any, cfg_dict: Optional[Dict], default_instance: Any) -> Any:
-            if cfg_dict is None:
+            if cfg_dict is None: # If the key doesn't exist in YAML, return the default instance
                 return default_instance
             
-            current_args = asdict(default_instance)
-            current_args.update(cfg_dict)
+            # Start with default values, then update with YAML values
+            current_args = asdict(default_instance) # Get defaults as dict
+            current_args.update(cfg_dict) # Update with values from YAML
             
-            for field_name, field_type_hint in dc_type.__annotations__.items():
+            # Recursively instantiate nested dataclasses
+            for field_name, field_info in dc_type.__dataclass_fields__.items():
+                field_type_hint = field_info.type
                 actual_field_type = None
                 is_optional = getattr(field_type_hint, '__origin__', None) is Union and \
                               type(None) in getattr(field_type_hint, '__args__', ())
@@ -223,52 +239,45 @@ class Config:
                         actual_field_type = possible_types[0]
                 else:
                     actual_field_type = field_type_hint
+                
+                # Handle cases where field_type_hint might be a string (forward reference)
+                if isinstance(actual_field_type, str):
+                    # Attempt to resolve string to actual type (basic implementation)
+                    resolved_type = globals().get(actual_field_type) # Or locals(), or a more robust mechanism
+                    if resolved_type and is_dataclass(resolved_type):
+                        actual_field_type = resolved_type
+                    else: # Fallback or raise error if type string can't be resolved
+                        actual_field_type = None
+
 
                 if actual_field_type and is_dataclass(actual_field_type) and \
                    isinstance(current_args.get(field_name), dict):
-                    current_args[field_name] = actual_field_type(**current_args[field_name])
+                    # Get the default instance for the nested dataclass field
+                    nested_default_instance = getattr(default_instance, field_name)
+                    current_args[field_name] = _create_dataclass_from_dict(
+                        actual_field_type, 
+                        current_args[field_name], 
+                        nested_default_instance
+                    )
             
             return dc_type(**current_args)
 
+        # Instantiate main config sections
         model_config = _create_dataclass_from_dict(ModelConfig, yaml_config.get('model'), ModelConfig())
         training_config = _create_dataclass_from_dict(TrainingConfig, yaml_config.get('training'), TrainingConfig())
         rec_config = _create_dataclass_from_dict(RecommendationConfig, yaml_config.get('recommendation'), RecommendationConfig())
 
+        # Instantiate DataConfig and its nested dataclasses
         data_yaml_dict = yaml_config.get('data', {})
-        default_data_instance = DataConfig()
+        default_data_instance = DataConfig() # Get a default DataConfig instance
 
-        # Handle nested dataclasses in DataConfig
-        text_aug_instance = _create_dataclass_from_dict(
-            TextAugmentationConfig,
-            data_yaml_dict.get('text_augmentation'),
-            default_data_instance.text_augmentation
-        )
-        img_val_instance = _create_dataclass_from_dict(
-            ImageValidationConfig,
-            data_yaml_dict.get('offline_image_validation'),
-            default_data_instance.offline_image_validation
-        )
-        text_clean_instance = _create_dataclass_from_dict(
-            OfflineTextCleaningConfig,
-            data_yaml_dict.get('offline_text_cleaning'),
-            default_data_instance.offline_text_cleaning
-        )
-        splitting_instance = _create_dataclass_from_dict(
-            DataSplittingConfig,
-            data_yaml_dict.get('splitting'),
-            default_data_instance.splitting
-        )
-
-        data_config_args = asdict(default_data_instance)
-        if data_yaml_dict:
-            data_config_args.update(data_yaml_dict)
+        # For DataConfig, we directly pass its yaml_dict and its default instance
+        # to _create_dataclass_from_dict. The recursive nature of 
+        # _create_dataclass_from_dict will handle the nested fields like
+        # text_augmentation, offline_image_validation, offline_text_cleaning, splitting,
+        # and importantly, offline_image_compression.
         
-        data_config_args['text_augmentation'] = text_aug_instance
-        data_config_args['offline_image_validation'] = img_val_instance
-        data_config_args['offline_text_cleaning'] = text_clean_instance
-        data_config_args['splitting'] = splitting_instance
-        
-        data_config = DataConfig(**data_config_args)
+        data_config = _create_dataclass_from_dict(DataConfig, data_yaml_dict, default_data_instance)
 
         return cls(
             model=model_config,

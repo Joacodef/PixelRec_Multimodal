@@ -15,7 +15,7 @@ import random
 import pickle
 from typing import Dict, Optional, Tuple, Any, Union, List
 
-from ..config import MODEL_CONFIGS, TextAugmentationConfig
+from ..config import MODEL_CONFIGS, TextAugmentationConfig, DataConfig
 from .preprocessing import augment_text, normalize_features
 
 
@@ -35,7 +35,8 @@ class MultimodalDataset(Dataset):
         numerical_feat_cols: List[str] = [],
         numerical_normalization_method: str = 'none',
         numerical_scaler: Optional[Any] = None,
-        is_train_mode: bool = False
+        is_train_mode: bool = False,
+        cache_processed_images: bool = False 
     ):
         self.interactions = interactions_df.copy()
         self.item_info = item_info_df.set_index('item_id')
@@ -83,6 +84,16 @@ class MultimodalDataset(Dataset):
             self._preprocess_all_item_numerical_features()
 
         self.all_samples = pd.DataFrame()
+
+        # Initialize image cache if enabled
+        self.cache_processed_images = cache_processed_images
+        if self.cache_processed_images:
+            self.image_cache: Dict[str, torch.Tensor] = {}
+            print("In-memory image caching is ENABLED.")
+        else:
+            self.image_cache = None # Or just don't define it if not used
+            print("In-memory image caching is DISABLED.")
+
 
     def _init_processors(self, vision_model_name: str):
         if vision_model_name == 'clip':
@@ -203,7 +214,9 @@ class MultimodalDataset(Dataset):
             text_content = augment_text(text_content, augmentation_type=self.text_augmentation_config.augmentation_type, delete_prob=self.text_augmentation_config.delete_prob, swap_prob=self.text_augmentation_config.swap_prob)
         text_tokens = self.tokenizer(text_content, padding='max_length', truncation=True, max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') and self.tokenizer.model_max_length else 128, return_tensors='pt')
         numerical_features_tensor = self._get_item_numerical_features(item_id_val, item_info_series)
+
         image_tensor = self._load_and_process_image(item_id_val)
+
         batch = {'user_idx': torch.tensor(user_idx_val, dtype=torch.long), 'item_idx': torch.tensor(item_idx_val, dtype=torch.long), 'image': image_tensor, 'text_input_ids': text_tokens['input_ids'].squeeze(0), 'text_attention_mask': text_tokens['attention_mask'].squeeze(0), 'numerical_features': numerical_features_tensor, 'label': torch.tensor(label_val, dtype=torch.float32)}
         if self.clip_tokenizer_for_contrastive:
             clip_tokens = self.clip_tokenizer_for_contrastive(text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt')
@@ -248,6 +261,12 @@ class MultimodalDataset(Dataset):
         return torch.tensor(raw_features, dtype=torch.float32)
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
+        # Check cache first if enabled
+        if self.cache_processed_images and self.image_cache is not None and item_id in self.image_cache:
+            print(f"CACHE HIT for item_id: {item_id}") 
+            return self.image_cache[item_id]
+        # print(f"CACHE MISS for item_id: {item_id} - Loading from disk/processing.")
+        
         base_path = os.path.join(self.image_folder, str(item_id))
         image_path_to_load = None
         for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
@@ -305,6 +324,11 @@ class MultimodalDataset(Dataset):
         if image_tensor.ndim != 3 or image_tensor.shape[0] != 3:
             # print(f"Warning: Final image tensor for {item_id} has unexpected shape {image_tensor.shape}. Using dummy tensor.")
             return torch.zeros(3, placeholder_size[0], placeholder_size[1])
+            
+        # Store in cache if enabled
+        if self.cache_processed_images and self.image_cache is not None:
+            self.image_cache[item_id] = image_tensor
+        
         return image_tensor
 
     def get_item_popularity(self) -> Dict[str, float]:

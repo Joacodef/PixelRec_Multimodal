@@ -46,7 +46,7 @@ training:
   weight_decay: 0.01
   patience: 10
   gradient_clip: 1.0
-  num_workers: 4
+  num_workers: 0
   
   # Loss weights
   contrastive_weight: 0.1
@@ -70,16 +70,34 @@ data:
   item_info_path: data/raw/item_info/Pixel200K.csv
   interactions_path: data/raw/interactions/Pixel200K.csv
   image_folder: data/raw/images
-  
+
   # Processed data paths
   processed_item_info_path: data/processed/item_info_processed.csv
   processed_interactions_path: data/processed/interactions_processed.csv
   scaler_path: data/processed/numerical_scaler.pkl
+  # Path for storing processed (e.g., compressed or resized) images
+  processed_image_destination_folder: data/processed/images_for_training
+
+  cache_processed_images: true
+  
+  # Offline image compression settings
+  offline_image_compression:
+    enabled: true                   # Master switch for this compression step
+    # Images larger than this (in KB) will be subject to compression/resizing.
+    # Images smaller than this will be copied as-is to the processed_image_destination_folder.
+    compress_if_kb_larger_than: 500 
+    target_quality: 85              # For JPEG compression (0-100, higher is better)
+    
+    # Optional resizing: if an image's dimensions exceed these, it will be resized
+    # before potential compression. Set to null or remove if no pre-resize is needed.
+    resize_if_pixels_larger_than: [2048, 2048] # [width, height] 
+    # If resizing, the longest edge of the image will be scaled to this value,
+    # maintaining aspect ratio.
+    resize_target_longest_edge: 1024 
   
   # Data sampling and processing
   sample_size: 5000  # Set to null for full dataset
   negative_sampling_ratio: 1.0
-  train_val_split: 0.8
   
   # Numerical features
   numerical_features_cols:

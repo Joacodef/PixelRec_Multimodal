@@ -68,6 +68,21 @@ def main():
     training_config = config.training
     print(f"Loaded configuration from {args.config}")
 
+    # Determine the image folder to be used by the Dataset
+    # Default to original image folder
+    effective_image_folder = data_config.image_folder 
+    if hasattr(data_config, 'offline_image_compression') and \
+       data_config.offline_image_compression.enabled and \
+       hasattr(data_config, 'processed_image_destination_folder') and \
+       data_config.processed_image_destination_folder:
+        effective_image_folder = data_config.processed_image_destination_folder
+        print(f"Using processed (compressed/resized) images from: {effective_image_folder}")
+    else:
+        print(f"Using original images from: {effective_image_folder}")
+
+    # Pass the cache_processed_images flag from config to the Dataset
+    cache_images_flag = getattr(data_config, 'cache_processed_images', False)
+
     if args.use_wandb:
         try:
             config_dict_for_wandb = dataclasses.asdict(config)
@@ -160,7 +175,7 @@ def main():
         full_dataset_for_encoders = MultimodalDataset(
             interactions_df=interactions_df,
             item_info_df=item_info_df,
-            image_folder=data_config.image_folder,
+            image_folder=effective_image_folder,
             vision_model_name=model_config.vision_model,
             language_model_name=model_config.language_model,
             create_negative_samples=False, # Not creating samples here for this instance
@@ -168,7 +183,8 @@ def main():
             numerical_feat_cols=data_config.numerical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
-            is_train_mode=False
+            is_train_mode=False,
+            cache_processed_images=cache_images_flag
         )
         # The encoders are now fitted inside full_dataset_for_encoders.__init__
         # And n_users/n_items are derived from these fitted encoders.
@@ -180,7 +196,7 @@ def main():
         train_dataset = MultimodalDataset(
             interactions_df=train_interactions_df,
             item_info_df=item_info_df, # Full item info
-            image_folder=data_config.image_folder,
+            image_folder=effective_image_folder,
             vision_model_name=model_config.vision_model,
             language_model_name=model_config.language_model,
             create_negative_samples=True, # Will be used by finalize_setup
@@ -189,7 +205,8 @@ def main():
             numerical_feat_cols=data_config.numerical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler, # Pass the fitted scaler
-            is_train_mode=True
+            is_train_mode=True,
+            cache_processed_images=cache_images_flag
         )
         # Assign globally fitted encoders and counts
         train_dataset.user_encoder = full_dataset_for_encoders.user_encoder
@@ -202,7 +219,7 @@ def main():
         val_dataset = MultimodalDataset(
             interactions_df=val_interactions_df, # This might be empty
             item_info_df=item_info_df, # Full item info
-            image_folder=data_config.image_folder,
+            image_folder=effective_image_folder,
             vision_model_name=model_config.vision_model,
             language_model_name=model_config.language_model,
             create_negative_samples=True, # Will be used by finalize_setup
@@ -211,7 +228,8 @@ def main():
             numerical_feat_cols=data_config.numerical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler, # Pass the fitted scaler
-            is_train_mode=False
+            is_train_mode=False,
+            cache_processed_images=cache_images_flag
         )
         # Assign globally fitted encoders and counts
         val_dataset.user_encoder = full_dataset_for_encoders.user_encoder
