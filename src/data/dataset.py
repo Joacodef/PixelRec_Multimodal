@@ -36,7 +36,8 @@ class MultimodalDataset(Dataset):
         numerical_normalization_method: str = 'none',
         numerical_scaler: Optional[Any] = None,
         is_train_mode: bool = False,
-        cache_processed_images: bool = False 
+        cache_processed_images: bool = False,
+        shared_image_cache: Optional['SharedImageCache'] = None  # Add this parameter
     ):
         self.interactions = interactions_df.copy()
         self.item_info = item_info_df.set_index('item_id')
@@ -85,14 +86,19 @@ class MultimodalDataset(Dataset):
 
         self.all_samples = pd.DataFrame()
 
-        # Initialize image cache if enabled
+        # Initialize image cache
         self.cache_processed_images = cache_processed_images
-        if self.cache_processed_images:
-            self.image_cache: Dict[str, torch.Tensor] = {}
-            print("In-memory image caching is ENABLED.")
+        if shared_image_cache is not None:
+            # Use the provided shared cache
+            self.image_cache = shared_image_cache
+            print("Using shared image cache.")
+        elif self.cache_processed_images:
+            # Create instance-specific cache (original behavior)
+            self.image_cache = {}
+            print("Using instance-specific in-memory image cache.")
         else:
-            self.image_cache = None # Or just don't define it if not used
-            print("In-memory image caching is DISABLED.")
+            self.image_cache = None
+            print("Image caching is DISABLED.")
 
 
     def _init_processors(self, vision_model_name: str):
@@ -262,72 +268,79 @@ class MultimodalDataset(Dataset):
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
         # Check cache first if enabled
-        if self.cache_processed_images and self.image_cache is not None and item_id in self.image_cache:
-            print(f"CACHE HIT for item_id: {item_id}") 
-            return self.image_cache[item_id]
-        # print(f"CACHE MISS for item_id: {item_id} - Loading from disk/processing.")
+        if self.image_cache is not None:
+            # For SharedImageCache
+            if hasattr(self.image_cache, 'get'):
+                cached_tensor = self.image_cache.get(item_id)
+                if cached_tensor is not None:
+                    return cached_tensor
+            # For dict cache (original)
+            elif isinstance(self.image_cache, dict) and item_id in self.image_cache:
+                return self.image_cache[item_id]
         
         base_path = os.path.join(self.image_folder, str(item_id))
         image_path_to_load = None
         for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
             current_path = f"{base_path}{ext}"
-            if os.path.exists(current_path): image_path_to_load = current_path; break
+            if os.path.exists(current_path): 
+                image_path_to_load = current_path
+                break
         
         placeholder_size = (224, 224)
         try:
             if hasattr(self.image_processor, 'size'):
                 processor_size = self.image_processor.size
                 if isinstance(processor_size, dict) and 'shortest_edge' in processor_size:
-                    size_val = processor_size['shortest_edge']; placeholder_size = (size_val, size_val)
-                elif isinstance(processor_size, (tuple, list)) and len(processor_size) >= 2: placeholder_size = (processor_size[0], processor_size[1])
-                elif isinstance(processor_size, int): placeholder_size = (processor_size, processor_size)
-        except Exception: pass
+                    size_val = processor_size['shortest_edge']
+                    placeholder_size = (size_val, size_val)
+                elif isinstance(processor_size, (tuple, list)) and len(processor_size) >= 2:
+                    placeholder_size = (processor_size[0], processor_size[1])
+                elif isinstance(processor_size, int):
+                    placeholder_size = (processor_size, processor_size)
+        except Exception:
+            pass
 
         try:
-            if image_path_to_load is None: raise FileNotFoundError (f"Image for {item_id} not found.")
+            if image_path_to_load is None:
+                raise FileNotFoundError(f"Image for {item_id} not found.")
             image = Image.open(image_path_to_load).convert('RGB')
-        except Exception as e: image = Image.new('RGB', placeholder_size, color='grey')
+        except Exception as e:
+            image = Image.new('RGB', placeholder_size, color='grey')
 
-        try: processed_output = self.image_processor(images=image, return_tensors='pt')
+        try:
+            processed_output = self.image_processor(images=image, return_tensors='pt')
         except Exception as proc_err:
-            # print(f"ERROR during image_processor call for item {item_id} with {type(self.image_processor)}. Error: {proc_err}. Using dummy tensor.") # More detailed error
             return torch.zeros(3, placeholder_size[0], placeholder_size[1])
-
-        # ----- START DEBUGGING BLOCK -----
-        # print(f"DEBUG: item {item_id}, type(self.image_processor)={type(self.image_processor)}")
-        # print(f"DEBUG: item {item_id}, type(processed_output)={type(processed_output)}")
-        # if hasattr(processed_output, 'keys'):
-        #     print(f"DEBUG: item {item_id}, processed_output.keys()={list(processed_output.keys())}")
-        # else:
-        #     print(f"DEBUG: item {item_id}, processed_output has no 'keys' attribute.")
-        # if hasattr(processed_output, 'data') and isinstance(processed_output.data, dict):
-        #      print(f"DEBUG: item {item_id}, processed_output.data.keys()={list(processed_output.data.keys())}")
-        # ----- END DEBUGGING BLOCK -----
 
         image_tensor = None
         if isinstance(processed_output, dict) and 'pixel_values' in processed_output:
             image_tensor = processed_output['pixel_values']
-            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1 : # Batch of 1
-                 image_tensor = image_tensor.squeeze(0)
+            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.squeeze(0)
         elif torch.is_tensor(processed_output): 
             image_tensor = processed_output
-            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1: image_tensor = image_tensor.squeeze(0) 
+            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.squeeze(0) 
         
         if image_tensor is None:
-            # This is where your original warning comes from
-            # print(f"Warning: Image processor output for {item_id} is type {type(processed_output)}, not dict or tensor with 'pixel_values'. Using dummy tensor.")
             return torch.zeros(3, placeholder_size[0], placeholder_size[1])
 
-        if image_tensor.ndim == 2: image_tensor = image_tensor.unsqueeze(0) # Add channel for grayscale
-        if image_tensor.ndim == 3 and image_tensor.shape[0] == 1: image_tensor = image_tensor.repeat(3,1,1) # Convert grayscale to RGB
+        if image_tensor.ndim == 2:
+            image_tensor = image_tensor.unsqueeze(0)
+        if image_tensor.ndim == 3 and image_tensor.shape[0] == 1:
+            image_tensor = image_tensor.repeat(3,1,1)
         
         if image_tensor.ndim != 3 or image_tensor.shape[0] != 3:
-            # print(f"Warning: Final image tensor for {item_id} has unexpected shape {image_tensor.shape}. Using dummy tensor.")
             return torch.zeros(3, placeholder_size[0], placeholder_size[1])
             
         # Store in cache if enabled
-        if self.cache_processed_images and self.image_cache is not None:
-            self.image_cache[item_id] = image_tensor
+        if self.image_cache is not None:
+            # For SharedImageCache
+            if hasattr(self.image_cache, 'set'):
+                self.image_cache.set(item_id, image_tensor)
+            # For dict cache (original)
+            elif isinstance(self.image_cache, dict):
+                self.image_cache[item_id] = image_tensor
         
         return image_tensor
 
