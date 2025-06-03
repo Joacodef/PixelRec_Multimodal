@@ -167,7 +167,7 @@ class Recommender:
         self, 
         user_idx: int, 
         items: List[str],
-        batch_size: int = 32  # Process items in batches
+        batch_size: int = 256  # Process items in batches
     ) -> List[Tuple[str, float]]:
         """Score a list of items for a user using batched processing"""
         scores = []
