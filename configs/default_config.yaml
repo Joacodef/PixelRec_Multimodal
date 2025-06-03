@@ -67,8 +67,8 @@ training:
 
 data:
   # Data paths
-  item_info_path: data/raw/item_info/Pixel200K.csv
-  interactions_path: data/raw/interactions/Pixel200K.csv
+  item_info_path: data/raw/item_info/item_info_sample.csv
+  interactions_path: data/raw/interactions/interactions_sample.csv
   image_folder: data/raw/images
 
   # Processed data paths
@@ -131,24 +131,18 @@ data:
     normalize_unicode: true
     to_lowercase: true
   
-  
+
   # Data splitting configuration
   splitting:
-    strategy: stratified  # Options: stratified, user, item, temporal, leave_one_out, simple_random
     random_state: 42
-    
-    # Final desired ratios for Train, Validation, Test splits
+
     # These should sum to 1.0
     train_final_ratio: 0.6
     val_final_ratio: 0.2
     test_final_ratio: 0.2
 
-    min_interactions_per_user: 2
-    min_interactions_per_item: 2
-    timestamp_col: null  # Required for temporal split
-    leave_one_out_strategy: random  # Options: random, latest
-    cold_user_ratio: 0.1  # For mixed split
-    cold_item_ratio: 0.1  # For mixed split
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
     validate_no_leakage: true
 
 recommendation:

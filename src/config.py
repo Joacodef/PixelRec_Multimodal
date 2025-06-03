@@ -140,9 +140,7 @@ class OfflineTextCleaningConfig:
 
 @dataclass
 class DataSplittingConfig:
-    """Configuration for data splitting strategies"""
-    strategy: str = 'stratified'  # 'user', 'item', 'temporal', 'stratified', 'leave_one_out', 'mixed'
-    
+    """Configuration for data splitting strategies"""    
     # Global random state for reproducibility of splits
     random_state: int = 42
     
@@ -154,15 +152,7 @@ class DataSplittingConfig:
 
     # Minimum interactions required per user/item for filtering before splitting
     min_interactions_per_user: int = 5
-    min_interactions_per_item: int = 3
-    
-    # Specific parameters for certain strategies (if applicable)
-    timestamp_col: Optional[str] = None  # For temporal split
-    leave_one_out_strategy: str = 'random'  # 'random' or 'latest'
-    
-    # For mixed split
-    cold_user_ratio: float = 0.1
-    cold_item_ratio: float = 0.1
+    min_interactions_per_item: int = 5
     
     # Validation
     validate_no_leakage: bool = True  # Check for user/item leakage
