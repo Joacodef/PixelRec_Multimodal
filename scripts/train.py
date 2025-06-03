@@ -283,9 +283,108 @@ def main():
         print(f"  Training samples: {len(train_dataset)}")
         print(f"  Validation samples: {len(val_dataset)}")
 
-        # Continue with the rest of your training code...
-        # (DataLoader creation, model initialization, training, etc.)
+        train_loader = DataLoader(train_dataset, batch_size=training_config.batch_size, shuffle=True, num_workers=training_config.num_workers, pin_memory=True)
+        # Handle empty val_loader if val_dataset is empty
+        val_loader = DataLoader(val_dataset, batch_size=training_config.batch_size, shuffle=False, num_workers=training_config.num_workers, pin_memory=True) if len(val_dataset) > 0 else None
 
+
+        print("\nInitializing model...")
+        model_class_to_use = PretrainedMultimodalRecommender
+        if hasattr(model_config, 'model_class') and model_config.model_class == 'enhanced':
+            model_class_to_use = EnhancedMultimodalRecommender
+            print("Using EnhancedMultimodalRecommender")
+        else:
+            print("Using PretrainedMultimodalRecommender")
+        
+        model_params = {
+            'n_users': full_dataset_for_encoders.n_users,
+            'n_items': full_dataset_for_encoders.n_items,
+            'embedding_dim': model_config.embedding_dim,
+            'vision_model_name': model_config.vision_model,
+            'language_model_name': model_config.language_model,
+            'freeze_vision': model_config.freeze_vision,
+            'freeze_language': model_config.freeze_language,
+            'use_contrastive': model_config.use_contrastive,
+            'dropout_rate': model_config.dropout_rate,
+            'num_attention_heads': model_config.num_attention_heads,
+            'attention_dropout': model_config.attention_dropout,
+            'fusion_hidden_dims': model_config.fusion_hidden_dims,
+            'fusion_activation': model_config.fusion_activation,
+            'use_batch_norm': model_config.use_batch_norm,
+            'projection_hidden_dim': model_config.projection_hidden_dim,
+            'final_activation': model_config.final_activation,
+            'init_method': model_config.init_method,
+            'contrastive_temperature': model_config.contrastive_temperature,
+        }
+        if model_class_to_use == EnhancedMultimodalRecommender:
+            model_params.update({
+                'use_cross_modal_attention': model_config.use_cross_modal_attention,
+                'cross_modal_attention_weight': model_config.cross_modal_attention_weight
+            })
+        model = model_class_to_use(**model_params).to(device)
+
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+
+        trainer = Trainer(model=model, device=device, checkpoint_dir=config.checkpoint_dir, use_contrastive=model_config.use_contrastive)
+        trainer.criterion.contrastive_weight = training_config.contrastive_weight
+        trainer.criterion.bce_weight = training_config.bce_weight
+
+        if args.resume:
+            print(f"\nResuming from checkpoint: {args.resume}")
+            trainer.load_checkpoint(args.resume)
+
+        print("\nStarting training...")
+        training_params_for_trainer = { # Renamed to avoid conflict
+            'train_loader': train_loader,
+            'val_loader': val_loader, # Pass val_loader, Trainer handles if it's None
+            'epochs': training_config.epochs,
+            'lr': training_config.learning_rate, 
+            'weight_decay': training_config.weight_decay,
+            'patience': training_config.patience, 
+            'gradient_clip': training_config.gradient_clip,
+            'optimizer_type': training_config.optimizer_type, 
+            'adam_beta1': training_config.adam_beta1,
+            'adam_beta2': training_config.adam_beta2, 
+            'adam_eps': training_config.adam_eps,
+            'use_lr_scheduler': training_config.use_lr_scheduler, 
+            'lr_scheduler_type': training_config.lr_scheduler_type,
+            'lr_scheduler_patience': training_config.lr_scheduler_patience,
+            'lr_scheduler_factor': training_config.lr_scheduler_factor, 
+            'lr_scheduler_min_lr': training_config.lr_scheduler_min_lr
+        }
+        train_losses, val_losses = trainer.train(**training_params_for_trainer)
+
+        trainer.save_checkpoint('final_model.pth')
+        print(f"\nSaved final model to {config.checkpoint_dir}/final_model.pth")
+        encoders_dir = Path(config.checkpoint_dir) / 'encoders'
+        encoders_dir.mkdir(parents=True, exist_ok=True)
+        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f: pickle.dump(full_dataset_for_encoders.user_encoder, f)
+        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f: pickle.dump(full_dataset_for_encoders.item_encoder, f)
+        print(f"Saved encoders to {encoders_dir}")
+
+        if train_losses and val_losses : # Only plot if training happened and losses were recorded
+            plt.figure(figsize=(10, 5))
+            plt.plot(train_losses, label='Train Loss'); plt.plot(val_losses, label='Validation Loss')
+            plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('Training and Validation Loss'); plt.legend()
+            results_fig_dir = Path(config.results_dir) / 'figures'; results_fig_dir.mkdir(parents=True, exist_ok=True)
+            plot_path = results_fig_dir / 'training_curves.png'; plt.savefig(plot_path)
+            print(f"\nSaved training curves to {plot_path}")
+            if args.use_wandb and wandb.run is not None:
+                try: wandb.log({"training_validation_loss_curves": wandb.Image(str(plot_path))})
+                except Exception as e: print(f"Warning: Failed to log training curves to wandb: {e}")
+        else:
+            print("\nSkipping plotting training curves as training might have been skipped or no validation occurred.")
+
+
+        config_save_path = Path(config.results_dir) / 'training_run_config.yaml'; config.to_yaml(str(config_save_path))
+        print(f"Saved effective configuration to {config_save_path}")
+        if args.use_wandb and wandb.run is not None:
+            try: wandb.save(str(config_save_path))
+            except Exception as e: print(f"Warning: Failed to save config to wandb: {e}")
+        print("\nTraining completed!")
     finally:
         if args.use_wandb and wandb.run is not None:
             print("Finishing wandb run...")
