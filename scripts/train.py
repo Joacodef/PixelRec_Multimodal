@@ -139,8 +139,8 @@ def main():
         # Initialize and manage the shared image cache
         shared_image_cache = None
         if cache_images_flag:
-            cache_file_path = Path(config.checkpoint_dir) / 'image_cache.pkl'
-            shared_image_cache = SharedImageCache(cache_path=cache_file_path)
+            cache_directory_path = Path(config.checkpoint_dir) / 'image_tensor_cache'
+            shared_image_cache = SharedImageCache(cache_path=cache_directory_path) 
             
             # Load existing cache if available
             shared_image_cache.load_from_disk()
@@ -167,12 +167,12 @@ def main():
                     item_ids=all_item_ids,
                     image_folder=effective_image_folder,
                     image_processor=temp_dataset.image_processor,
-                    force_recompute=False
+                    force_recompute=False 
                 )
                 
                 # Save the updated cache to disk
-                shared_image_cache.save_to_disk()
-                print(f"Image cache saved with {len(shared_image_cache.cache)} images")
+                # shared_image_cache.save_to_disk() # Will save to the directory
+                print(f"Image cache processed and saved to {cache_directory_path}")
 
         # Handle numerical scaler fitting or loading
         numerical_scaler = None

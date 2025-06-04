@@ -44,7 +44,7 @@ training:
   epochs: 30
   learning_rate: 0.001
   weight_decay: 0.01
-  patience: 10
+  patience: 6
   gradient_clip: 1.0
   num_workers: 0
   
