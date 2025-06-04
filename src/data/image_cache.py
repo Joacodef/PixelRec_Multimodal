@@ -41,7 +41,8 @@ class SharedImageCache:
         
         # LRU cache for memory management
         self.memory_cache: OrderedDict[str, torch.Tensor] = OrderedDict()
-        self._lock = threading.Lock()  # Thread safety
+        # Don't create lock here - will be created lazily
+        # self._lock = threading.Lock()  # REMOVED
         
         # Statistics
         self.disk_hits = 0
@@ -59,14 +60,32 @@ class SharedImageCache:
             print(f"Using MEMORY-ONLY caching (max {self.max_memory_items} items)")
         else:  # hybrid
             print(f"Using HYBRID caching: disk at {self.cache_dir}, memory limit {self.max_memory_items}")
-        
+    
+    def __getstate__(self):
+        """Prepare object for pickling by removing unpicklable objects"""
+        state = self.__dict__.copy()
+        # Remove the lock if it exists
+        state.pop('_lock', None)
+        return state
+    
+    def __setstate__(self, state):
+        """Restore object after unpickling and recreate unpicklable objects"""
+        self.__dict__.update(state)
+        # Don't create lock here - will be created lazily when needed
+    
+    @property
+    def lock(self):
+        """Lazy initialization of lock to ensure it exists in the current process"""
+        if not hasattr(self, '_lock'):
+            self._lock = threading.Lock()
+        return self._lock
         
     def get(self, item_id: str) -> Optional[torch.Tensor]:
         """Get cached image tensor, loading from disk if needed"""
         if self.strategy == 'disabled':
             return None
         
-        with self._lock:
+        with self.lock:  # Use property instead of self._lock
             # Check memory cache first (if strategy allows)
             if self.strategy in ['hybrid', 'memory'] and item_id in self.memory_cache:
                 # Move to end (most recently used)
@@ -108,7 +127,7 @@ class SharedImageCache:
         
         # Add to memory cache if strategy allows
         if self.strategy in ['hybrid', 'memory']:
-            with self._lock:
+            with self.lock:  # Use property instead of self._lock
                 self._add_to_memory_cache(item_id, tensor)
     
     def _add_to_memory_cache(self, item_id: str, tensor: torch.Tensor):
@@ -309,7 +328,7 @@ class SharedImageCache:
     
     def clear_memory_cache(self):
         """Clear memory cache but keep disk cache"""
-        with self._lock:
+        with self.lock:  # Use property instead of self._lock
             self.memory_cache.clear()
             print("Cleared memory cache. Disk cache remains intact.")
     
