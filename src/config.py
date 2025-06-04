@@ -7,12 +7,12 @@ from typing import Optional, Dict, Any, List, Union
 import yaml
 from pathlib import Path
 
-# MODEL_CONFIGS definition (keep existing)
 MODEL_CONFIGS = {
     'vision': {
         'clip': {
             'name': 'openai/clip-vit-base-patch32',
-            'dim': 768
+            'dim': 768,
+            'text_dim': 512  # Add text dimension for CLIP
         },
         'dino': {
             'name': 'facebook/dinov2-base',

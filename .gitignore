@@ -39,3 +39,5 @@ results/metrics/
 
 notebooks/
 wandb/
+
+models/backup/

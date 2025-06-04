@@ -42,8 +42,17 @@ class PretrainedMultimodalRecommender(nn.Module):
     ):
         super(PretrainedMultimodalRecommender, self).__init__()
 
+        # FIRST: Store model names as instance variables
+        self.vision_model_name = vision_model_name
+        self.language_model_name = language_model_name
+
+        # THEN: Set configs and validate
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
+        
+        # NOW: Validate configurations
+        self._validate_model_configs()
+        
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
@@ -197,13 +206,15 @@ class PretrainedMultimodalRecommender(nn.Module):
                 self.vision_config['dim'],
                 self.embedding_dim
             )
-            # For CLIP text model output dimension
-            clip_text_model_raw_output_dim = 512 
+            
+            # Dynamically determine CLIP text model output dimension
+            clip_text_output_dim = self._get_clip_text_output_dim()
             self.text_contrastive_projection = nn.Linear(
-                clip_text_model_raw_output_dim, 
+                clip_text_output_dim, 
                 self.embedding_dim
             )
             self.temperature = nn.Parameter(torch.tensor(self.contrastive_temperature))
+
 
     def _init_fusion_network(self):
         """Initializes the attention-based fusion network and final prediction layers with configurable architecture."""
@@ -246,67 +257,110 @@ class PretrainedMultimodalRecommender(nn.Module):
     
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
         """Extracts vision features from the image tensor using the vision model."""
+        # Validate input tensor
+        if not isinstance(image, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(image)}")
+        
+        if image.dim() not in [3, 4]:
+            raise ValueError(f"Expected 3D or 4D tensor, got {image.dim()}D tensor with shape {image.shape}")
+        
         model_input = {'pixel_values': image}
         vision_output = None
 
         # Check if the model is a CLIP vision model and has 'get_image_features'
-        # The vision_config might be more reliable than model_key if self.vision_model is already instantiated
-        is_clip_model_type = 'clip' in self.vision_config.get('name', '').lower() # Check against HF name
+        is_clip_model_type = 'clip' in self.vision_config.get('name', '').lower()
 
-        if is_clip_model_type and hasattr(self.vision_model, 'get_image_features'):
-            vision_output = self.vision_model.get_image_features(**model_input)
-        else:
-            # For other models like ResNet, DINOv2, ConvNeXT loaded as AutoModel or their specific model class
-            outputs = self.vision_model(**model_input)
-            
-            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
-                vision_output = outputs.pooler_output
-            elif hasattr(outputs, 'last_hidden_state'):
-                lhs = outputs.last_hidden_state
-                if lhs.ndim == 4:  # Typical for CNN feature maps (batch_size, num_channels, height, width)
-                    # Global average pooling across spatial dimensions
-                    vision_output = torch.nn.functional.adaptive_avg_pool2d(lhs, (1, 1)).squeeze(-1).squeeze(-1)
-                elif lhs.ndim == 3:  # Typical for ViT-like sequence outputs (batch_size, seq_len, hidden_dim)
-                    vision_output = lhs.mean(dim=1)  # Pool over sequence length
-                else:
-                    raise ValueError(f"Unsupported ndim for last_hidden_state: {lhs.ndim}")
+        try:
+            if is_clip_model_type and hasattr(self.vision_model, 'get_image_features'):
+                vision_output = self.vision_model.get_image_features(**model_input)
             else:
-                # If neither pooler_output nor last_hidden_state is found
-                # For some AutoModelForImageClassification outputs, the features might be directly in 'logits'
-                # or hidden states if output_hidden_states=True was passed during model init (not the case here)
-                # This path indicates a fundamental mismatch in output structure.
-                raise ValueError(
-                    "Vision model output structure not recognized. No 'pooler_output' or 'last_hidden_state'."
-                )
+                # For other models like ResNet, DINOv2, ConvNeXT
+                outputs = self.vision_model(**model_input)
+                
+                if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                    vision_output = outputs.pooler_output
+                elif hasattr(outputs, 'last_hidden_state'):
+                    lhs = outputs.last_hidden_state
+                    if lhs.ndim == 4:  # CNN feature maps (batch_size, num_channels, height, width)
+                        vision_output = torch.nn.functional.adaptive_avg_pool2d(lhs, (1, 1)).squeeze(-1).squeeze(-1)
+                    elif lhs.ndim == 3:  # ViT-like sequence outputs (batch_size, seq_len, hidden_dim)
+                        vision_output = lhs.mean(dim=1)  # Pool over sequence length
+                    else:
+                        raise ValueError(f"Unsupported last_hidden_state dimensions: {lhs.ndim}D with shape {lhs.shape}")
+                else:
+                    # Check for other possible output attributes
+                    available_attrs = [attr for attr in dir(outputs) if not attr.startswith('_') and hasattr(outputs, attr)]
+                    raise ValueError(
+                        f"Vision model output structure not recognized for model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                        f"No 'pooler_output' or 'last_hidden_state' found. "
+                        f"Available attributes: {available_attrs}"
+                    )
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                raise RuntimeError(
+                    f"GPU out of memory during vision feature extraction. "
+                    f"Input shape: {image.shape}, Model: {getattr(self, 'vision_model_name', 'unknown')}. "
+                    f"Original error: {e}"
+                ) from e
+            elif "size mismatch" in str(e).lower() or "dimension" in str(e).lower():
+                raise RuntimeError(
+                    f"Tensor dimension mismatch in vision model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                    f"Input shape: {image.shape}, Expected input format may be different. "
+                    f"Original error: {e}"
+                ) from e
+            else:
+                raise RuntimeError(
+                    f"Runtime error during vision feature extraction with model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                    f"Input shape: {image.shape}. Original error: {e}"
+                ) from e
         
-        if vision_output is None: # Should ideally be caught by exceptions above
-            raise ValueError("Failed to extract vision_output.")
+        except Exception as e:
+            raise RuntimeError(
+                f"Unexpected error during vision feature extraction with model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                f"Input shape: {image.shape}. Error type: {type(e).__name__}. "
+                f"Original error: {e}"
+            ) from e
+        
+        # Validate that we got an output
+        if vision_output is None:
+            raise ValueError(
+                f"Failed to extract vision features from model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                f"Model returned None output. Input shape: {image.shape}"
+            )
 
-        # Ensure the output is 2D: (batch_size, feature_dim)
-        # This is a critical check. If it's not 2D here, the projection layer will fail.
+        # Validate and fix output dimensions
         if vision_output.ndim != 2:
-            # Attempt to view it as (batch_size, -1) if it's a product that makes sense,
-            # but this is risky and indicates an issue in feature extraction logic.
-            # For example, if it's (batch_size, features, 1, 1), squeeze it.
+            # Attempt to fix common dimension issues
             if vision_output.ndim == 4 and vision_output.shape[2] == 1 and vision_output.shape[3] == 1:
                 vision_output = vision_output.squeeze(-1).squeeze(-1)
+            elif vision_output.ndim == 3 and vision_output.shape[0] == 1:
+                # Batch dimension of 1 that can be squeezed
+                vision_output = vision_output.squeeze(0)
+            elif vision_output.ndim == 1:
+                # Add batch dimension if missing
+                vision_output = vision_output.unsqueeze(0)
             else:
-                # If it's already something like (131072, 1), this means the problem is deeper
-                # or happened inside the Hugging Face model's forward pass for this specific model type.
                 raise ValueError(
-                    f"Vision output from _get_vision_features is not 2D (batch_size, feature_dim). "
-                    f"Got shape: {vision_output.shape}. Expected feature dim: {self.vision_config['dim']}"
+                    f"Vision output has unexpected dimensions: {vision_output.ndim}D with shape {vision_output.shape}. "
+                    f"Expected 2D (batch_size, feature_dim). Model: {getattr(self, 'vision_model_name', 'unknown')}, "
+                    f"Input shape: {image.shape}"
                 )
         
-        # Final check on the feature dimension
-        if vision_output.shape[1] != self.vision_config['dim']:
+        # Final validation of feature dimension
+        expected_dim = self.vision_config['dim']
+        actual_dim = vision_output.shape[1] if vision_output.ndim >= 2 else vision_output.numel()
+        
+        if actual_dim != expected_dim:
             raise ValueError(
-                f"Vision output feature dimension ({vision_output.shape[1]}) "
-                f"does not match expected config dimension ({self.vision_config['dim']})."
+                f"Vision feature dimension mismatch for model '{getattr(self, 'vision_model_name', 'unknown')}'. "
+                f"Expected: {expected_dim}, Got: {actual_dim}. "
+                f"Output shape: {vision_output.shape}, Input shape: {image.shape}. "
+                f"This may indicate a configuration error in MODEL_CONFIGS or model version mismatch."
             )
-            
+        
         return vision_output
-
+    
+    
     def _get_language_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Extracts language features from text inputs using the main language model."""
         outputs = self.language_model(input_ids=input_ids, attention_mask=attention_mask)
@@ -407,6 +461,113 @@ class PretrainedMultimodalRecommender(nn.Module):
                 dim=-1 
             )
         return item_full_embedding
+
+
+    def _validate_model_configs(self):
+        """Validate that model configurations are available and consistent."""
+        # Check if vision model config exists
+        if self.vision_model_name not in MODEL_CONFIGS['vision']:
+            available_models = list(MODEL_CONFIGS['vision'].keys())
+            raise ValueError(
+                f"Vision model '{self.vision_model_name}' not found in MODEL_CONFIGS. "
+                f"Available options: {available_models}"
+            )
+        
+        # Check if language model config exists
+        if self.language_model_name not in MODEL_CONFIGS['language']:
+            available_models = list(MODEL_CONFIGS['language'].keys())
+            raise ValueError(
+                f"Language model '{self.language_model_name}' not found in MODEL_CONFIGS. "
+                f"Available options: {available_models}"
+            )
+        
+        # Validate dimensions are positive integers
+        vision_dim = self.vision_config.get('dim')
+        language_dim = self.language_config.get('dim')
+        
+        if not isinstance(vision_dim, int) or vision_dim <= 0:
+            raise ValueError(f"Invalid vision model dimension: {vision_dim}")
+        
+        if not isinstance(language_dim, int) or language_dim <= 0:
+            raise ValueError(f"Invalid language model dimension: {language_dim}")
+        
+        # Validate contrastive learning setup
+        if self.use_contrastive and self.vision_model_name != 'clip':
+            print(f"Warning: Contrastive learning enabled but vision model is '{self.vision_model_name}', not 'clip'. "
+                f"This may not work as expected.")
+
+    def _get_clip_text_output_dim(self) -> int:
+        """
+        Dynamically determine the output dimension of the CLIP text model.
+        
+        Returns:
+            int: The output dimension of the CLIP text model
+        """
+        if not hasattr(self, 'clip_text_model') or self.clip_text_model is None:
+            # Fallback: try to get from config or use reasonable default
+            clip_text_dim = MODEL_CONFIGS['vision']['clip'].get('text_dim')
+            if clip_text_dim is not None:
+                return clip_text_dim
+            
+            # Last resort: use the most common CLIP text dimension
+            print("Warning: Could not determine CLIP text output dimension. Using default 512.")
+            return 512
+        
+        # Try to get the actual dimension from the model
+        try:
+            # Most CLIP text models have a text_projection layer
+            if hasattr(self.clip_text_model, 'text_projection'):
+                return self.clip_text_model.text_projection.in_features
+            
+            # Alternative: check the final layer of the text model
+            if hasattr(self.clip_text_model, 'text_model') and hasattr(self.clip_text_model.text_model, 'final_layer_norm'):
+                return self.clip_text_model.text_model.final_layer_norm.normalized_shape[0]
+            
+            # Another alternative: use the pooler output if available
+            if hasattr(self.clip_text_model, 'config') and hasattr(self.clip_text_model.config, 'text_config'):
+                text_config = self.clip_text_model.config.text_config
+                if hasattr(text_config, 'hidden_size'):
+                    return text_config.hidden_size
+            
+            # If all else fails, use a test forward pass (less efficient but reliable)
+            return self._probe_clip_text_output_dim()
+            
+        except Exception as e:
+            print(f"Warning: Error determining CLIP text output dimension: {e}. Using default 512.")
+            return 512
+
+    def _probe_clip_text_output_dim(self) -> int:
+        """
+        Determine CLIP text output dimension by running a test forward pass.
+        
+        Returns:
+            int: The output dimension
+        """
+        try:
+            # Create a dummy input
+            dummy_input_ids = torch.zeros(1, 77, dtype=torch.long)  # Standard CLIP sequence length
+            dummy_attention_mask = torch.ones(1, 77, dtype=torch.long)
+            
+            # Run forward pass
+            with torch.no_grad():
+                outputs = self.clip_text_model(
+                    input_ids=dummy_input_ids,
+                    attention_mask=dummy_attention_mask
+                )
+                
+            # Get the pooler output dimension
+            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                return outputs.pooler_output.shape[-1]
+            
+            # Fallback to last hidden state
+            if hasattr(outputs, 'last_hidden_state'):
+                return outputs.last_hidden_state.shape[-1]
+                
+        except Exception as e:
+            print(f"Warning: Error probing CLIP text output dimension: {e}")
+        
+        return 512  # Safe default
+
 
 
 class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
