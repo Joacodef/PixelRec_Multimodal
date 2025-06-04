@@ -1,0 +1,21 @@
+{
+  "precision@50": 9.524053355180626e-05,
+  "recall@50": 0.001015834077251305,
+  "ndcg@50": 0.0012336256597057465,
+  "map": 0.00010036365153680151,
+  "catalog_coverage": 1.4124738883915249,
+  "n_users_evaluated": 39059,
+  "n_users_no_novel_items": 0,
+  "n_users_total": 39059,
+  "n_unique_items_recommended": 47332,
+  "avg_novel_items_per_user": 4.7274891830308,
+  "novel_items_ratio": 1.0,
+  "evaluation_metadata": {
+    "task": "Top-K Retrieval (Novel Items)",
+    "filter_seen_evaluator_perspective": true,
+    "recommender_type": "random",
+    "top_k": 50,
+    "test_file": "data/splits/split_2/test.csv",
+    "train_file_used_for_history": "data/splits/split_2/train.csv"
+  }
+}

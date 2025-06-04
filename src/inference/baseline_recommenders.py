@@ -4,7 +4,7 @@ Baseline recommenders for comparison with the multimodal system
 """
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict # Ensure Optional is imported
 from tqdm import tqdm
 from collections import defaultdict
 from scipy.sparse import csr_matrix
@@ -16,30 +16,49 @@ from pathlib import Path
 class BaselineRecommender:
     """Base class for baseline recommenders"""
     
-    def __init__(self, dataset, device=None):
+    def __init__(self, dataset, device=None, history_interactions_df: Optional[pd.DataFrame] = None):
         """
         Initialize baseline recommender
         
         Args:
             dataset: MultimodalDataset instance (for compatibility)
             device: Device for computation (not used by baselines)
+            history_interactions_df: Optional DataFrame to use for building user history
+                                     and for training CF models. If None, uses dataset.interactions.
         """
         self.dataset = dataset
-        self.interactions = dataset.interactions
-        self.item_popularity = self._calculate_item_popularity()
-        self.user_items = self._build_user_item_dict()
-        self.all_items = list(self.dataset.item_encoder.classes_)
         
-    def _calculate_item_popularity(self):
-        """Calculate item popularity scores"""
-        return self.interactions['item_id'].value_counts().to_dict()
+        # Use provided history_interactions_df if available and not empty, else fallback to dataset.interactions
+        if history_interactions_df is not None and not history_interactions_df.empty:
+            self.interactions_for_model = history_interactions_df
+        else:
+            self.interactions_for_model = dataset.interactions
+            if history_interactions_df is not None and history_interactions_df.empty:
+                print("Warning: Provided history_interactions_df is empty. Falling back to dataset.interactions for baseline history/training.")
+
+        # Global item popularity should ideally still come from the full dataset for a true measure of popularity
+        self.item_popularity = self._calculate_item_popularity(dataset.interactions) 
+        
+        # User items for "seen" history should be built from interactions_for_model
+        self.user_items = self._build_user_item_dict(self.interactions_for_model)
+        
+        # all_items should represent the entire catalog known to the system
+        self.all_items = list(self.dataset.item_encoder.classes_) if hasattr(self.dataset.item_encoder, 'classes_') and self.dataset.item_encoder.classes_ is not None else []
+        
+    def _calculate_item_popularity(self, interactions_df: pd.DataFrame) -> Dict[str, int]:
+        """Calculate item popularity scores from a given interactions DataFrame."""
+        if 'item_id' not in interactions_df.columns or interactions_df.empty:
+            return {}
+        return interactions_df['item_id'].value_counts().to_dict()
     
-    def _build_user_item_dict(self):
-        """Build dictionary of items per user"""
-        return self.interactions.groupby('user_id')['item_id'].apply(set).to_dict()
+    def _build_user_item_dict(self, interactions_df: pd.DataFrame) -> Dict[str, set]:
+        """Build dictionary of items per user from a given interactions DataFrame."""
+        if 'user_id' not in interactions_df.columns or 'item_id' not in interactions_df.columns or interactions_df.empty:
+            return {}
+        return interactions_df.groupby('user_id')['item_id'].apply(set).to_dict()
     
     def get_user_history(self, user_id: str) -> set:
-        """Get user's interaction history"""
+        """Get user's interaction history (based on interactions_for_model)"""
         return self.user_items.get(user_id, set())
     
     def get_recommendations(
@@ -56,9 +75,10 @@ class BaselineRecommender:
 class RandomRecommender(BaselineRecommender):
     """Random baseline recommender"""
     
-    def __init__(self, dataset, device=None, random_seed=42):
-        super().__init__(dataset, device)
+    def __init__(self, dataset, device=None, random_seed=42, history_interactions_df: Optional[pd.DataFrame] = None):
+        super().__init__(dataset, device, history_interactions_df=history_interactions_df)
         np.random.seed(random_seed)
+        # self.all_items is inherited and correctly sourced from the full dataset's encoder
         
     def get_recommendations(
         self,
@@ -69,58 +89,53 @@ class RandomRecommender(BaselineRecommender):
     ) -> List[Tuple[str, float]]:
         """Get random recommendations"""
         
-        # Get candidate items
-        if candidates is None:
-            candidates = self.all_items.copy()
+        current_candidates = []
+        if candidates is not None:
+            current_candidates = list(candidates) # Work with a copy
+        elif self.all_items: # Ensure all_items is not empty
+            current_candidates = self.all_items.copy()
+        else: # No items to recommend from
+             return []
         
-        # Filter seen items
         if filter_seen:
-            seen_items = self.get_user_history(user_id)
-            candidates = [item for item in candidates if item not in seen_items]
+            seen_items = self.get_user_history(user_id) # Uses history from interactions_for_model
+            current_candidates = [item for item in current_candidates if item not in seen_items]
         
-        # Random sampling
-        n_recommendations = min(top_k, len(candidates))
-        if n_recommendations == 0:
+        n_recommendations = min(top_k, len(current_candidates))
+        if n_recommendations == 0 or not current_candidates : # Check if current_candidates is empty
             return []
         
-        recommended_items = np.random.choice(candidates, n_recommendations, replace=False)
+        recommended_items = np.random.choice(current_candidates, n_recommendations, replace=False)
         
-        # Return with random scores
         return [(item, np.random.random()) for item in recommended_items]
 
 
 class PopularityRecommender(BaselineRecommender):
     """Popularity-based baseline recommender - OPTIMIZED VERSION"""
     
-    def __init__(self, dataset, device=None):
-        super().__init__(dataset, device)
-        # Pre-compute and cache the global popularity ranking
-        self._precompute_popularity_ranking()
+    def __init__(self, dataset, device=None, history_interactions_df: Optional[pd.DataFrame] = None):
+        super().__init__(dataset, device, history_interactions_df=history_interactions_df)
+        # self.item_popularity is global (from dataset.interactions)
+        # self.user_items for filtering is based on history_interactions_df
+        # self.all_items is global
+        self._precompute_popularity_ranking() # Uses self.item_popularity and self.all_items
     
     def _precompute_popularity_ranking(self):
         """Pre-compute a sorted list of all items by popularity"""
-        # Create list of (item_id, popularity) tuples for ALL items
         all_items_with_scores = [
             (item, self.item_popularity.get(item, 0)) 
-            for item in self.all_items
+            for item in self.all_items # Use global list of all items
         ]
         
-        # Sort once by popularity (descending)
         all_items_with_scores.sort(key=lambda x: x[1], reverse=True)
-        
-        # Store both the sorted list and normalized scores
         self.sorted_items = all_items_with_scores
         
-        # Normalize scores once
         if self.sorted_items:
-            max_score = self.sorted_items[0][1]
-            if max_score > 0:
-                self.sorted_items_normalized = [
-                    (item, score/max_score) 
-                    for item, score in self.sorted_items
-                ]
-            else:
-                self.sorted_items_normalized = self.sorted_items
+            max_score = self.sorted_items[0][1] if self.sorted_items[0][1] > 0 else 1.0 # Avoid division by zero if all scores are 0
+            self.sorted_items_normalized = [
+                (item, score / max_score) 
+                for item, score in self.sorted_items
+            ]
         else:
             self.sorted_items_normalized = []
     
@@ -132,82 +147,81 @@ class PopularityRecommender(BaselineRecommender):
         candidates: Optional[List[str]] = None
     ) -> List[Tuple[str, float]]:
         """Get most popular items as recommendations - OPTIMIZED"""
-        
-        # Get user's seen items if filtering
-        seen_items = set()  # Use set for O(1) lookup
+        seen_items = set()
         if filter_seen:
-            seen_items = self.get_user_history(user_id)
-            if not isinstance(seen_items, set):
+            seen_items = self.get_user_history(user_id) # Uses history from interactions_for_model
+            if not isinstance(seen_items, set): # Should be a set from _build_user_item_dict
                 seen_items = set(seen_items)
         
-        # Handle specific candidates if provided
-        if candidates is not None:
-            # Only process the specific candidates
-            candidate_set = set(candidates)
-            
-            # Filter to only items in candidate set and not seen
-            filtered_scores = [
-                (item, score) 
-                for item, score in self.sorted_items_normalized
-                if item in candidate_set and item not in seen_items
-            ]
-            
-            return filtered_scores[:top_k]
+        recommendations = []
         
+        # Determine the pool of items to rank by popularity
+        items_to_consider = []
+        if candidates is not None:
+            # Filter self.sorted_items_normalized to only include those in the provided candidates list
+            candidate_set = set(candidates)
+            items_to_consider = [(item, score) for item, score in self.sorted_items_normalized if item in candidate_set]
         else:
-            # Use pre-computed ranking - much faster!
-            recommendations = []
-            
-            for item, score in self.sorted_items_normalized:
-                # Skip if seen
-                if item in seen_items:
-                    continue
-                
-                recommendations.append((item, score))
-                
-                # Stop when we have enough
-                if len(recommendations) >= top_k:
-                    break
-            
-            return recommendations
+            items_to_consider = self.sorted_items_normalized # Default to all items, ranked by global popularity
+
+        for item, score in items_to_consider:
+            if item in seen_items:
+                continue
+            recommendations.append((item, score))
+            if len(recommendations) >= top_k:
+                break
+        return recommendations
 
 
 class ItemKNNRecommender(BaselineRecommender):
     """Item-based collaborative filtering recommender"""
     
-    def __init__(self, dataset, device=None, k_neighbors=50):
-        super().__init__(dataset, device)
+    def __init__(self, dataset, device=None, k_neighbors=50, history_interactions_df: Optional[pd.DataFrame] = None):
+        super().__init__(dataset, device, history_interactions_df=history_interactions_df)
         self.k_neighbors = k_neighbors
-        self._build_item_similarity_matrix()
+        # The _build_item_similarity_matrix should use self.interactions_for_model
+        self._build_item_similarity_matrix() 
         
     def _build_item_similarity_matrix(self):
-        """Build item-item similarity matrix"""
-        print("Building item similarity matrix...")
+        """Build item-item similarity matrix using self.interactions_for_model"""
+        print("Building item similarity matrix for ItemKNN...")
         
-        # Create mappings
+        # Encoders are from the full dataset, ensuring all items have a potential index
         self.user_to_idx = {user: idx for idx, user in enumerate(self.dataset.user_encoder.classes_)}
         self.item_to_idx = {item: idx for idx, item in enumerate(self.dataset.item_encoder.classes_)}
         self.idx_to_item = {idx: item for item, idx in self.item_to_idx.items()}
         
-        # Build sparse user-item matrix
-        interactions = self.interactions[
-            (self.interactions['user_id'].isin(self.user_to_idx)) &
-            (self.interactions['item_id'].isin(self.item_to_idx))
-        ]
-        
-        row_indices = [self.user_to_idx[user] for user in interactions['user_id']]
-        col_indices = [self.item_to_idx[item] for item in interactions['item_id']]
+        # Use self.interactions_for_model to build the matrix
+        # Filter interactions to those users/items present in the encoders
+        interactions = self.interactions_for_model[
+            (self.interactions_for_model['user_id'].isin(self.user_to_idx)) &
+            (self.interactions_for_model['item_id'].isin(self.item_to_idx))
+        ].copy() # Use .copy() to avoid SettingWithCopyWarning
+
+        if interactions.empty:
+            print("Warning: No interactions available for ItemKNN model building after filtering. Similarity matrix will be empty.")
+            self.item_similarities = csr_matrix((len(self.item_to_idx), len(self.item_to_idx)))
+            return
+
+        interactions.loc[:, 'user_idx_map'] = interactions['user_id'].map(self.user_to_idx)
+        interactions.loc[:, 'item_idx_map'] = interactions['item_id'].map(self.item_to_idx)
+
+        row_indices = interactions['user_idx_map'].tolist()
+        col_indices = interactions['item_idx_map'].tolist()
         data = np.ones(len(interactions))
         
-        self.user_item_matrix = csr_matrix(
+        # Matrix shape is based on the full number of users/items from encoders
+        user_item_matrix = csr_matrix(
             (data, (row_indices, col_indices)),
             shape=(len(self.user_to_idx), len(self.item_to_idx))
         )
         
-        # Calculate item-item similarities (cosine similarity)
-        print("Calculating item similarities...")
-        self.item_similarities = cosine_similarity(self.user_item_matrix.T, dense_output=False)
-        
+        print("Calculating item similarities for ItemKNN...")
+        if user_item_matrix.shape[1] > 0: # Check if there are columns (items)
+            self.item_similarities = cosine_similarity(user_item_matrix.T, dense_output=False)
+        else:
+            self.item_similarities = csr_matrix((len(self.item_to_idx), len(self.item_to_idx)))
+
     def get_recommendations(
         self,
         user_id: str,
@@ -216,46 +230,42 @@ class ItemKNNRecommender(BaselineRecommender):
         candidates: Optional[List[str]] = None
     ) -> List[Tuple[str, float]]:
         """Get item-based recommendations"""
-        
-        # Check if user exists
         if user_id not in self.user_to_idx:
-            # Cold start - return popular items
-            return PopularityRecommender(self.dataset).get_recommendations(
+            # Fallback to popularity if user is unknown to the main encoder
+            # Pass along history_interactions_df for consistent filtering in PopularityRecommender
+            return PopularityRecommender(self.dataset, history_interactions_df=self.interactions_for_model).get_recommendations(
                 user_id, top_k, filter_seen, candidates
             )
         
-        # Get user's items
-        user_items = self.get_user_history(user_id)
-        if not user_items:
-            return []
+        # User's history for finding similar items (from interactions_for_model)
+        user_interacted_items_history = self.get_user_history(user_id) 
+        if not user_interacted_items_history:
+            return [] # No history to base CF recommendations on
         
-        # Calculate scores for all items
         scores = np.zeros(len(self.item_to_idx))
         
-        for item in user_items:
-            if item in self.item_to_idx:
-                item_idx = self.item_to_idx[item]
-                # Add similarities from this item
-                scores += self.item_similarities[item_idx].toarray().flatten()
+        for item_id_hist in user_interacted_items_history:
+            if item_id_hist in self.item_to_idx:
+                item_idx_hist = self.item_to_idx[item_id_hist]
+                if item_idx_hist < self.item_similarities.shape[0]: # Check bounds
+                    scores += self.item_similarities[item_idx_hist].toarray().flatten()
         
-        # Normalize by number of user items
-        scores = scores / len(user_items)
+        if len(user_interacted_items_history) > 0:
+            scores /= len(user_interacted_items_history) # Normalize
         
-        # Get candidates
-        if candidates is None:
-            candidates = self.all_items
-        
-        # Create recommendations
         recommendations = []
-        for item in candidates:
-            if filter_seen and item in user_items:
-                continue
-            if item in self.item_to_idx:
-                item_idx = self.item_to_idx[item]
-                if scores[item_idx] > 0:
-                    recommendations.append((item, float(scores[item_idx])))
         
-        # Sort and return top-k
+        # Determine candidate pool: if None, use all items known to the encoder
+        item_pool = candidates if candidates is not None else self.all_items
+
+        for item_id_cand in item_pool:
+            if item_id_cand in self.item_to_idx:
+                item_idx_cand = self.item_to_idx[item_id_cand]
+                if scores[item_idx_cand] > 1e-9: # Check for some minimal score
+                    if filter_seen and item_id_cand in user_interacted_items_history: # use the same history for filtering
+                        continue
+                    recommendations.append((item_id_cand, float(scores[item_idx_cand])))
+        
         recommendations.sort(key=lambda x: x[1], reverse=True)
         return recommendations[:top_k]
 
@@ -263,34 +273,48 @@ class ItemKNNRecommender(BaselineRecommender):
 class UserKNNRecommender(BaselineRecommender):
     """User-based collaborative filtering recommender"""
     
-    def __init__(self, dataset, device=None, k_neighbors=50):
-        super().__init__(dataset, device)
+    def __init__(self, dataset, device=None, k_neighbors=50, history_interactions_df: Optional[pd.DataFrame] = None):
+        super().__init__(dataset, device, history_interactions_df=history_interactions_df)
         self.k_neighbors = k_neighbors
+        # _build_user_item_matrix should use self.interactions_for_model
         self._build_user_item_matrix()
         
     def _build_user_item_matrix(self):
-        """Build user-item matrix"""
+        """Build user-item matrix using self.interactions_for_model"""
         print("Building user-item matrix for UserKNN...")
         
-        # Create mappings
         self.user_to_idx = {user: idx for idx, user in enumerate(self.dataset.user_encoder.classes_)}
         self.item_to_idx = {item: idx for idx, item in enumerate(self.dataset.item_encoder.classes_)}
         
-        # Build sparse matrix
-        interactions = self.interactions[
-            (self.interactions['user_id'].isin(self.user_to_idx)) &
-            (self.interactions['item_id'].isin(self.item_to_idx))
-        ]
+        interactions = self.interactions_for_model[
+            (self.interactions_for_model['user_id'].isin(self.user_to_idx)) &
+            (self.interactions_for_model['item_id'].isin(self.item_to_idx))
+        ].copy()
+
+        if interactions.empty:
+            print("Warning: No interactions available for UserKNN model building after filtering. User-item matrix will be empty.")
+            self.user_item_matrix = csr_matrix((len(self.user_to_idx), len(self.item_to_idx)))
+            self.user_similarities = csr_matrix((len(self.user_to_idx), len(self.user_to_idx)))
+            return
+
+        interactions.loc[:, 'user_idx_map'] = interactions['user_id'].map(self.user_to_idx)
+        interactions.loc[:, 'item_idx_map'] = interactions['item_id'].map(self.item_to_idx)
         
-        row_indices = [self.user_to_idx[user] for user in interactions['user_id']]
-        col_indices = [self.item_to_idx[item] for item in interactions['item_id']]
+        row_indices = interactions['user_idx_map'].tolist()
+        col_indices = interactions['item_idx_map'].tolist()
         data = np.ones(len(interactions))
         
         self.user_item_matrix = csr_matrix(
             (data, (row_indices, col_indices)),
             shape=(len(self.user_to_idx), len(self.item_to_idx))
         )
-        
+        # Precompute user similarities
+        print("Calculating user similarities for UserKNN...")
+        if self.user_item_matrix.shape[0] > 0: # Check if there are rows (users)
+            self.user_similarities = cosine_similarity(self.user_item_matrix, dense_output=False)
+        else:
+            self.user_similarities = csr_matrix((len(self.user_to_idx), len(self.user_to_idx)))
+
     def get_recommendations(
         self,
         user_id: str,
@@ -299,55 +323,54 @@ class UserKNNRecommender(BaselineRecommender):
         candidates: Optional[List[str]] = None
     ) -> List[Tuple[str, float]]:
         """Get user-based recommendations"""
-        
-        # Check if user exists
         if user_id not in self.user_to_idx:
-            # Cold start
-            return PopularityRecommender(self.dataset).get_recommendations(
+            return PopularityRecommender(self.dataset, history_interactions_df=self.interactions_for_model).get_recommendations(
                 user_id, top_k, filter_seen, candidates
             )
         
-        user_idx = self.user_to_idx[user_id]
-        user_vector = self.user_item_matrix[user_idx]
+        target_user_idx = self.user_to_idx[user_id]
         
-        # Find similar users
-        similarities = cosine_similarity(user_vector, self.user_item_matrix).flatten()
-        similarities[user_idx] = 0  # Exclude self
+        if target_user_idx >= self.user_similarities.shape[0]:
+             print(f"Warning: User index {target_user_idx} out of bounds for user_similarities matrix. Returning empty recommendations.")
+             return []
+
+        user_sim_vector = self.user_similarities[target_user_idx].toarray().flatten()
+        user_sim_vector[target_user_idx] = 0 # Exclude self
         
-        # Get top-k similar users
-        top_users_indices = np.argsort(similarities)[-self.k_neighbors:][::-1]
-        top_users_indices = top_users_indices[similarities[top_users_indices] > 0]
+        # Get top-N similar users (N=k_neighbors)
+        # Ensure we only consider users with positive similarity
+        similar_user_indices = np.argsort(user_sim_vector)[-self.k_neighbors:][::-1]
+        similar_user_indices = similar_user_indices[user_sim_vector[similar_user_indices] > 1e-9]
+
+        if len(similar_user_indices) == 0:
+            return [] # No similar users found
         
-        if len(top_users_indices) == 0:
-            return []
-        
-        # Aggregate items from similar users
+        # Aggregate item scores from similar users
         item_scores = np.zeros(len(self.item_to_idx))
+        sum_similarities = 0
         
-        for similar_user_idx in top_users_indices:
-            weight = similarities[similar_user_idx]
-            item_scores += weight * self.user_item_matrix[similar_user_idx].toarray().flatten()
+        for sim_user_idx in similar_user_indices:
+            if sim_user_idx < self.user_item_matrix.shape[0]: # Check bounds
+                similarity_weight = user_sim_vector[sim_user_idx]
+                item_scores += similarity_weight * self.user_item_matrix[sim_user_idx].toarray().flatten()
+                sum_similarities += similarity_weight
         
-        # Normalize scores
-        item_scores = item_scores / np.sum(similarities[top_users_indices])
+        if sum_similarities > 1e-9: # Avoid division by zero
+            item_scores /= sum_similarities
         
-        # Get user's seen items
-        user_items = self.get_user_history(user_id)
-        
-        # Get candidates
-        if candidates is None:
-            candidates = self.all_items
-        
-        # Create recommendations
+        # User's history for filtering recommendations (from interactions_for_model)
+        user_interacted_items_history = self.get_user_history(user_id)
         recommendations = []
-        for item in candidates:
-            if filter_seen and item in user_items:
-                continue
-            if item in self.item_to_idx:
-                item_idx = self.item_to_idx[item]
-                if item_scores[item_idx] > 0:
-                    recommendations.append((item, float(item_scores[item_idx])))
         
-        # Sort and return top-k
+        item_pool = candidates if candidates is not None else self.all_items
+
+        for item_id_cand in item_pool:
+            if item_id_cand in self.item_to_idx:
+                item_idx_cand = self.item_to_idx[item_id_cand]
+                if item_scores[item_idx_cand] > 1e-9:
+                    if filter_seen and item_id_cand in user_interacted_items_history:
+                        continue
+                    recommendations.append((item_id_cand, float(item_scores[item_idx_cand])))
+        
         recommendations.sort(key=lambda x: x[1], reverse=True)
         return recommendations[:top_k]
