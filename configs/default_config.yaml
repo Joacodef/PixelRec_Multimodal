@@ -140,16 +140,16 @@ data:
     random_state: 42
 
     # These should sum to 1.0
-    train_final_ratio: 0.6
-    val_final_ratio: 0.2
-    test_final_ratio: 0.2
+    train_final_ratio: 0.40
+    val_final_ratio: 0.15
+    test_final_ratio: 0.45
 
     min_interactions_per_user: 5
     min_interactions_per_item: 5
     validate_no_leakage: true
 
 recommendation:
-  top_k: 10
+  top_k: 50
   diversity_weight: 0.3
   novelty_weight: 0.2
   filter_seen: true
