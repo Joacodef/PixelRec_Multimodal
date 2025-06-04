@@ -29,6 +29,7 @@ from src.inference.baseline_recommenders import (
     ItemKNNRecommender, UserKNNRecommender,
     BaselineRecommender # Import Base class if needed for type hinting
 )
+from src.data.image_cache import SharedImageCache 
 
 # Modified create_recommender function
 def create_recommender(
@@ -157,6 +158,25 @@ def main():
        config_obj.data.processed_image_destination_folder:
         effective_image_folder = config_obj.data.processed_image_destination_folder
 
+    shared_image_cache_eval = None
+    if config_obj.data.cache_processed_images: # Use the flag from config
+        cache_config_eval = config_obj.data.image_cache_config
+        cache_directory_path_eval = Path(cache_config_eval.cache_directory)
+
+        print(f"Initializing SharedImageCache for evaluation:")
+        print(f"  Strategy: {cache_config_eval.strategy}")
+        print(f"  Cache directory: {cache_directory_path_eval}")
+
+        shared_image_cache_eval = SharedImageCache(
+            cache_path=cache_directory_path_eval,
+            max_memory_items=cache_config_eval.max_memory_items, # Can be smaller for eval if memory is tight
+            strategy=cache_config_eval.strategy
+        )
+        shared_image_cache_eval.load_from_disk() # Crucial: loads metadata about disk cache
+        shared_image_cache_eval.print_stats()
+    else:
+        print("Image caching is disabled for evaluation.")
+
     # This dataset is primarily for fitting global encoders and providing item metadata
     dataset_for_encoders = MultimodalDataset(
         interactions_df=interactions_df_for_dataset_init, # Use full interactions here
@@ -168,7 +188,8 @@ def main():
         numerical_feat_cols=config_obj.data.numerical_features_cols,
         numerical_normalization_method=config_obj.data.numerical_normalization_method,
         numerical_scaler=numerical_scaler,
-        cache_processed_images=config_obj.data.cache_processed_images # Use config for caching
+        cache_processed_images=config_obj.data.cache_processed_images, # Use config for caching
+        shared_image_cache=shared_image_cache_eval
     )
     dataset_for_encoders.finalize_setup() # This fits the encoders
 

@@ -1,0 +1,112 @@
+model:
+  model_class: pretrained
+  vision_model: clip
+  language_model: sentence-bert
+  embedding_dim: 64
+  freeze_vision: true
+  freeze_language: true
+  use_contrastive: true
+  contrastive_temperature: 0.07
+  dropout_rate: 0.3
+  num_attention_heads: 4
+  attention_dropout: 0.1
+  fusion_hidden_dims:
+  - 512
+  - 256
+  - 128
+  fusion_activation: relu
+  use_batch_norm: true
+  projection_hidden_dim: null
+  use_cross_modal_attention: true
+  cross_modal_attention_weight: 0.5
+  final_activation: sigmoid
+  init_method: xavier_uniform
+training:
+  batch_size: 64
+  epochs: 30
+  learning_rate: 0.001
+  weight_decay: 0.01
+  patience: 10
+  gradient_clip: 1.0
+  num_workers: 8
+  contrastive_weight: 0.1
+  bce_weight: 1.0
+  use_lr_scheduler: true
+  lr_scheduler_type: reduce_on_plateau
+  lr_scheduler_patience: 2
+  lr_scheduler_factor: 0.5
+  lr_scheduler_min_lr: 1.0e-06
+  optimizer_type: adamw
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-08
+data:
+  item_info_path: data/raw/item_info/item_info_sample.csv
+  interactions_path: data/raw/interactions/interactions_sample.csv
+  image_folder: data/raw/images
+  processed_image_destination_folder: data/processed/images
+  processed_item_info_path: data/processed/item_info.csv
+  processed_interactions_path: data/processed/interactions.csv
+  split_data_path: data/splits/split_tiny
+  train_data_path: data/splits/split_tiny/train.csv
+  val_data_path: data/splits/split_tiny/val.csv
+  test_data_path: data/splits/split_tiny/test.csv
+  scaler_path: data/processed/numerical_scaler.pkl
+  negative_sampling_ratio: 1.0
+  text_augmentation:
+    enabled: true
+    augmentation_type: random_delete
+    delete_prob: 0.05
+    swap_prob: 0.05
+  numerical_normalization_method: standardization
+  offline_image_compression:
+    enabled: true
+    compress_if_kb_larger_than: 500
+    target_quality: 85
+    resize_if_pixels_larger_than:
+    - 2048
+    - 2048
+    resize_target_longest_edge: 1024
+  offline_image_validation:
+    check_corrupted: true
+    min_width: 64
+    min_height: 64
+    allowed_extensions:
+    - .jpg
+    - .jpeg
+    - .png
+  offline_text_cleaning:
+    remove_html: true
+    normalize_unicode: true
+    to_lowercase: true
+  splitting:
+    random_state: 42
+    train_final_ratio: 0.4
+    val_final_ratio: 0.15
+    test_final_ratio: 0.45
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
+    validate_no_leakage: true
+  numerical_features_cols:
+  - view_number
+  - comment_number
+  - thumbup_number
+  - share_number
+  - coin_number
+  - favorite_number
+  - barrage_number
+  cache_processed_images: true
+  image_cache_config:
+    strategy: hybrid
+    max_memory_items: 1500
+    cache_directory: data/cache/image_tensors
+    precompute_at_startup: false
+    preprocessing_batch_size: 50
+recommendation:
+  top_k: 50
+  diversity_weight: 0.3
+  novelty_weight: 0.2
+  filter_seen: true
+  max_candidates: 1000
+checkpoint_dir: models/checkpoints
+results_dir: results
