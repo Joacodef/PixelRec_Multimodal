@@ -133,69 +133,86 @@ class MultimodalDataset(Dataset):
         Generates positive and negative samples for training,
         optimized for speed in per-user sampling and DataFrame creation.
         """
-        current_interactions = self.interactions.copy()
-        # Initial checks and idx creation from your uploaded file
+        current_interactions = self.interactions.copy()  # Always start with a copy
+        
+        # Initial checks and idx creation
         if current_interactions.empty:
             cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
             empty_df = pd.DataFrame(columns=cols)
-            for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
-            for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
+            for col in ['user_idx', 'item_idx', 'label']: 
+                empty_df[col] = empty_df[col].astype(int)
+            for col in ['user_id', 'item_id']: 
+                empty_df[col] = empty_df[col].astype(object)
             return empty_df
 
         if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
             if 'user_id' in current_interactions.columns and hasattr(self.user_encoder, 'classes_') and len(self.user_encoder.classes_) > 0:
                 try:
                     known_users = list(self.user_encoder.classes_)
-                    current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()
-                    if not current_interactions.empty: current_interactions.loc[:, 'user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
-                    else: current_interactions['user_idx'] = pd.Series(dtype=int)
-                except Exception as e: current_interactions['user_idx'] = pd.Series(dtype=int)
-            elif 'user_idx' not in current_interactions.columns : current_interactions['user_idx'] = pd.Series(dtype=int)
+                    current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()  # Add .copy()
+                    if not current_interactions.empty: 
+                        current_interactions['user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
+                    else: 
+                        current_interactions['user_idx'] = pd.Series(dtype=int)
+                except Exception as e: 
+                    current_interactions['user_idx'] = pd.Series(dtype=int)
+            elif 'user_idx' not in current_interactions.columns: 
+                current_interactions['user_idx'] = pd.Series(dtype=int)
         
         if 'item_idx' not in current_interactions.columns or current_interactions['item_idx'].isnull().all():
             if 'item_id' in current_interactions.columns and hasattr(self.item_encoder, 'classes_') and len(self.item_encoder.classes_) > 0:
                 try:
                     known_items = list(self.item_encoder.classes_)
-                    current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()
-                    if not current_interactions.empty: current_interactions.loc[:, 'item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
-                    else: current_interactions['item_idx'] = pd.Series(dtype=int)
-                except Exception as e: current_interactions['item_idx'] = pd.Series(dtype=int)
-            elif 'item_idx' not in current_interactions.columns: current_interactions['item_idx'] = pd.Series(dtype=int)
+                    current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()  # Add .copy()
+                    if not current_interactions.empty: 
+                        current_interactions['item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
+                    else: 
+                        current_interactions['item_idx'] = pd.Series(dtype=int)
+                except Exception as e: 
+                    current_interactions['item_idx'] = pd.Series(dtype=int)
+            elif 'item_idx' not in current_interactions.columns: 
+                current_interactions['item_idx'] = pd.Series(dtype=int)
         
         if current_interactions.empty or 'user_idx' not in current_interactions.columns or 'item_idx' not in current_interactions.columns or \
-           current_interactions['user_idx'].isnull().all() or current_interactions['item_idx'].isnull().all():
+        current_interactions['user_idx'].isnull().all() or current_interactions['item_idx'].isnull().all():
             cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
             empty_df = pd.DataFrame(columns=cols)
-            for col in ['user_idx', 'item_idx', 'label']: empty_df[col] = empty_df[col].astype(int)
-            for col in ['user_id', 'item_id']: empty_df[col] = empty_df[col].astype(object)
+            for col in ['user_idx', 'item_idx', 'label']: 
+                empty_df[col] = empty_df[col].astype(int)
+            for col in ['user_id', 'item_id']: 
+                empty_df[col] = empty_df[col].astype(object)
             return empty_df
 
-        current_interactions.dropna(subset=['user_idx', 'item_idx'], inplace=True) # Added from your original file
-        if not current_interactions.empty: # Added from your original file
+        # Use .dropna() which returns a new DataFrame instead of inplace modification
+        current_interactions = current_interactions.dropna(subset=['user_idx', 'item_idx'])
+        
+        if not current_interactions.empty:
+            # Create a copy before type conversion to avoid SettingWithCopyWarning
+            current_interactions = current_interactions.copy()
             current_interactions['user_idx'] = current_interactions['user_idx'].astype(int)
             current_interactions['item_idx'] = current_interactions['item_idx'].astype(int)
-        else: # Handle case where all samples were dropped (added from your original file)
+        else:
             cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
             empty_df = pd.DataFrame(columns=cols)
-            for col_name in ['user_idx', 'item_idx', 'label']: empty_df[col_name] = empty_df[col_name].astype(int)
-            for col_name in ['user_id', 'item_id']: empty_df[col_name] = empty_df[col_name].astype(object)
+            for col_name in ['user_idx', 'item_idx', 'label']: 
+                empty_df[col_name] = empty_df[col_name].astype(int)
+            for col_name in ['user_id', 'item_id']: 
+                empty_df[col_name] = empty_df[col_name].astype(object)
             return empty_df
-
 
         positive_df = current_interactions.copy()
         positive_df['label'] = 1
         
         if not (hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0 and \
                 hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None and len(self.item_encoder.classes_) > 0):
-            # This part is from your original file, slightly adapted
             print("Warning: User or item encoder not fitted or empty. Cannot generate negative samples effectively.")
-            # Ensure 'user_id', 'item_id' are present if they were in original positive_df
             cols_to_return = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
             for col_ in cols_to_return:
                 if col_ not in positive_df.columns:
-                     # Add missing columns with appropriate default or NaN if necessary
-                     if col_ in ['user_idx', 'item_idx', 'label']: positive_df[col_] = 0 # Or appropriate default
-                     else: positive_df[col_] = None
+                    if col_ in ['user_idx', 'item_idx', 'label']: 
+                        positive_df[col_] = 0
+                    else: 
+                        positive_df[col_] = None
             return positive_df[cols_to_return].sample(frac=1, random_state=42).reset_index(drop=True)
 
         idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
@@ -211,8 +228,8 @@ class MultimodalDataset(Dataset):
         neg_user_idx_col = []
         neg_item_idx_col = []
         
-        print("Generating negative samples for training data (optimized collection)...") # Message from your original file
-        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"): # Loop from your original file
+        print("Generating negative samples for training data (optimized collection)...")
+        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
             possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
             
             num_positive = len(interacted_item_indices)
@@ -221,14 +238,14 @@ class MultimodalDataset(Dataset):
             if num_negative_to_sample > 0:
                 sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
                 
-                current_user_id_str = idx_to_user_id.get(user_idx) # Use .get for safety
+                current_user_id_str = idx_to_user_id.get(user_idx)
                 if current_user_id_str is None:
-                    continue # Should not happen if user_idx comes from positive_df
+                    continue
 
                 for neg_item_idx in sampled_negative_indices:
-                    current_item_id_str = idx_to_item_id.get(neg_item_idx) # Use .get for safety
+                    current_item_id_str = idx_to_item_id.get(neg_item_idx)
                     if current_item_id_str is None:
-                        continue # Should not happen if neg_item_idx comes from all_item_indices_set
+                        continue
 
                     neg_user_ids_col.append(current_user_id_str)
                     neg_item_ids_col.append(current_item_id_str)
@@ -240,16 +257,19 @@ class MultimodalDataset(Dataset):
             'item_id': neg_item_ids_col,
             'user_idx': neg_user_idx_col,
             'item_idx': neg_item_idx_col,
-            'label': 0  # All these are negative samples
+            'label': 0
         })
         
         columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
         
-        for col in columns_for_concat: # Ensure positive_df has all columns
+        for col in columns_for_concat:
             if col not in positive_df.columns:
-                if col == 'label': positive_df['label'] = 1
-                elif col in ['user_idx', 'item_idx']: positive_df[col] = pd.Series(dtype=int)
-                else: positive_df[col] = pd.Series(dtype=object)
+                if col == 'label': 
+                    positive_df[col] = 1
+                elif col in ['user_idx', 'item_idx']: 
+                    positive_df[col] = pd.Series(dtype=int)
+                else: 
+                    positive_df[col] = pd.Series(dtype=object)
 
         if not negative_df.empty:
             all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
@@ -257,14 +277,20 @@ class MultimodalDataset(Dataset):
             all_samples_df = positive_df[columns_for_concat].copy()
         
         if not all_samples_df.empty:
-            all_samples_df.dropna(subset=['user_idx', 'item_idx'], inplace=True) # From your original file
-            if not all_samples_df.empty: # From your original file
+            # Use .dropna() which returns a new DataFrame instead of inplace modification
+            all_samples_df = all_samples_df.dropna(subset=['user_idx', 'item_idx'])
+            
+            if not all_samples_df.empty:
+                # Ensure we're working with a copy before type conversion
+                all_samples_df = all_samples_df.copy()
                 all_samples_df['user_idx'] = all_samples_df['user_idx'].astype(int)
                 all_samples_df['item_idx'] = all_samples_df['item_idx'].astype(int)
-            else: # Handle case where all samples were dropped (added from your original file)
+            else:
                 all_samples_df = pd.DataFrame(columns=columns_for_concat)
-                for col_name in ['user_idx', 'item_idx', 'label']: all_samples_df[col_name] = all_samples_df[col_name].astype(int)
-                for col_name in ['user_id', 'item_id']: all_samples_df[col_name] = all_samples_df[col_name].astype(object)
+                for col_name in ['user_idx', 'item_idx', 'label']: 
+                    all_samples_df[col_name] = all_samples_df[col_name].astype(int)
+                for col_name in ['user_id', 'item_id']: 
+                    all_samples_df[col_name] = all_samples_df[col_name].astype(object)
 
         return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True) if not all_samples_df.empty else all_samples_df
 
@@ -352,14 +378,20 @@ class MultimodalDataset(Dataset):
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
         # Check cache first if enabled
         if self.image_cache is not None:
-            # For SharedImageCache
-            if hasattr(self.image_cache, 'get'):
+            cached_tensor = None
+            
+            # Handle SharedImageCache (object with get/set methods)
+            if hasattr(self.image_cache, 'get') and callable(getattr(self.image_cache, 'get')):
                 cached_tensor = self.image_cache.get(item_id)
-                if cached_tensor is not None:
-                    return cached_tensor
-            # For dict cache (original)
-            elif isinstance(self.image_cache, dict) and item_id in self.image_cache:
-                return self.image_cache[item_id]
+            # Handle dict-style cache (backward compatibility)
+            elif isinstance(self.image_cache, dict):
+                cached_tensor = self.image_cache.get(item_id)
+            else:
+                # Unknown cache type - log warning and continue without cache
+                print(f"Warning: Unknown cache type {type(self.image_cache)}. Proceeding without cache.")
+            
+            if cached_tensor is not None:
+                return cached_tensor
         
         base_path = os.path.join(self.image_folder, str(item_id))
         image_path_to_load = None
@@ -413,17 +445,18 @@ class MultimodalDataset(Dataset):
         if image_tensor.ndim == 3 and image_tensor.shape[0] == 1:
             image_tensor = image_tensor.repeat(3,1,1)
         
-        if image_tensor.ndim != 3 or image_tensor.shape[0] != 3:
+        if not (image_tensor.ndim == 3 and image_tensor.shape[0] == 3):
             return torch.zeros(3, placeholder_size[0], placeholder_size[1])
             
-        # Store in cache if enabled
+        # Store in cache if enabled - use consistent interface
         if self.image_cache is not None:
-            # For SharedImageCache
-            if hasattr(self.image_cache, 'set'):
+            # Handle SharedImageCache (object with get/set methods)
+            if hasattr(self.image_cache, 'set') and callable(getattr(self.image_cache, 'set')):
                 self.image_cache.set(item_id, image_tensor)
-            # For dict cache (original)
+            # Handle dict-style cache (backward compatibility)
             elif isinstance(self.image_cache, dict):
                 self.image_cache[item_id] = image_tensor
+            # Unknown cache type already handled above with warning
         
         return image_tensor
 

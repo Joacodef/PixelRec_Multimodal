@@ -31,7 +31,7 @@ class AdvancedMetrics:
                 hits += 1
         return hits / len(recommendations)
     
-    @@staticmethod
+    @staticmethod
     def calculate_gini_coefficient(item_recommendations: Dict[str, int]) -> float:
         """Calculate Gini coefficient for recommendation distribution"""
         if not item_recommendations:
