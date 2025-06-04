@@ -325,8 +325,24 @@ def main():
         print(f"  Validation samples: {len(val_dataset)}")
 
         # Create data loaders for training and validation
-        train_loader = DataLoader(train_dataset, batch_size=training_config.batch_size, shuffle=True, num_workers=training_config.num_workers, pin_memory=True)
-        val_loader = DataLoader(val_dataset, batch_size=training_config.batch_size, shuffle=False, num_workers=training_config.num_workers, pin_memory=True) if len(val_dataset) > 0 else None
+        train_loader = train_loader = DataLoader(
+            train_dataset, 
+            batch_size=training_config.batch_size, 
+            shuffle=True, 
+            num_workers=training_config.num_workers, 
+            pin_memory=True,
+            persistent_workers=True if training_config.num_workers > 0 else False,  
+            prefetch_factor=2  
+        )
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=training_config.batch_size, 
+            shuffle=False,  # No shuffling for validation
+            num_workers=training_config.num_workers, 
+            pin_memory=True,
+            persistent_workers=True if training_config.num_workers > 0 else False,
+            prefetch_factor=2
+        ) if len(val_dataset) > 0 else None
 
         # Save encoders to disk before training begins
         encoders_dir = Path(config.checkpoint_dir) / 'encoders'

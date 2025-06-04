@@ -46,7 +46,7 @@ training:
   weight_decay: 0.01
   patience: 10
   gradient_clip: 1.0
-  num_workers: 4
+  num_workers: 8
   
   # Loss weights
   contrastive_weight: 0.1
@@ -83,10 +83,10 @@ data:
   val_data_path: data/splits/split_tiny/val.csv
   test_data_path: data/splits/split_tiny/test.csv
 
-  cache_processed_images: false
+  cache_processed_images: true
   image_cache_config:
-    strategy: 'disabled' # Options: 'hybrid', 'memory', 'disk', 'disabled'
-    max_memory_items: 1000
+    strategy: 'memory' # Options: 'hybrid', 'memory', 'disk', 'disabled'
+    max_memory_items: 1500
     cache_directory: 'data/cache/image_tensors'
     precompute_at_startup: false
     preprocessing_batch_size: 50
