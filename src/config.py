@@ -176,6 +176,14 @@ class ImageCacheConfig:
     preprocessing_batch_size: int = 100
 
 @dataclass
+class ProcessedFeaturesCacheConfig:
+    strategy: str = 'hybrid'
+    max_memory_items: int = 10000
+    cache_directory: str = 'data/cache/processed_features'
+    # Add precompute_at_startup if you plan to handle precomputation here or via another script
+    # precompute_at_startup: bool = False
+
+@dataclass
 class DataConfig:
     """Data loading and preprocessing configuration parameters"""
     item_info_path: str = 'data/raw/item_info/Pixel200K.csv'
@@ -190,20 +198,24 @@ class DataConfig:
     test_data_path: str = "data/splits/split_1/test.csv"
     scaler_path: str = 'data/processed/numerical_scaler.pkl'
     negative_sampling_ratio: float = 1.0
-    # train_val_split: float = 0.8 # This seems to be an old field
+
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
-    numerical_normalization_method: str = 'log1p'
+    numerical_normalization_method: str = 'log1p' # Example: 'log1p', 'standardization', 'min_max', 'none'
+
     # Ensure the type hint uses the defined dataclass name
     offline_image_compression: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
     splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)
+
     numerical_features_cols: List[str] = field(default_factory=lambda: [
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
+
     cache_processed_images: bool = False
     image_cache_config: ImageCacheConfig = field(default_factory=ImageCacheConfig)
+    processed_features_cache_config: ProcessedFeaturesCacheConfig = field(default_factory=ProcessedFeaturesCacheConfig)
 
 @dataclass
 class RecommendationConfig:

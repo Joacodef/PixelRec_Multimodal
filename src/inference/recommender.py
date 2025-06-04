@@ -12,6 +12,11 @@ import pandas as pd
 
 from ..data.dataset import MultimodalDataset
 from ..evaluation.novelty import NoveltyMetrics, DiversityCalculator 
+try:
+    from ..data.feature_cache import ProcessedFeatureCache
+except ImportError:
+    ProcessedFeatureCache = None 
+    print("Warning: ProcessedFeatureCache could not be imported. Ensure it's defined and path is correct.")
 
 
 class Recommender:
@@ -22,7 +27,8 @@ class Recommender:
         model: nn.Module,
         dataset: MultimodalDataset,
         device: torch.device,
-        item_embeddings_cache: Optional[Dict[str, Dict[str, torch.Tensor]]] = None
+        item_embeddings_cache: Optional[Dict[str, Dict[str, torch.Tensor]]] = None,
+        processed_feature_cache: Optional[Any] = None
     ) -> None:
         """
         Initialize recommender.
@@ -36,14 +42,20 @@ class Recommender:
         self.model: nn.Module = model
         self.dataset: MultimodalDataset = dataset
         self.device: torch.device = device
+        # This L1 cache stores the fully assembled features for an item.
         self.item_features_cache: Dict[str, Dict[str, torch.Tensor]] = item_embeddings_cache or {}
+        
+        # This L2 cache is for non-image features (text tokens, numerical), potentially disk-backed.
+        self.processed_feature_cache = processed_feature_cache
         
         # Initialize metrics calculators
         item_popularity: Dict[str, float] = self.dataset.get_item_popularity()
-        user_history: List[Tuple[str, str]] = [
-            (row['user_id'], row['item_id']) 
-            for _, row in self.dataset.interactions.iterrows()
-        ]
+        user_history: List[Tuple[str, str]] = []
+        if 'user_id' in self.dataset.interactions.columns and 'item_id' in self.dataset.interactions.columns:
+            user_history = [
+                (row['user_id'], row['item_id']) 
+                for _, row in self.dataset.interactions.iterrows()
+            ]
         
         self.novelty_metrics: NoveltyMetrics = NoveltyMetrics(item_popularity, user_history)
         
@@ -183,131 +195,200 @@ class Recommender:
         
         # Prepare batch tensors
         user_indices: torch.Tensor = torch.full((batch_size,), user_idx, dtype=torch.long).to(self.device)
-        item_indices: List[int] = []
+        item_indices_list: List[int] = [] # Renamed to avoid confusion with item_indices_tensor
         valid_items: List[str] = []
-        valid_indices: List[int] = []
-        
+        # valid_indices: List[int] = [] # Not strictly used later, can be removed if not needed
+
         # Get item indices and filter invalid items
         for idx, item_id in enumerate(item_ids):
             try:
-                item_idx: int = self.dataset.item_encoder.transform([item_id])[0]
-                item_indices.append(item_idx)
+                item_idx_val: int = self.dataset.item_encoder.transform([item_id])[0]
+                item_indices_list.append(item_idx_val)
                 valid_items.append(item_id)
-                valid_indices.append(idx)
-            except:
+                # valid_indices.append(idx)
+            except Exception: # More general exception
+                # print(f"Warning: Item ID {item_id} not found in item_encoder. Skipping.")
                 continue
         
-        if not item_indices:
+        if not item_indices_list:
             return []
         
         # Create tensors for valid items
-        item_indices_tensor: torch.Tensor = torch.tensor(item_indices, dtype=torch.long).to(self.device)
-        user_indices_valid: torch.Tensor = user_indices[:len(item_indices)]
+        item_indices_tensor: torch.Tensor = torch.tensor(item_indices_list, dtype=torch.long).to(self.device)
+        user_indices_valid: torch.Tensor = user_indices[:len(item_indices_list)] # Adjust batch size for user_indices
         
         # Batch process features
         batch_images: List[torch.Tensor] = []
-        batch_text_ids: List[torch.Tensor] = []
-        batch_text_masks: List[torch.Tensor] = []
+        batch_text_input_ids: List[torch.Tensor] = [] # Changed key
+        batch_text_attention_masks: List[torch.Tensor] = [] # Changed key
         batch_numerical: List[torch.Tensor] = []
+        # For CLIP features, if your model uses them directly in this scoring path
+        batch_clip_text_input_ids: List[torch.Tensor] = []
+        batch_clip_text_attention_masks: List[torch.Tensor] = []
         
-        # Get expected dimensions from first successful item or model
-        expected_num_features: int = 7  # Default
-        img_height: int = 224  # Default
-        img_width: int = 224  # Default
-        max_text_length: int = 128  # Default
+        # Get expected dimensions from model or dataset defaults
+        expected_num_features: int = 7 
+        if hasattr(self.dataset, 'numerical_feat_cols') and self.dataset.numerical_feat_cols:
+            expected_num_features = len(self.dataset.numerical_feat_cols)
+        elif hasattr(self.model, 'numerical_projection') and hasattr(self.model.numerical_projection, 'in_features'): # For nn.Linear
+             expected_num_features = self.model.numerical_projection.in_features
+        elif hasattr(self.model, 'numerical_projection') and isinstance(self.model.numerical_projection, nn.Sequential) and self.model.numerical_projection and hasattr(self.model.numerical_projection[0], 'in_features'): # For Sequential
+            expected_num_features = self.model.numerical_projection[0].in_features
+
+
+        img_height, img_width = (224, 224) # Default
+        if hasattr(self.dataset.image_processor, 'size'):
+            proc_size = self.dataset.image_processor.size
+            if isinstance(proc_size, dict) and 'shortest_edge' in proc_size:
+                img_height = img_width = proc_size['shortest_edge']
+            elif isinstance(proc_size, (tuple, list)) and len(proc_size) >= 2:
+                img_height, img_width = proc_size[0], proc_size[1]
+            elif isinstance(proc_size, int):
+                img_height = img_width = proc_size
+
+
+        main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
+        clip_tokenizer_max_len = 77 # Standard CLIP max length
         
-        # Try to get dimensions from model
-        if hasattr(self.model, 'numerical_projection') and isinstance(self.model.numerical_projection, nn.Sequential):
-            first_layer = self.model.numerical_projection[0]
-            if hasattr(first_layer, 'in_features'):
-                expected_num_features = first_layer.in_features
-        
-        # Process each item
+        first_valid_features_processed = False
+
         for item_id in valid_items:
             features: Optional[Dict[str, torch.Tensor]] = self._get_item_features(item_id)
             
-            if features is None:
-                # Create dummy features with correct dimensions
-                features = {
-                    'image': torch.zeros(3, img_height, img_width),
-                    'text_ids': torch.zeros(max_text_length, dtype=torch.long),
-                    'text_mask': torch.zeros(max_text_length, dtype=torch.long),
-                    'numerical': torch.zeros(expected_num_features, dtype=torch.float32)
+            if features is None: # Fallback if _get_item_features fails for an item
+                print(f"Warning: Could not retrieve features for item {item_id}. Using placeholders.")
+                # Use updated keys for placeholder features
+                current_features = {
+                    'image': torch.zeros(3, img_height, img_width, dtype=torch.float),
+                    'text_input_ids': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'text_attention_mask': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'numerical_features': torch.zeros(expected_num_features, dtype=torch.float32)
                 }
+                if self.dataset.clip_tokenizer_for_contrastive:
+                    current_features['clip_text_input_ids'] = torch.zeros(clip_tokenizer_max_len, dtype=torch.long)
+                    current_features['clip_text_attention_mask'] = torch.zeros(clip_tokenizer_max_len, dtype=torch.long)
             else:
-                # Update expected dimensions from first successful item
-                if len(batch_images) == 0:  # First item
-                    img_height, img_width = features['image'].shape[1], features['image'].shape[2]
-                    max_text_length = features['text_ids'].shape[0]
-                    expected_num_features = features['numerical'].shape[0]
+                current_features = features
+
+            # Update dynamic dimensions from the first successfully processed valid item's features
+            if not first_valid_features_processed and current_features:
+                if 'image' in current_features and current_features['image'].ndim == 3: # C, H, W
+                    img_height, img_width = current_features['image'].shape[1], current_features['image'].shape[2]
+                if 'text_input_ids' in current_features: # Use new key
+                    main_tokenizer_max_len = current_features['text_input_ids'].shape[0]
+                if 'numerical_features' in current_features:
+                    expected_num_features = current_features['numerical_features'].shape[0]
+                if 'clip_text_input_ids' in current_features:
+                    clip_tokenizer_max_len = current_features['clip_text_input_ids'].shape[0]
+                first_valid_features_processed = True
             
-            # Ensure numerical features have correct shape
-            if features['numerical'].numel() == 0:
-                features['numerical'] = torch.zeros(expected_num_features, dtype=torch.float32)
+            # Ensure numerical features have correct shape if they were somehow empty from _get_item_features
+            if 'numerical_features' not in current_features or current_features['numerical_features'].numel() == 0:
+                 current_features['numerical_features'] = torch.zeros(expected_num_features, dtype=torch.float32)
+            if 'image' not in current_features: # Should not happen if _get_item_features is robust
+                 current_features['image'] = torch.zeros(3, img_height, img_width, dtype=torch.float)
+
+
+            batch_images.append(current_features['image'])
+            batch_text_input_ids.append(current_features.get('text_input_ids', torch.zeros(main_tokenizer_max_len, dtype=torch.long))) # Use new key
+            batch_text_attention_masks.append(current_features.get('text_attention_mask', torch.zeros(main_tokenizer_max_len, dtype=torch.long))) # Use new key
+            batch_numerical.append(current_features['numerical_features'])
             
-            batch_images.append(features['image'])
-            batch_text_ids.append(features['text_ids'])
-            batch_text_masks.append(features['text_mask'])
-            batch_numerical.append(features['numerical'])
-        
+            if self.dataset.clip_tokenizer_for_contrastive: # Check if model will need these
+                batch_clip_text_input_ids.append(current_features.get('clip_text_input_ids', torch.zeros(clip_tokenizer_max_len, dtype=torch.long)))
+                batch_clip_text_attention_masks.append(current_features.get('clip_text_attention_mask', torch.zeros(clip_tokenizer_max_len, dtype=torch.long)))
+
         # Stack all features
         images_tensor: torch.Tensor = torch.stack(batch_images).to(self.device)
-        text_ids_tensor: torch.Tensor = torch.stack(batch_text_ids).to(self.device)
-        text_masks_tensor: torch.Tensor = torch.stack(batch_text_masks).to(self.device)
+        text_input_ids_tensor: torch.Tensor = torch.stack(batch_text_input_ids).to(self.device) # Changed key
+        text_attention_masks_tensor: torch.Tensor = torch.stack(batch_text_attention_masks).to(self.device) # Changed key
         numerical_tensor: torch.Tensor = torch.stack(batch_numerical).to(self.device)
+        
+        model_input_args = {
+            'user_idx': user_indices_valid,
+            'item_idx': item_indices_tensor,
+            'image': images_tensor,
+            'text_input_ids': text_input_ids_tensor, # Pass to model with this key
+            'text_attention_mask': text_attention_masks_tensor, # Pass to model with this key
+            'numerical_features': numerical_tensor
+        }
+        # Add CLIP inputs if model expects them for this path (usually for contrastive loss or if embeddings are returned)
+        # The Recommender's get_recommendations doesn't typically ask for return_embeddings=True for this path
+        # but _score_items_with_embeddings does. So we prepare them if available.
+        if batch_clip_text_input_ids and batch_clip_text_attention_masks:
+             model_input_args['clip_text_input_ids'] = torch.stack(batch_clip_text_input_ids).to(self.device)
+             model_input_args['clip_text_attention_mask'] = torch.stack(batch_clip_text_attention_masks).to(self.device)
         
         # Get batch predictions
         with torch.no_grad():
-            batch_scores: torch.Tensor = self.model(
-                user_idx=user_indices_valid,
-                item_idx=item_indices_tensor,
-                image=images_tensor,
-                text_input_ids=text_ids_tensor,
-                text_attention_mask=text_masks_tensor,
-                numerical_features=numerical_tensor
-            ).squeeze()
+            # Check if model expects return_embeddings (usually false for simple scoring)
+            # The base get_recommendations path does not set return_embeddings=True
+            if 'return_embeddings' in self.model.forward.__code__.co_varnames:
+                 model_input_args['return_embeddings'] = False # Explicitly false for scoring path
+            
+            output_val = self.model(**model_input_args)
+            
+            # Handle if model returns tuple (e.g. output, embeddings)
+            if isinstance(output_val, tuple):
+                batch_scores_tensor = output_val[0].squeeze()
+            else:
+                batch_scores_tensor = output_val.squeeze()
         
-        # Handle single item case
-        if batch_scores.dim() == 0:
-            batch_scores = batch_scores.unsqueeze(0)
+        # Handle single item case for scores
+        if batch_scores_tensor.dim() == 0:
+            batch_scores_tensor = batch_scores_tensor.unsqueeze(0)
         
         # Pair items with scores
         results: List[Tuple[str, float]] = []
-        for item_id, score in zip(valid_items, batch_scores.cpu().numpy()):
-            results.append((item_id, float(score)))
+        for item_id, score_val in zip(valid_items, batch_scores_tensor.cpu().numpy()):
+            results.append((item_id, float(score_val)))
         
         return results
     
     def _score_single_item(self, user_idx: int, item_id: str) -> float:
         """Score a single item for a user"""
-        # Get item features
         item_features: Optional[Dict[str, torch.Tensor]] = self._get_item_features(item_id)
         if item_features is None:
+            print(f"Warning: Could not get features for item {item_id} in _score_single_item. Returning -inf.")
             return -float('inf')
         
-        # Get item index
         try:
             item_idx_arr: np.ndarray = self.dataset.item_encoder.transform([item_id])
             if len(item_idx_arr) == 0: 
+                print(f"Warning: Item {item_id} not in item_encoder during _score_single_item. Returning -inf.")
                 return -float('inf')
-            item_idx: int = item_idx_arr[0]
+            item_idx_val: int = item_idx_arr[0]
         except Exception:
+            print(f"Warning: Error transforming item_id {item_id} in _score_single_item. Returning -inf.")
             return -float('inf')
         
-        # Create tensors
         user_tensor: torch.Tensor = torch.tensor([user_idx], dtype=torch.long).to(self.device)
-        item_tensor: torch.Tensor = torch.tensor([item_idx], dtype=torch.long).to(self.device)
+        item_tensor: torch.Tensor = torch.tensor([item_idx_val], dtype=torch.long).to(self.device)
         
-        # Score
-        score: float = self.model(
-            user_idx=user_tensor,
-            item_idx=item_tensor,
-            image=item_features['image'].unsqueeze(0).to(self.device),
-            text_input_ids=item_features['text_ids'].unsqueeze(0).to(self.device),
-            text_attention_mask=item_features['text_mask'].unsqueeze(0).to(self.device),
-            numerical_features=item_features['numerical'].unsqueeze(0).to(self.device)
-        ).item()
+        model_input_args = {
+            'user_idx': user_tensor,
+            'item_idx': item_tensor,
+            'image': item_features['image'].unsqueeze(0).to(self.device),
+            'text_input_ids': item_features['text_input_ids'].unsqueeze(0).to(self.device), # Changed key
+            'text_attention_mask': item_features['text_attention_mask'].unsqueeze(0).to(self.device), # Changed key
+            'numerical_features': item_features['numerical_features'].unsqueeze(0).to(self.device)
+        }
+
+        if 'clip_text_input_ids' in item_features and 'clip_text_attention_mask' in item_features:
+            model_input_args['clip_text_input_ids'] = item_features['clip_text_input_ids'].unsqueeze(0).to(self.device)
+            model_input_args['clip_text_attention_mask'] = item_features['clip_text_attention_mask'].unsqueeze(0).to(self.device)
+
+        if 'return_embeddings' in self.model.forward.__code__.co_varnames:
+            model_input_args['return_embeddings'] = False
+
+
+        output_val = self.model(**model_input_args)
         
+        if isinstance(output_val, tuple):
+            score = output_val[0].item()
+        else:
+            score = output_val.item()
+            
         return score
     
     def _score_items_with_embeddings(
@@ -452,69 +533,144 @@ class Recommender:
         return results
 
     def _get_item_features(self, item_id: str) -> Optional[Dict[str, torch.Tensor]]:
-        """Get preprocessed features for an item, using cache if available."""
-        # Check cache first
+        """
+        Get preprocessed features for an item.
+        Uses L1 RAM cache (self.item_features_cache) for fully assembled features.
+        Uses L2 disk/hybrid cache (self.processed_feature_cache) for non-image features.
+        Image tensors are fetched via self.dataset._load_and_process_image (SharedImageCache).
+        """
+        # Check L1 RAM cache for fully assembled features first
         if item_id in self.item_features_cache:
             return self.item_features_cache[item_id]
+
+        non_image_features: Optional[Dict[str, torch.Tensor]] = None
         
-        try:
-            # Get item info using method from dataset
-            item_info_series = self.dataset._get_item_info(item_id)
-            
-            # Process features using methods from dataset
-            text: str = self.dataset._get_item_text(item_info_series)
-            text_tokens = self.dataset.tokenizer(
-                text,
-                padding='max_length',
-                truncation=True,
-                max_length=128,
-                return_tensors='pt'
-            )
-            
-            # Get numerical features
-            if hasattr(self.dataset, '_get_numerical_features'):
-                numerical_features_tensor: torch.Tensor = self.dataset._get_numerical_features(item_info_series)
-            else:
-                # Fallback: create features manually
-                if hasattr(self.dataset, 'numerical_feat_cols') and self.dataset.numerical_feat_cols:
-                    raw_features: List[float] = []
-                    for col in self.dataset.numerical_feat_cols:
-                        val = item_info_series.get(col, 0) if pd.notna(item_info_series.get(col, 0)) else 0
-                        raw_features.append(float(val))
-                    numerical_features_tensor = torch.tensor(raw_features, dtype=torch.float32)
-                else:
-                    numerical_features_tensor = torch.zeros(7, dtype=torch.float32)
-            
-            # Ensure numerical features have the correct shape
-            if numerical_features_tensor.numel() == 0:
-                expected_size: int = 7
-                if hasattr(self.model, 'numerical_projection'):
-                    if isinstance(self.model.numerical_projection, nn.Sequential):
-                        first_layer = self.model.numerical_projection[0]
-                        if hasattr(first_layer, 'in_features'):
-                            expected_size = first_layer.in_features
-                    elif hasattr(self.model.numerical_projection, 'in_features'):
-                        expected_size = self.model.numerical_projection.in_features
+        # Try to get non-image features from the L2 processed_feature_cache
+        if self.processed_feature_cache:
+            non_image_features = self.processed_feature_cache.get(item_id)
+
+        if non_image_features is None:
+            # L2 cache miss for non-image features, so process them
+            try:
+                item_info_series = self.dataset._get_item_info(item_id)
+                text_content = self.dataset._get_item_text(item_info_series)
+
+                # Main tokenizer (consistent with MultimodalDataset.__getitem__)
+                main_tokenizer_max_len = 128
+                if hasattr(self.dataset.tokenizer, 'model_max_length') and self.dataset.tokenizer.model_max_length:
+                    main_tokenizer_max_len = self.dataset.tokenizer.model_max_length
                 
-                numerical_features_tensor = torch.zeros(expected_size, dtype=torch.float32)
-            
-            image_tensor: torch.Tensor = self.dataset._load_and_process_image(item_id)
-            
-            features: Dict[str, torch.Tensor] = {
-                'text_ids': text_tokens['input_ids'].squeeze(),
-                'text_mask': text_tokens['attention_mask'].squeeze(),
-                'numerical': numerical_features_tensor,
-                'image': image_tensor
-            }
-            
-            # Cache for future use
-            self.item_features_cache[item_id] = features
-            
-            return features
-            
+                text_tokens = self.dataset.tokenizer(
+                    text_content,
+                    padding='max_length',
+                    truncation=True,
+                    max_length=main_tokenizer_max_len,
+                    return_tensors='pt'
+                )
+
+                # Numerical features (consistent with MultimodalDataset._get_item_numerical_features)
+                # This directly calls the method that handles pre-processed or raw numerical features.
+                numerical_features_tensor = self.dataset._get_item_numerical_features(item_id, item_info_series)
+                
+                # Ensure numerical features have the correct shape if empty or not preprocessed,
+                # mimicking logic from original _get_item_features if necessary.
+                # This fallback might be redundant if _get_item_numerical_features is robust.
+                if numerical_features_tensor.numel() == 0 and self.dataset.numerical_feat_cols:
+                    expected_size = len(self.dataset.numerical_feat_cols)
+                    if hasattr(self.model, 'numerical_projection'):
+                        if isinstance(self.model.numerical_projection, nn.Sequential) and self.model.numerical_projection:
+                            first_layer = self.model.numerical_projection[0]
+                            if hasattr(first_layer, 'in_features'):
+                                expected_size = first_layer.in_features
+                        elif hasattr(self.model.numerical_projection, 'in_features'):
+                            expected_size = self.model.numerical_projection.in_features
+                    numerical_features_tensor = torch.zeros(expected_size, dtype=torch.float32)
+                elif not self.dataset.numerical_feat_cols: # No numerical features configured
+                    numerical_features_tensor = torch.empty(0, dtype=torch.float32)
+
+
+                non_image_features = {
+                    'text_input_ids': text_tokens['input_ids'].squeeze(0),
+                    'text_attention_mask': text_tokens['attention_mask'].squeeze(0),
+                    'numerical_features': numerical_features_tensor
+                }
+
+                # Add CLIP specific tokens if the dataset's CLIP tokenizer is available
+                # (consistent with MultimodalDataset.__getitem__)
+                if self.dataset.clip_tokenizer_for_contrastive:
+                    clip_tokens = self.dataset.clip_tokenizer_for_contrastive(
+                        text_content,
+                        padding='max_length',
+                        truncation=True,
+                        max_length=77, # Standard CLIP max length
+                        return_tensors='pt'
+                    )
+                    non_image_features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
+                    non_image_features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
+                
+                # Store these processed non-image features in the L2 cache
+                if self.processed_feature_cache:
+                    self.processed_feature_cache.set(item_id, non_image_features)
+
+            except Exception as e:
+                print(f"Error processing non-image features for item {item_id}: {e}")
+                # Fallback: create empty/default non-image features if processing fails
+                # to allow the process to continue, though this item might be scored poorly.
+                main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
+                num_num_feats = len(self.dataset.numerical_feat_cols) if self.dataset.numerical_feat_cols else 0
+                if num_num_feats == 0 and hasattr(self.model, 'num_numerical_features'): # from multimodal.py
+                    num_num_feats = self.model.num_numerical_features
+
+                non_image_features = {
+                    'text_input_ids': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'text_attention_mask': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'numerical_features': torch.zeros(num_num_feats, dtype=torch.float32)
+                }
+                if self.dataset.clip_tokenizer_for_contrastive:
+                    non_image_features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
+                    non_image_features['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
+        
+        # Get image tensor (this uses SharedImageCache via the dataset)
+        try:
+            image_tensor = self.dataset._load_and_process_image(item_id)
         except Exception as e:
-            print(f"Error getting features for item {item_id}: {e}")
-            return None
+            print(f"Error loading image tensor for item {item_id} (will use placeholder): {e}")
+            # Determine placeholder size dynamically if possible
+            placeholder_size = (224, 224) # Default
+            if hasattr(self.dataset.image_processor, 'size'):
+                proc_size = self.dataset.image_processor.size
+                if isinstance(proc_size, dict) and 'shortest_edge' in proc_size:
+                    placeholder_size = (proc_size['shortest_edge'], proc_size['shortest_edge'])
+                elif isinstance(proc_size, (tuple, list)) and len(proc_size) >= 2:
+                    placeholder_size = (proc_size[0], proc_size[1])
+                elif isinstance(proc_size, int):
+                    placeholder_size = (proc_size, proc_size)
+            image_tensor = torch.zeros(3, placeholder_size[0], placeholder_size[1], dtype=torch.float)
+
+
+        # Combine non-image features (from L2 cache or freshly processed) and image tensor
+        # Ensure non_image_features is not None before trying to merge
+        if non_image_features is None: # Should not happen if error handling above is correct
+            print(f"Critical Error: non_image_features is None for item {item_id} before combining. Using placeholder non_image_features.")
+            main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
+            num_num_feats = len(self.dataset.numerical_feat_cols) if self.dataset.numerical_feat_cols else 0
+            if num_num_feats == 0 and hasattr(self.model, 'num_numerical_features'):
+                num_num_feats = self.model.num_numerical_features
+            non_image_features = {
+                'text_input_ids': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                'text_attention_mask': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                'numerical_features': torch.zeros(num_num_feats, dtype=torch.float32)
+            }
+            if self.dataset.clip_tokenizer_for_contrastive:
+                non_image_features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
+                non_image_features['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
+
+        all_features = {**non_image_features, 'image': image_tensor}
+        
+        # Store the fully assembled features in the L1 RAM cache
+        self.item_features_cache[item_id] = all_features
+        
+        return all_features
     
     def _rerank_for_diversity(
         self,
