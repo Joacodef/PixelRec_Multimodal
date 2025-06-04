@@ -1,188 +1,457 @@
 # Multimodal Recommender System
 
-This repository provides a comprehensive framework for building and experimenting with multimodal recommender systems. It is designed to leverage both visual and textual information from datasets (e.g., those similar in structure to PixelRec/Pixel200k) to provide personalized recommendations. The system is highly configurable, allowing for easy modification of model architectures, data processing pipelines, and evaluation strategies.
+This repository provides a comprehensive framework for building and experimenting with multimodal recommender systems. It leverages both visual and textual information from datasets (e.g., those similar in structure to PixelRec/Pixel200k) to provide personalized recommendations. The system is highly configurable, allowing for easy modification of model architectures, data processing pipelines, and evaluation strategies.
 
 ---
 
 ## Core Features
 
-* **Multimodal Data Integration**: Designed to process items with associated images, textual descriptions, and numerical features.
+* **Multimodal Data Integration**: Processes items with associated images, textual descriptions, and numerical features for comprehensive recommendation modeling.
+
 * **Flexible Model Architectures**:
-    * Supports two main model classes: `PretrainedMultimodalRecommender` (default) and `EnhancedMultimodalRecommender` (which includes cross-modal attention layers). These are configurable via `model.model_class` in the configuration file.
-    * Utilizes various pre-trained vision models (e.g., CLIP, DINO, ResNet, ConvNeXT) and language models (e.g., Sentence-BERT, MPNet, BERT, RoBERTa), selectable in `model.vision_model` and `model.language_model`.
-    * Includes configurable fusion mechanisms, such as multi-head self-attention for combining diverse feature sets. The fusion network's architecture (hidden dimensions, activation, batch normalization) is fully configurable.
-    * Option for contrastive learning (primarily with CLIP-based vision models) to better align vision and text representations, controlled by `model.use_contrastive`.
+    * Two main model classes: `PretrainedMultimodalRecommender` (default) and `EnhancedMultimodalRecommender` (with cross-modal attention layers)
+    * Supports various pre-trained vision models (CLIP, DINO, ResNet, ConvNeXT) and language models (Sentence-BERT, MPNet, BERT, RoBERTa)
+    * Configurable fusion mechanisms with multi-head self-attention for combining diverse feature sets
+    * Optional contrastive learning for better vision-text alignment (primarily with CLIP-based vision models)
+    * Fully configurable network architectures including fusion layers, activation functions, batch normalization, and initialization methods
+
 * **Advanced Data Preprocessing & Handling**:
-    * `scripts/preprocess_data.py`: Performs initial data cleaning based on configurations in `data.offline_text_cleaning` (HTML removal, Unicode normalization, lowercasing) and `data.offline_image_validation` (corruption checks, dimension checks).
-    * Optional offline image compression and resizing via `data.offline_image_compression` settings, with processed images saved to a new directory.
-    * `scripts/create_splits.py`: Generates train/validation/test splits using strategies from `src/data/splitting.py` (defaulting to stratified split after activity filtering). Allows optional dataset sampling via `--sample_n`.
-    * `MultimodalDataset` class handles data loading, negative sampling, numerical feature normalization (log1p, standardization, min-max via `data.numerical_normalization_method`), and text augmentation.
-    * `SharedImageCache`: Efficiently caches processed image tensors to disk or in memory to accelerate data loading during training, enabled by `data.cache_processed_images`.
+    * **Data Preprocessing Pipeline**: `scripts/preprocess_data.py` handles text cleaning (HTML removal, Unicode normalization, lowercasing), image validation (corruption checks, dimension verification), and optional image compression/resizing
+    * **Flexible Data Splitting**: `scripts/create_splits.py` generates train/validation/test splits using various strategies (stratified, temporal, user-based, item-based) with activity filtering and optional dataset sampling
+    * **Efficient Image Caching**: `SharedImageCache` system with configurable strategies (hybrid, disk-only, memory-only, disabled) for accelerated training and inference
+    * **Comprehensive Data Loading**: `MultimodalDataset` class handles negative sampling, numerical feature normalization, text augmentation, and robust data validation
+
 * **Robust Training Framework**:
-    * The `Trainer` class manages the training loop with configurable optimizers (AdamW, Adam, SGD), learning rate schedulers (ReduceLROnPlateau, Cosine, Step), gradient clipping, and early stopping.
-    * Integration with Weights & Biases for experiment tracking and visualization, enabled via the `--use_wandb` flag in `scripts/train.py`.
-* **Comprehensive Evaluation**:
-    * `scripts/evaluate.py` utilizes a task-based evaluation framework (`src/evaluation/tasks.py`) supporting various scenarios: 'retrieval', 'ranking', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy', and 'legacy'.
-    * Calculates standard recommendation metrics (Precision@k, Recall@k, NDCG@k, MAP) and beyond-accuracy metrics like novelty, diversity, and catalog coverage.
-    * Additional advanced metrics are available in `src/evaluation/advanced_metrics.py` (e.g., MRR, Gini, Serendipity).
-* **Baseline Recommenders**: Includes Random, Popularity, ItemKNN, and UserKNN baselines for comparison, evaluable via `scripts/evaluate.py --recommender_type <baseline_name>`.
-* **Inference and Recommendation**:
-    * `scripts/generate_recommendations.py` generates top-K recommendations for specified users or a sample of users.
-    * Supports filtering of seen items and generation of diverse recommendations using an MMR-like re-ranking technique (`--use_diversity` flag), which also reports novelty metrics for the generated list.
-* **Modularity and Configuration**:
-    * The codebase is organized into distinct modules for configuration, data handling, model architectures, training, evaluation, and inference.
-    * System behavior is extensively controlled via YAML configuration files (e.g., `configs/default_config.yaml`) parsed by `src/config.py`.
+    * Configurable optimizers (AdamW, Adam, SGD) with full parameter control
+    * Advanced learning rate scheduling (ReduceLROnPlateau, Cosine, Step)
+    * Gradient clipping, early stopping, and checkpoint management
+    * Optional Weights & Biases integration for experiment tracking
+    * Support for training resumption and model state persistence
+
+* **Comprehensive Evaluation Framework**:
+    * **Task-Based Evaluation**: Multiple evaluation scenarios including retrieval, ranking, next-item prediction, cold-start (user/item), and beyond-accuracy metrics
+    * **Standard Metrics**: Precision@k, Recall@k, NDCG@k, MAP, MRR, Hit Rate
+    * **Advanced Metrics**: Novelty, diversity, catalog coverage, Gini coefficient, serendipity
+    * **Baseline Comparisons**: Random, Popularity, ItemKNN, and UserKNN recommenders for benchmarking
+
+* **Inference and Recommendation Generation**:
+    * Efficient batch processing for large-scale recommendation generation
+    * Diversity-aware recommendation with MMR-like re-ranking
+    * Novelty scoring and filtering capabilities
+    * Pre-computed embeddings caching for fast inference
+    * Support for candidate filtering and seen-item exclusion
+
+* **Modular Architecture**:
+    * Clear separation of concerns across configuration, data handling, models, training, evaluation, and inference
+    * Extensive YAML-based configuration system with nested dataclasses
+    * Consistent interfaces for easy component swapping and experimentation
 
 ---
 
 ## Directory Structure
 
-The project is structured as follows:
-
-* `PixelRec_Multimodal/` (or your chosen root project name)
-    * `configs/` - Configuration files (e.g., `default_config.yaml`)
-    * `data/` - Placeholder for raw, processed, and split data (actual paths defined in config)
-        * `raw/item_info/`, `raw/interactions/`, `raw/images/`
-        * `processed/`
-        * `splits/`
-    * `models/` - Placeholder for saved model checkpoints and encoders (actual paths defined in config)
-    * `results/` - Placeholder for evaluation results, figures, generated recommendations, etc. (actual paths defined in config)
-    * `scripts/` - High-level Python scripts for executing pipeline stages:
-        * `preprocess_data.py` - Data preprocessing (cleaning, image validation/compression).
-        * `create_splits.py` - Creating standardized train/validation/test data splits.
-        * `extract_encoders.py` - Utility to (re)generate and save user/item encoders.
-        * `train.py` - Model training.
-        * `evaluate.py` - Model and baseline evaluation.
-        * `generate_recommendations.py` - Generating recommendations for users.
-    * `src/` - Source code for the recommender system:
-        * `config.py` - Dataclasses for managing all configurations.
-        * `data/` - Modules for `MultimodalDataset`, `SharedImageCache`, data splitting, and preprocessing utilities.
-        * `evaluation/` - Modules for various evaluation metrics, tasks, and novelty/diversity calculations.
-        * `inference/` - Modules for the main `Recommender` logic and baseline model implementations.
-        * `models/` - Modules for model architectures (`PretrainedMultimodalRecommender`, `EnhancedMultimodalRecommender`), custom layers (`CrossModalAttention`), and loss functions.
-        * `training/` - Module for the `Trainer` class and related training utilities.
-    * `requirements.txt` - List of Python dependencies.
-    * `setup.py` - Python package setup script.
-    * `README.md` - This file.
+```
+PixelRec_Multimodal/
+├── configs/                    # Configuration files
+│   └── default_config.yaml     # Main configuration template
+├── data/                       # Data directories (paths configurable)
+│   ├── raw/                    # Raw data files
+│   ├── processed/              # Processed data and scalers
+│   ├── splits/                 # Train/val/test splits
+│   └── cache/                  # Image tensor cache
+├── models/                     # Model checkpoints and encoders
+│   └── checkpoints/            # Training checkpoints
+├── results/                    # Evaluation results and figures
+├── scripts/                    # Execution scripts
+│   ├── preprocess_data.py      # Data preprocessing
+│   ├── create_splits.py        # Data splitting
+│   ├── extract_encoders.py     # Encoder extraction utility
+│   ├── train.py               # Model training
+│   ├── evaluate.py            # Model evaluation
+│   └── generate_recommendations.py  # Recommendation generation
+├── src/                        # Source code
+│   ├── config.py              # Configuration dataclasses
+│   ├── data/                  # Data processing modules
+│   │   ├── dataset.py         # MultimodalDataset class
+│   │   ├── image_cache.py     # Shared image caching system
+│   │   ├── splitting.py       # Data splitting strategies
+│   │   └── preprocessing.py   # Preprocessing utilities
+│   ├── evaluation/            # Evaluation framework
+│   │   ├── tasks.py          # Task-based evaluators
+│   │   ├── metrics.py        # Standard metrics
+│   │   ├── novelty.py        # Novelty and diversity metrics
+│   │   └── advanced_metrics.py  # Additional metrics
+│   ├── inference/             # Inference and recommendation
+│   │   ├── recommender.py     # Main recommender class
+│   │   └── baseline_recommenders.py  # Baseline implementations
+│   ├── models/                # Model architectures
+│   │   ├── multimodal.py     # Main model classes
+│   │   ├── layers.py         # Custom layers
+│   │   └── losses.py         # Loss functions
+│   └── training/              # Training framework
+│       └── trainer.py         # Trainer class
+├── requirements.txt           # Python dependencies
+├── setup.py                  # Package setup
+└── README.md                 # This file
+```
 
 ---
 
 ## Setup
 
-1.  **Clone the repository (if you haven't already):**
-    ```bash
-    # Example: git clone <your-repository-url>
-    # cd <repository-name>
-    ```
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd <repository-name>
+   ```
 
-2.  **Create and activate a Python virtual environment (recommended):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+2. **Create and activate a Python virtual environment:**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-3.  **Install the required dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ---
 
 ## Usage
 
-The primary way to interact with the system is by running the Python scripts located in the `scripts/` directory. Ensure your data (item information, interactions, images) is accessible and the paths are correctly specified in your configuration file (e.g., `configs/default_config.yaml`).
+The system is operated through command-line scripts that can be configured via YAML files. All scripts support the `--config` parameter to specify configuration files.
 
-1.  **Configure your Setup:**
-    Modify `configs/default_config.yaml` (or create a new one, e.g., `my_config.yaml`) to point to your data paths, define model parameters, training settings, etc. All subsequent commands will use the `--config` argument to specify which configuration to use.
+### 1. Configuration
 
-2.  **Preprocess Data:**
-    This script handles the initial processing of your raw data. It cleans text, validates images, optionally compresses/resizes images, and filters items/interactions based on your configuration.
-    ```bash
-    python scripts/preprocess_data.py --config configs/default_config.yaml
-    ```
+Start by configuring `configs/default_config.yaml` or creating a custom configuration file. Key sections include:
 
-3.  **Create Data Splits:**
-    This script creates standardized train, validation, and test splits from the processed interaction data.
-    ```bash
-    python scripts/create_splits.py --config configs/default_config.yaml
-    ```
-    * Optionally, sample the dataset before splitting:
-        ```bash
-        python scripts/create_splits.py --config configs/default_config.yaml --sample_n 100000
-        ```
+- **`model`**: Architecture selection, embedding dimensions, activation functions, attention mechanisms
+- **`training`**: Batch size, learning rate, optimizer settings, scheduler configuration
+- **`data`**: File paths, preprocessing options, caching settings, splitting parameters
+- **`recommendation`**: Top-k values, diversity weights, filtering options
 
-4.  **Extract Encoders (Optional but Recommended for Consistency):**
-    The training script typically saves encoders. This utility can be used if you need to (re)generate them based on the full processed dataset without running a full training.
-    ```bash
-    python scripts/extract_encoders.py --config configs/default_config.yaml
-    ```
+### 2. Data Preprocessing
 
-5.  **Train the Model:**
-    This script trains the multimodal recommender using the specified configuration and data splits.
-    ```bash
-    python scripts/train.py --config configs/default_config.yaml --device cuda  # Use 'cpu' if CUDA is not available
-    ```
-    * Enable Weights & Biases logging: `--use_wandb --wandb_project MyRecSysProject --wandb_entity <your_entity>`
-    * Resume training: `--resume <path_to_checkpoint.pth>`
+Process raw data including text cleaning, image validation, and optional compression:
 
-6.  **Evaluate the Model:**
-    Evaluate the trained model or baselines on a test set using various tasks and metrics.
-    ```bash
-    python scripts/evaluate.py --config configs/default_config.yaml \
-        --test_data data/splits/your_split/test.csv \
-        --train_data data/splits/your_split/train.csv \
-        --eval_task retrieval \
-        --recommender_type multimodal \
-        --output results/multimodal_retrieval_metrics.json
-    ```
-    * To evaluate a baseline (e.g., Popularity on the 'ranking' task):
-        ```bash
-        python scripts/evaluate.py --config configs/default_config.yaml \
-            --test_data data/splits/your_split/test.csv \
-            --train_data data/splits/your_split/train.csv \
-            --eval_task ranking \
-            --recommender_type popularity \
-            --output results/popularity_ranking_metrics.json
-        ```
-    * **Important**: For 'retrieval' and other tasks that depend on distinguishing novel items, always provide the `--train_data` argument pointing to the corresponding training split.
+```bash
+python scripts/preprocess_data.py --config configs/default_config.yaml
+```
 
-7.  **Generate Recommendations:**
-    Generate top-K recommendations for users with a trained model.
-    ```bash
-    python scripts/generate_recommendations.py --config configs/default_config.yaml \
-        --users user_id_1 user_id_2 \
-        --output results/user_recommendations.json
-    ```
-    * Provide a file of user IDs: `--user_file <path_to_user_ids.txt>`
-    * Generate for a random sample of users: `--sample_users 100`
-    * Enable diverse recommendations and novelty metrics: `--use_diversity`
-    * Load pre-computed item features cache for faster inference: `--embeddings_cache <path_to_cache.pkl>`
+Features:
+- Validates and optionally compresses/resizes images
+- Cleans text data (HTML removal, Unicode normalization)
+- Filters items based on availability and quality
+- Saves processed data for consistent training
+
+### 3. Data Splitting
+
+Create standardized train/validation/test splits:
+
+```bash
+python scripts/create_splits.py --config configs/default_config.yaml
+```
+
+Advanced options:
+```bash
+# Sample dataset before splitting
+python scripts/create_splits.py --config configs/default_config.yaml --sample_n 100000
+```
+
+Supports multiple splitting strategies:
+- **Stratified** (default): Ensures user representation across splits
+- **Temporal**: Time-based splits for realistic evaluation
+- **User/Item-based**: Complete separation for cold-start evaluation
+
+### 4. Model Training
+
+Train the multimodal recommender:
+
+```bash
+python scripts/train.py --config configs/default_config.yaml --device cuda
+```
+
+Training features:
+```bash
+# With experiment tracking
+python scripts/train.py --config configs/default_config.yaml \
+    --use_wandb --wandb_project MyProject --wandb_entity username
+
+# Resume from checkpoint
+python scripts/train.py --config configs/default_config.yaml \
+    --resume models/checkpoints/checkpoint.pth
+```
+
+The training script automatically:
+- Fits user/item encoders on the full dataset
+- Creates efficient data loaders with configurable caching
+- Saves model checkpoints and training curves
+- Supports distributed training and mixed precision
+
+### 5. Model Evaluation
+
+Evaluate trained models using task-specific metrics:
+
+```bash
+python scripts/evaluate.py --config configs/default_config.yaml \
+    --test_data data/splits/split_1/test.csv \
+    --train_data data/splits/split_1/train.csv \
+    --eval_task retrieval \
+    --recommender_type multimodal \
+    --output results/evaluation_results.json
+```
+
+Evaluation tasks:
+- **`retrieval`**: Novel item discovery (most common)
+- **`ranking`**: Full catalog ranking performance
+- **`next_item`**: Sequential prediction accuracy
+- **`cold_user`/`cold_item`**: Cold-start performance
+- **`beyond_accuracy`**: Diversity, novelty, and fairness metrics
+
+Baseline comparison:
+```bash
+python scripts/evaluate.py --config configs/default_config.yaml \
+    --test_data data/splits/split_1/test.csv \
+    --train_data data/splits/split_1/train.csv \
+    --eval_task retrieval \
+    --recommender_type popularity \
+    --output results/baseline_results.json
+```
+
+### 6. Recommendation Generation
+
+Generate recommendations for users:
+
+```bash
+python scripts/generate_recommendations.py --config configs/default_config.yaml \
+    --users user_1 user_2 user_3 \
+    --output results/recommendations.json
+```
+
+Advanced recommendation options:
+```bash
+# Diverse recommendations with novelty metrics
+python scripts/generate_recommendations.py --config configs/default_config.yaml \
+    --sample_users 100 \
+    --use_diversity \
+    --embeddings_cache results/embeddings_cache.pkl
+```
+
+Generation modes:
+- **Specific users**: `--users user_1 user_2`
+- **User file**: `--user_file path/to/users.txt`
+- **Random sample**: `--sample_users N`
+- **Diversity-aware**: `--use_diversity` (includes novelty metrics)
 
 ---
 
-## Configuration
+## Configuration Reference
 
-The system's behavior is extensively controlled via YAML configuration files (e.g., `configs/default_config.yaml`), parsed by `src/config.py` into structured dataclasses. Key configurable sections include:
+### Model Configuration
 
-* **`model`**:
-    * `model_class`: `pretrained` or `enhanced`.
-    * `vision_model`, `language_model`: Names of pre-trained backbones.
-    * `embedding_dim`, `dropout_rate`, `contrastive_temperature`.
-    * Architectural details for attention, fusion network (`fusion_hidden_dims`, `fusion_activation`, `use_batch_norm`), projection layers, and cross-modal attention (for 'enhanced' model).
-* **`training`**:
-    * Batch size, epochs, learning rate, weight decay, optimizer settings, LR scheduler parameters, early stopping patience, gradient clipping.
-* **`data`**:
-    * Paths for raw, processed, and split data files.
-    * `image_folder`, `processed_image_destination_folder`.
-    * `cache_processed_images`: Boolean to enable/disable image tensor caching.
-    * `offline_image_compression`: Settings for enabling, target quality, and resize parameters for image preprocessing.
-    * `offline_image_validation`: Parameters for validating images (corruption, dimensions, extensions).
-    * `offline_text_cleaning`: Toggles for HTML removal, Unicode normalization, lowercasing.
-    * `negative_sampling_ratio`, `numerical_features_cols`, `numerical_normalization_method`.
-    * `text_augmentation`: Configuration for text augmentation strategies.
-    * `splitting`: Parameters for data splitting (`train_final_ratio`, `val_final_ratio`, `test_final_ratio`, `min_interactions_per_user`, `min_interactions_per_item`, `random_state`).
-* **`recommendation`**:
-    * `top_k`, `diversity_weight`, `novelty_weight`, `filter_seen`, `max_candidates`.
-* Global paths like `checkpoint_dir` and `results_dir`.
+```yaml
+model:
+  model_class: pretrained          # 'pretrained' or 'enhanced'
+  vision_model: clip               # clip, dino, resnet, convnext
+  language_model: sentence-bert    # sentence-bert, mpnet, bert, roberta
+  embedding_dim: 128
+  
+  # Architecture details
+  fusion_hidden_dims: [512, 256, 128]
+  fusion_activation: relu          # relu, gelu, tanh, leaky_relu, silu
+  num_attention_heads: 4
+  use_batch_norm: true
+  
+  # Cross-modal attention (enhanced model only)
+  use_cross_modal_attention: true
+  cross_modal_attention_weight: 0.5
+  
+  # Contrastive learning
+  use_contrastive: true
+  contrastive_temperature: 0.07
+```
 
-Refer to `src/config.py` for the full structure and all available options. You can create multiple YAML configuration files to manage different experiments and setups.
+### Data Configuration
+
+```yaml
+data:
+  # Image caching for performance
+  cache_processed_images: true
+  image_cache_config:
+    strategy: hybrid               # hybrid, memory, disk, disabled
+    max_memory_items: 1500
+    cache_directory: data/cache/image_tensors
+    precompute_at_startup: false
+  
+  # Image preprocessing
+  offline_image_compression:
+    enabled: true
+    compress_if_kb_larger_than: 500
+    target_quality: 85
+    resize_target_longest_edge: 1024
+  
+  # Data splitting
+  splitting:
+    train_final_ratio: 0.6
+    val_final_ratio: 0.2
+    test_final_ratio: 0.2
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
+```
+
+### Training Configuration
+
+```yaml
+training:
+  batch_size: 64
+  epochs: 30
+  learning_rate: 0.001
+  
+  # Optimizer settings
+  optimizer_type: adamw            # adamw, adam, sgd
+  weight_decay: 0.01
+  
+  # Learning rate scheduling
+  use_lr_scheduler: true
+  lr_scheduler_type: reduce_on_plateau
+  lr_scheduler_patience: 2
+  lr_scheduler_factor: 0.5
+```
+
+---
+
+## Key Features in Detail
+
+### Image Caching System
+
+The `SharedImageCache` provides efficient image processing with multiple strategies:
+
+- **Hybrid**: Combines memory and disk caching for optimal performance
+- **Disk**: Saves all processed images to disk, loads on demand
+- **Memory**: Keeps images in RAM with LRU eviction
+- **Disabled**: No caching (processes images each time)
+
+### Task-Based Evaluation
+
+The evaluation framework supports multiple realistic scenarios:
+
+- **Retrieval**: Finding new relevant items (filters seen items)
+- **Ranking**: Ranking all items including previously seen ones
+- **Cold-start**: Performance on new users or items
+- **Beyond-accuracy**: Diversity, novelty, and fairness metrics
+
+### Baseline Recommenders
+
+Included baseline implementations for comparison:
+
+- **Random**: Random item selection
+- **Popularity**: Most popular items globally
+- **ItemKNN**: Item-based collaborative filtering
+- **UserKNN**: User-based collaborative filtering
+
+### Advanced Architecture Options
+
+- **Cross-modal Attention**: Enhanced model with vision-text interaction
+- **Contrastive Learning**: CLIP-style alignment of vision and text
+- **Flexible Fusion**: Configurable multi-layer fusion networks
+- **Multiple Initializations**: Xavier, Kaiming initialization schemes
+
+---
+
+## Performance Optimization
+
+### Training Performance
+- **Image Caching**: Pre-processes and caches images for faster loading
+- **Efficient Data Loading**: Multi-worker data loaders with prefetching
+- **Gradient Clipping**: Prevents training instability
+- **Mixed Precision**: Automatic mixed precision support (configure via training parameters)
+
+### Inference Performance
+- **Batch Processing**: Efficient batch scoring for large-scale recommendations
+- **Feature Caching**: Pre-computed item features for faster recommendation generation
+- **Optimized Baselines**: Efficient implementations of collaborative filtering methods
+
+### Memory Management
+- **LRU Caching**: Automatic memory management for image cache
+- **Lazy Loading**: On-demand loading of cached images
+- **Configurable Limits**: Control memory usage through configuration
+
+---
+
+## Extensibility
+
+The modular design supports easy extension:
+
+### Adding New Models
+1. Create new model class in `src/models/`
+2. Add configuration options to `src/config.py`
+3. Update model selection logic in training script
+
+### Adding New Evaluation Tasks
+1. Implement new evaluator in `src/evaluation/tasks.py`
+2. Add task to `EvaluationTask` enum
+3. Update evaluation script task mapping
+
+### Adding New Baselines
+1. Implement baseline in `src/inference/baseline_recommenders.py`
+2. Inherit from `BaselineRecommender` class
+3. Add to recommender factory function
+
+### Custom Loss Functions
+1. Add new loss to `src/models/losses.py`
+2. Update `MultimodalRecommenderLoss` combination logic
+3. Configure loss weights in training configuration
+
+---
+
+## Examples
+
+### Quick Start
+```bash
+# 1. Preprocess data
+python scripts/preprocess_data.py --config configs/default_config.yaml
+
+# 2. Create splits
+python scripts/create_splits.py --config configs/default_config.yaml
+
+# 3. Train model
+python scripts/train.py --config configs/default_config.yaml
+
+# 4. Evaluate
+python scripts/evaluate.py --config configs/default_config.yaml \
+    --test_data data/splits/split_1/test.csv \
+    --train_data data/splits/split_1/train.csv \
+    --eval_task retrieval \
+    --recommender_type multimodal
+```
+
+### Experiment with Different Architectures
+```bash
+# Enhanced model with cross-modal attention
+python scripts/train.py --config configs/enhanced_config.yaml
+
+# Different vision backbone
+python scripts/train.py --config configs/dino_config.yaml
+
+# Compare with baselines
+python scripts/evaluate.py --config configs/default_config.yaml \
+    --eval_task retrieval --recommender_type item_knn
+```
+
+### Large-Scale Deployment
+```bash
+# Sample large dataset
+python scripts/create_splits.py --config configs/default_config.yaml --sample_n 1000000
+
+# Train with image caching
+python scripts/train.py --config configs/large_scale_config.yaml \
+    --use_wandb --wandb_project LargeScale
+
+# Generate recommendations with caching
+python scripts/generate_recommendations.py --config configs/default_config.yaml \
+    --sample_users 10000 \
+    --embeddings_cache results/embeddings_cache.pkl
+```
+
+This framework provides a complete solution for multimodal recommendation research and deployment, with extensive configurability and built-in best practices for scalable machine learning systems.
