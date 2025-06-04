@@ -90,7 +90,39 @@ class RandomRecommender(BaselineRecommender):
 
 
 class PopularityRecommender(BaselineRecommender):
-    """Popularity-based baseline recommender"""
+    """Popularity-based baseline recommender - OPTIMIZED VERSION"""
+    
+    def __init__(self, dataset, device=None):
+        super().__init__(dataset, device)
+        # Pre-compute and cache the global popularity ranking
+        self._precompute_popularity_ranking()
+    
+    def _precompute_popularity_ranking(self):
+        """Pre-compute a sorted list of all items by popularity"""
+        # Create list of (item_id, popularity) tuples for ALL items
+        all_items_with_scores = [
+            (item, self.item_popularity.get(item, 0)) 
+            for item in self.all_items
+        ]
+        
+        # Sort once by popularity (descending)
+        all_items_with_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Store both the sorted list and normalized scores
+        self.sorted_items = all_items_with_scores
+        
+        # Normalize scores once
+        if self.sorted_items:
+            max_score = self.sorted_items[0][1]
+            if max_score > 0:
+                self.sorted_items_normalized = [
+                    (item, score/max_score) 
+                    for item, score in self.sorted_items
+                ]
+            else:
+                self.sorted_items_normalized = self.sorted_items
+        else:
+            self.sorted_items_normalized = []
     
     def get_recommendations(
         self,
@@ -99,28 +131,45 @@ class PopularityRecommender(BaselineRecommender):
         filter_seen: bool = True,
         candidates: Optional[List[str]] = None
     ) -> List[Tuple[str, float]]:
-        """Get most popular items as recommendations"""
+        """Get most popular items as recommendations - OPTIMIZED"""
         
-        # Get candidate items
-        if candidates is None:
-            candidates = self.all_items
-        
-        # Filter seen items
+        # Get user's seen items if filtering
+        seen_items = set()  # Use set for O(1) lookup
         if filter_seen:
             seen_items = self.get_user_history(user_id)
-            candidates = [item for item in candidates if item not in seen_items]
+            if not isinstance(seen_items, set):
+                seen_items = set(seen_items)
         
-        # Sort by popularity
-        item_scores = [(item, self.item_popularity.get(item, 0)) for item in candidates]
-        item_scores.sort(key=lambda x: x[1], reverse=True)
+        # Handle specific candidates if provided
+        if candidates is not None:
+            # Only process the specific candidates
+            candidate_set = set(candidates)
+            
+            # Filter to only items in candidate set and not seen
+            filtered_scores = [
+                (item, score) 
+                for item, score in self.sorted_items_normalized
+                if item in candidate_set and item not in seen_items
+            ]
+            
+            return filtered_scores[:top_k]
         
-        # Normalize scores
-        if item_scores:
-            max_score = item_scores[0][1]
-            if max_score > 0:
-                item_scores = [(item, score/max_score) for item, score in item_scores]
-        
-        return item_scores[:top_k]
+        else:
+            # Use pre-computed ranking - much faster!
+            recommendations = []
+            
+            for item, score in self.sorted_items_normalized:
+                # Skip if seen
+                if item in seen_items:
+                    continue
+                
+                recommendations.append((item, score))
+                
+                # Stop when we have enough
+                if len(recommendations) >= top_k:
+                    break
+            
+            return recommendations
 
 
 class ItemKNNRecommender(BaselineRecommender):
