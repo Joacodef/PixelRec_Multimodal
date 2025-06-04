@@ -133,6 +133,23 @@ def main():
         action='store_true',
         help="Enable warm-up of the Recommender's internal L1 feature cache. Uses more RAM upfront but can be faster if L2 (ProcessedFeatureCache) is disk-based."
     )
+    parser.add_argument(
+        '--num_workers',
+        type=int,
+        default=4,
+        help='Number of parallel workers for evaluation'
+    )
+    parser.add_argument(
+        '--use_parallel',
+        action='store_true',
+        help='Use parallel processing for multimodal evaluation'
+    )
+    parser.add_argument(
+        '--parallel_chunk_size',
+        type=int,
+        default=5000,
+        help='Chunk size for parallel processing'
+    )
 
 
     args = parser.parse_args()
@@ -304,11 +321,37 @@ def main():
         device=device,
         history_interactions_df=train_df, 
         config_obj=config_obj,
-        processed_feature_cache_instance=processed_feature_cache_instance # Pass the new cache here
+        processed_feature_cache_instance=processed_feature_cache_instance
     )
 
+    # Set up parallel processing for multimodal recommender if requested
+    if args.recommender_type == 'multimodal' and args.use_parallel:
+        print(f"Using parallel evaluation with {args.num_workers} workers")
+        
+        # Check if the parallel method exists
+        if not hasattr(recommender_instance, 'get_recommendations_parallel'):
+            print("Warning: Parallel recommendation method not implemented. Falling back to sequential.")
+            args.use_parallel = False
+        else:
+            # Override the get_recommendations method to use parallel version
+            original_get_recommendations = recommender_instance.get_recommendations
+            
+            def parallel_get_recommendations(user_id, top_k=10, filter_seen=True, candidates=None):
+                return recommender_instance.get_recommendations_parallel(
+                    user_id=user_id,
+                    top_k=top_k,
+                    filter_seen=filter_seen,
+                    candidates=candidates,
+                    num_workers=args.num_workers,
+                    chunk_size=args.parallel_chunk_size
+                )
+            
+            recommender_instance.get_recommendations = parallel_get_recommendations
+
+    # Warm up cache if requested (only do this once)
     if args.recommender_type == 'multimodal' and args.warmup_recommender_l1_cache:
-        print("Warming up Recommender's L1 internal item_features_cache for all known items...")
+        print("Warming up Recommender's L1 internal item_features_cache...")
+        
         if hasattr(dataset_for_encoders, 'item_encoder') and \
            hasattr(dataset_for_encoders.item_encoder, 'classes_') and \
            dataset_for_encoders.item_encoder.classes_ is not None:
@@ -316,24 +359,41 @@ def main():
             all_item_ids_for_warmup = dataset_for_encoders.item_encoder.classes_
             print(f"Attempting to warm up Recommender L1 cache for {len(all_item_ids_for_warmup)} items.")
             
-            for item_id_to_warm in tqdm(all_item_ids_for_warmup, desc="Warming Recommender L1 cache"):
-                try:
-                    # This call will use L2 (ProcessedFeatureCache) if available, 
-                    # then store result in L1 (Recommender.item_features_cache)
-                    recommender_instance._get_item_features(item_id_to_warm) 
-                except Exception as e:
-                    print(f"Warning: Error warming L1 cache for item {item_id_to_warm}: {e}")
+            # Use parallel pre-loading if available and parallel mode is enabled
+            if args.use_parallel and hasattr(recommender_instance, 'preload_features_parallel'):
+                print("Pre-loading features in parallel...")
+                recommender_instance.preload_features_parallel(
+                    all_item_ids_for_warmup,
+                    num_workers=args.num_workers,
+                    chunk_size=1000
+                )
+            else:
+                # Sequential warming
+                for item_id_to_warm in tqdm(all_item_ids_for_warmup, desc="Warming Recommender L1 cache"):
+                    try:
+                        recommender_instance._get_item_features(item_id_to_warm) 
+                    except Exception as e:
+                        # Only print first few errors to avoid spam
+                        if all_item_ids_for_warmup.tolist().index(item_id_to_warm) < 5:
+                            print(f"Warning: Error warming L1 cache for item {item_id_to_warm}: {e}")
             
-            print(f"Recommender's L1 item_features_cache warmed up. Cached items: {len(recommender_instance.item_features_cache)}")
+            # Print cache statistics
+            print(f"\nCache warming completed:")
+            print(f"L1 cache size: {len(recommender_instance.item_features_cache)} items")
+            
             if processed_feature_cache_instance:
-                print("ProcessedFeatureCache (L2) stats after L1 warm-up:")
+                print("\nProcessedFeatureCache (L2) stats:")
                 processed_feature_cache_instance.print_stats()
+            
             if shared_image_cache_eval:
-                print("SharedImageCache (images) stats after L1 warm-up:")
+                print("\nSharedImageCache (images) stats:")
                 shared_image_cache_eval.print_stats()
         else:
             print("Warning: Could not get all item IDs to warm up Recommender's L1 cache.")
 
+    if args.use_parallel and args.recommender_type != 'multimodal':
+        print("Warning: Parallel mode only supported for multimodal recommender. Ignoring --use_parallel.")
+        args.use_parallel = False
 
     print("\nStarting evaluation...")
     
@@ -370,8 +430,11 @@ def main():
         'recommender_type': args.recommender_type,
         'top_k': config_obj.recommendation.top_k, 
         'test_file': args.test_data,
-        'train_file_used_for_history': args.train_data if args.train_data else "None (baselines used full dataset history via dataset_for_encoders)",
-        'l1_cache_warmup_enabled': args.warmup_recommender_l1_cache
+        'train_file_used_for_history': args.train_data if args.train_data else "None",
+        'l1_cache_warmup_enabled': args.warmup_recommender_l1_cache,
+        'parallel_evaluation': args.use_parallel,
+        'num_workers': args.num_workers if args.use_parallel else 0,
+        'parallel_chunk_size': args.parallel_chunk_size if args.use_parallel else 0
     }
     evaluator.print_summary(results)
 

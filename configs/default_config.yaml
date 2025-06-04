@@ -86,14 +86,14 @@ data:
   cache_processed_images: true
   image_cache_config:
     strategy: 'hybrid' # Options: 'hybrid', 'memory', 'disk', 'disabled'
-    max_memory_items: 500
+    max_memory_items: 1000
     cache_directory: 'data/cache/image_tensors'
     precompute_at_startup: false
     preprocessing_batch_size: 50
   
   processed_features_cache_config: # New section
     strategy: 'hybrid'              # 'disk', 'memory', 'hybrid', 'disabled'
-    max_memory_items: 10000        # Max items for in-memory LRU
+    max_memory_items: 5000        # Max items for in-memory LRU
     cache_directory: 'data/cache/processed_features' # Path to store these cached features
   
   # Offline image compression settings

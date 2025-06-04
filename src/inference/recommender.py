@@ -9,6 +9,8 @@ from tqdm import tqdm
 import pickle
 from pathlib import Path
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import torch.multiprocessing as mp
 
 from ..data.dataset import MultimodalDataset
 from ..evaluation.novelty import NoveltyMetrics, DiversityCalculator 
@@ -67,10 +69,10 @@ class Recommender:
         user_id: str,
         top_k: int = 10,
         filter_seen: bool = True,
-        candidates: Optional[List[str]] = None
+        candidates: Optional[List[str]] = None,
+        batch_size: int = 125 
     ) -> List[Tuple[str, float]]:
-        """
-        Get top-k recommendations for a user.
+        """Get top-k recommendations for a user.
         
         Args:
             user_id: User ID
@@ -98,8 +100,13 @@ class Recommender:
             candidates = [item for item in candidates if item not in user_items_history]
         
         # Score all candidate items
-        scores: List[Tuple[str, float]] = self._score_items(user_idx, candidates)
-        
+        scores: List[Tuple[str, float]] = self._score_items(
+            user_idx, 
+            candidates, 
+            batch_size=batch_size,
+            show_progress=len(candidates) > 5000
+        )
+            
         # Sort and return top-k
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
@@ -175,14 +182,19 @@ class Recommender:
         self, 
         user_idx: int, 
         items: List[str],
-        batch_size: int = 256
+        batch_size: int = 125,  
+        show_progress: bool = True
     ) -> List[Tuple[str, float]]:
         """Score a list of items for a user using batched processing"""
         scores: List[Tuple[str, float]] = []
         
         # Process items in batches for efficiency
         with torch.no_grad():
-            for i in tqdm(range(0, len(items), batch_size), desc="Scoring items"):
+            iterator = range(0, len(items), batch_size)
+            if show_progress and len(items) > 5000:  # Only show progress for large item sets
+                iterator = tqdm(iterator, desc="Scoring items", unit="batch")
+            
+            for i in iterator:
                 batch_items: List[str] = items[i:i + batch_size]
                 batch_scores: List[Tuple[str, float]] = self._score_item_batch(user_idx, batch_items)
                 scores.extend(batch_scores)
@@ -190,155 +202,87 @@ class Recommender:
         return scores
     
     def _score_item_batch(self, user_idx: int, item_ids: List[str]) -> List[Tuple[str, float]]:
-        """Score a batch of items efficiently"""
+        """Score a batch of items efficiently using batch feature loading"""
         batch_size: int = len(item_ids)
         
-        # Prepare batch tensors
-        user_indices: torch.Tensor = torch.full((batch_size,), user_idx, dtype=torch.long).to(self.device)
-        item_indices_list: List[int] = [] # Renamed to avoid confusion with item_indices_tensor
+        # Get valid item indices
+        item_indices_list: List[int] = []
         valid_items: List[str] = []
-        # valid_indices: List[int] = [] # Not strictly used later, can be removed if not needed
-
-        # Get item indices and filter invalid items
-        for idx, item_id in enumerate(item_ids):
+        
+        for item_id in item_ids:
             try:
                 item_idx_val: int = self.dataset.item_encoder.transform([item_id])[0]
                 item_indices_list.append(item_idx_val)
                 valid_items.append(item_id)
-                # valid_indices.append(idx)
-            except Exception: # More general exception
-                # print(f"Warning: Item ID {item_id} not found in item_encoder. Skipping.")
+            except Exception:
                 continue
         
         if not item_indices_list:
             return []
         
-        # Create tensors for valid items
+        # Batch load all features at once
+        features_batch = self._get_batch_features(valid_items)
+        
+        # Prepare tensors for model
+        user_indices: torch.Tensor = torch.full((len(valid_items),), user_idx, dtype=torch.long).to(self.device)
         item_indices_tensor: torch.Tensor = torch.tensor(item_indices_list, dtype=torch.long).to(self.device)
-        user_indices_valid: torch.Tensor = user_indices[:len(item_indices_list)] # Adjust batch size for user_indices
         
-        # Batch process features
-        batch_images: List[torch.Tensor] = []
-        batch_text_input_ids: List[torch.Tensor] = [] # Changed key
-        batch_text_attention_masks: List[torch.Tensor] = [] # Changed key
-        batch_numerical: List[torch.Tensor] = []
-        # For CLIP features, if your model uses them directly in this scoring path
-        batch_clip_text_input_ids: List[torch.Tensor] = []
-        batch_clip_text_attention_masks: List[torch.Tensor] = []
+        # Stack features
+        batch_images = []
+        batch_text_input_ids = []
+        batch_text_attention_masks = []
+        batch_numerical = []
+        batch_clip_text_input_ids = []
+        batch_clip_text_attention_masks = []
         
-        # Get expected dimensions from model or dataset defaults
-        expected_num_features: int = 7 
-        if hasattr(self.dataset, 'numerical_feat_cols') and self.dataset.numerical_feat_cols:
-            expected_num_features = len(self.dataset.numerical_feat_cols)
-        elif hasattr(self.model, 'numerical_projection') and hasattr(self.model.numerical_projection, 'in_features'): # For nn.Linear
-             expected_num_features = self.model.numerical_projection.in_features
-        elif hasattr(self.model, 'numerical_projection') and isinstance(self.model.numerical_projection, nn.Sequential) and self.model.numerical_projection and hasattr(self.model.numerical_projection[0], 'in_features'): # For Sequential
-            expected_num_features = self.model.numerical_projection[0].in_features
-
-
-        img_height, img_width = (224, 224) # Default
-        if hasattr(self.dataset.image_processor, 'size'):
-            proc_size = self.dataset.image_processor.size
-            if isinstance(proc_size, dict) and 'shortest_edge' in proc_size:
-                img_height = img_width = proc_size['shortest_edge']
-            elif isinstance(proc_size, (tuple, list)) and len(proc_size) >= 2:
-                img_height, img_width = proc_size[0], proc_size[1]
-            elif isinstance(proc_size, int):
-                img_height = img_width = proc_size
-
-
-        main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
-        clip_tokenizer_max_len = 77 # Standard CLIP max length
+        for features in features_batch:
+            if features is not None:
+                batch_images.append(features['image'])
+                batch_text_input_ids.append(features['text_input_ids'])
+                batch_text_attention_masks.append(features['text_attention_mask'])
+                batch_numerical.append(features['numerical_features'])
+                
+                if 'clip_text_input_ids' in features:
+                    batch_clip_text_input_ids.append(features['clip_text_input_ids'])
+                    batch_clip_text_attention_masks.append(features['clip_text_attention_mask'])
         
-        first_valid_features_processed = False
-
-        for item_id in valid_items:
-            features: Optional[Dict[str, torch.Tensor]] = self._get_item_features(item_id)
-            
-            if features is None: # Fallback if _get_item_features fails for an item
-                print(f"Warning: Could not retrieve features for item {item_id}. Using placeholders.")
-                # Use updated keys for placeholder features
-                current_features = {
-                    'image': torch.zeros(3, img_height, img_width, dtype=torch.float),
-                    'text_input_ids': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
-                    'text_attention_mask': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
-                    'numerical_features': torch.zeros(expected_num_features, dtype=torch.float32)
-                }
-                if self.dataset.clip_tokenizer_for_contrastive:
-                    current_features['clip_text_input_ids'] = torch.zeros(clip_tokenizer_max_len, dtype=torch.long)
-                    current_features['clip_text_attention_mask'] = torch.zeros(clip_tokenizer_max_len, dtype=torch.long)
-            else:
-                current_features = features
-
-            # Update dynamic dimensions from the first successfully processed valid item's features
-            if not first_valid_features_processed and current_features:
-                if 'image' in current_features and current_features['image'].ndim == 3: # C, H, W
-                    img_height, img_width = current_features['image'].shape[1], current_features['image'].shape[2]
-                if 'text_input_ids' in current_features: # Use new key
-                    main_tokenizer_max_len = current_features['text_input_ids'].shape[0]
-                if 'numerical_features' in current_features:
-                    expected_num_features = current_features['numerical_features'].shape[0]
-                if 'clip_text_input_ids' in current_features:
-                    clip_tokenizer_max_len = current_features['clip_text_input_ids'].shape[0]
-                first_valid_features_processed = True
-            
-            # Ensure numerical features have correct shape if they were somehow empty from _get_item_features
-            if 'numerical_features' not in current_features or current_features['numerical_features'].numel() == 0:
-                 current_features['numerical_features'] = torch.zeros(expected_num_features, dtype=torch.float32)
-            if 'image' not in current_features: # Should not happen if _get_item_features is robust
-                 current_features['image'] = torch.zeros(3, img_height, img_width, dtype=torch.float)
-
-
-            batch_images.append(current_features['image'])
-            batch_text_input_ids.append(current_features.get('text_input_ids', torch.zeros(main_tokenizer_max_len, dtype=torch.long))) # Use new key
-            batch_text_attention_masks.append(current_features.get('text_attention_mask', torch.zeros(main_tokenizer_max_len, dtype=torch.long))) # Use new key
-            batch_numerical.append(current_features['numerical_features'])
-            
-            if self.dataset.clip_tokenizer_for_contrastive: # Check if model will need these
-                batch_clip_text_input_ids.append(current_features.get('clip_text_input_ids', torch.zeros(clip_tokenizer_max_len, dtype=torch.long)))
-                batch_clip_text_attention_masks.append(current_features.get('clip_text_attention_mask', torch.zeros(clip_tokenizer_max_len, dtype=torch.long)))
-
-        # Stack all features
-        images_tensor: torch.Tensor = torch.stack(batch_images).to(self.device)
-        text_input_ids_tensor: torch.Tensor = torch.stack(batch_text_input_ids).to(self.device) # Changed key
-        text_attention_masks_tensor: torch.Tensor = torch.stack(batch_text_attention_masks).to(self.device) # Changed key
-        numerical_tensor: torch.Tensor = torch.stack(batch_numerical).to(self.device)
+        # Convert to tensors
+        images_tensor = torch.stack(batch_images).to(self.device)
+        text_input_ids_tensor = torch.stack(batch_text_input_ids).to(self.device)
+        text_attention_masks_tensor = torch.stack(batch_text_attention_masks).to(self.device)
+        numerical_tensor = torch.stack(batch_numerical).to(self.device)
         
+        # Prepare model input
         model_input_args = {
-            'user_idx': user_indices_valid,
+            'user_idx': user_indices,
             'item_idx': item_indices_tensor,
             'image': images_tensor,
-            'text_input_ids': text_input_ids_tensor, # Pass to model with this key
-            'text_attention_mask': text_attention_masks_tensor, # Pass to model with this key
+            'text_input_ids': text_input_ids_tensor,
+            'text_attention_mask': text_attention_masks_tensor,
             'numerical_features': numerical_tensor
         }
-        # Add CLIP inputs if model expects them for this path (usually for contrastive loss or if embeddings are returned)
-        # The Recommender's get_recommendations doesn't typically ask for return_embeddings=True for this path
-        # but _score_items_with_embeddings does. So we prepare them if available.
-        if batch_clip_text_input_ids and batch_clip_text_attention_masks:
-             model_input_args['clip_text_input_ids'] = torch.stack(batch_clip_text_input_ids).to(self.device)
-             model_input_args['clip_text_attention_mask'] = torch.stack(batch_clip_text_attention_masks).to(self.device)
         
-        # Get batch predictions
+        if batch_clip_text_input_ids:
+            model_input_args['clip_text_input_ids'] = torch.stack(batch_clip_text_input_ids).to(self.device)
+            model_input_args['clip_text_attention_mask'] = torch.stack(batch_clip_text_attention_masks).to(self.device)
+        
+        # Get predictions
         with torch.no_grad():
-            # Check if model expects return_embeddings (usually false for simple scoring)
-            # The base get_recommendations path does not set return_embeddings=True
             if 'return_embeddings' in self.model.forward.__code__.co_varnames:
-                 model_input_args['return_embeddings'] = False # Explicitly false for scoring path
+                model_input_args['return_embeddings'] = False
             
             output_val = self.model(**model_input_args)
             
-            # Handle if model returns tuple (e.g. output, embeddings)
             if isinstance(output_val, tuple):
                 batch_scores_tensor = output_val[0].squeeze()
             else:
                 batch_scores_tensor = output_val.squeeze()
         
-        # Handle single item case for scores
+        # Handle single item case
         if batch_scores_tensor.dim() == 0:
             batch_scores_tensor = batch_scores_tensor.unsqueeze(0)
         
-        # Pair items with scores
+        # Return results
         results: List[Tuple[str, float]] = []
         for item_id, score_val in zip(valid_items, batch_scores_tensor.cpu().numpy()):
             results.append((item_id, float(score_val)))
@@ -395,7 +339,7 @@ class Recommender:
         self, 
         user_idx: int, 
         items: List[str],
-        batch_size: int = 32
+        batch_size: int = 125
     ) -> List[Dict[str, Any]]:
         """Score items and return with embeddings and other info using batched processing"""
         scored_items_list: List[Dict[str, Any]] = []
@@ -568,13 +512,10 @@ class Recommender:
                     return_tensors='pt'
                 )
 
-                # Numerical features (consistent with MultimodalDataset._get_item_numerical_features)
-                # This directly calls the method that handles pre-processed or raw numerical features.
+                # Numerical features
                 numerical_features_tensor = self.dataset._get_item_numerical_features(item_id, item_info_series)
                 
-                # Ensure numerical features have the correct shape if empty or not preprocessed,
-                # mimicking logic from original _get_item_features if necessary.
-                # This fallback might be redundant if _get_item_numerical_features is robust.
+                # Ensure numerical features have the correct shape if empty
                 if numerical_features_tensor.numel() == 0 and self.dataset.numerical_feat_cols:
                     expected_size = len(self.dataset.numerical_feat_cols)
                     if hasattr(self.model, 'numerical_projection'):
@@ -585,9 +526,8 @@ class Recommender:
                         elif hasattr(self.model.numerical_projection, 'in_features'):
                             expected_size = self.model.numerical_projection.in_features
                     numerical_features_tensor = torch.zeros(expected_size, dtype=torch.float32)
-                elif not self.dataset.numerical_feat_cols: # No numerical features configured
+                elif not self.dataset.numerical_feat_cols:
                     numerical_features_tensor = torch.empty(0, dtype=torch.float32)
-
 
                 non_image_features = {
                     'text_input_ids': text_tokens['input_ids'].squeeze(0),
@@ -595,30 +535,28 @@ class Recommender:
                     'numerical_features': numerical_features_tensor
                 }
 
-                # Add CLIP specific tokens if the dataset's CLIP tokenizer is available
-                # (consistent with MultimodalDataset.__getitem__)
+                # Add CLIP specific tokens if available
                 if self.dataset.clip_tokenizer_for_contrastive:
                     clip_tokens = self.dataset.clip_tokenizer_for_contrastive(
                         text_content,
                         padding='max_length',
                         truncation=True,
-                        max_length=77, # Standard CLIP max length
+                        max_length=77,
                         return_tensors='pt'
                     )
                     non_image_features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
                     non_image_features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
                 
-                # Store these processed non-image features in the L2 cache
+                # Store in L2 cache
                 if self.processed_feature_cache:
                     self.processed_feature_cache.set(item_id, non_image_features)
 
             except Exception as e:
                 print(f"Error processing non-image features for item {item_id}: {e}")
-                # Fallback: create empty/default non-image features if processing fails
-                # to allow the process to continue, though this item might be scored poorly.
+                # Create fallback features
                 main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
                 num_num_feats = len(self.dataset.numerical_feat_cols) if self.dataset.numerical_feat_cols else 0
-                if num_num_feats == 0 and hasattr(self.model, 'num_numerical_features'): # from multimodal.py
+                if num_num_feats == 0 and hasattr(self.model, 'num_numerical_features'):
                     num_num_feats = self.model.num_numerical_features
 
                 non_image_features = {
@@ -630,13 +568,13 @@ class Recommender:
                     non_image_features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
                     non_image_features['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
         
-        # Get image tensor (this uses SharedImageCache via the dataset)
+        # Get image tensor
         try:
             image_tensor = self.dataset._load_and_process_image(item_id)
         except Exception as e:
-            print(f"Error loading image tensor for item {item_id} (will use placeholder): {e}")
-            # Determine placeholder size dynamically if possible
-            placeholder_size = (224, 224) # Default
+            print(f"Error loading image tensor for item {item_id}: {e}")
+            # Create placeholder
+            placeholder_size = (224, 224)
             if hasattr(self.dataset.image_processor, 'size'):
                 proc_size = self.dataset.image_processor.size
                 if isinstance(proc_size, dict) and 'shortest_edge' in proc_size:
@@ -647,6 +585,165 @@ class Recommender:
                     placeholder_size = (proc_size, proc_size)
             image_tensor = torch.zeros(3, placeholder_size[0], placeholder_size[1], dtype=torch.float)
 
+        # Combine all features
+        all_features = {**non_image_features, 'image': image_tensor}
+        
+        # Store in L1 cache
+        self.item_features_cache[item_id] = all_features
+        
+        return all_features
+
+
+    def _get_batch_features(self, item_ids: List[str]) -> List[Dict[str, torch.Tensor]]:
+        """
+        Get features for multiple items efficiently using batch processing.
+        This method minimizes redundant operations by processing all uncached items together.
+        """
+        features_list = []
+        uncached_items = []
+        uncached_indices = []
+        
+        # Step 1: Check L1 cache first
+        for idx, item_id in enumerate(item_ids):
+            if item_id in self.item_features_cache:
+                features_list.append(self.item_features_cache[item_id])
+            else:
+                uncached_items.append(item_id)
+                uncached_indices.append(idx)
+                features_list.append(None)  # Placeholder
+        
+        # If all items were cached, return immediately
+        if not uncached_items:
+            return features_list
+        
+        # Step 2: Check L2 cache for non-image features
+        non_image_features_map = {}
+        items_needing_processing = []
+        
+        if self.processed_feature_cache:
+            for item_id in uncached_items:
+                cached_features = self.processed_feature_cache.get(item_id)
+                if cached_features is not None:
+                    non_image_features_map[item_id] = cached_features
+                else:
+                    items_needing_processing.append(item_id)
+        else:
+            items_needing_processing = uncached_items
+        
+        # Step 3: Batch process text and numerical features for items not in L2 cache
+        if items_needing_processing:
+            # Batch get item info
+            item_info_batch = []
+            for item_id in items_needing_processing:
+                try:
+                    item_info = self.dataset._get_item_info(item_id)
+                    item_info_batch.append((item_id, item_info))
+                except Exception as e:
+                    print(f"Error getting item info for {item_id}: {e}")
+                    item_info_batch.append((item_id, None))
+            
+            # Batch process text
+            text_contents = []
+            valid_item_ids = []
+            for item_id, item_info in item_info_batch:
+                if item_info is not None:
+                    text_content = self.dataset._get_item_text(item_info)
+                    text_contents.append(text_content)
+                    valid_item_ids.append((item_id, item_info))
+            
+            if text_contents:
+                # Batch tokenize all texts at once
+                main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
+                
+                text_tokens_batch = self.dataset.tokenizer(
+                    text_contents,
+                    padding='max_length',
+                    truncation=True,
+                    max_length=main_tokenizer_max_len,
+                    return_tensors='pt'
+                )
+                
+                # CLIP tokenization if needed
+                clip_tokens_batch = None
+                if self.dataset.clip_tokenizer_for_contrastive:
+                    clip_tokens_batch = self.dataset.clip_tokenizer_for_contrastive(
+                        text_contents,
+                        padding='max_length',
+                        truncation=True,
+                        max_length=77,
+                        return_tensors='pt'
+                    )
+                
+                # Process each item's features
+                for idx, (item_id, item_info) in enumerate(valid_item_ids):
+                    # Get numerical features
+                    numerical_features = self.dataset._get_item_numerical_features(item_id, item_info)
+                    
+                    # Assemble non-image features
+                    features_dict = {
+                        'text_input_ids': text_tokens_batch['input_ids'][idx],
+                        'text_attention_mask': text_tokens_batch['attention_mask'][idx],
+                        'numerical_features': numerical_features
+                    }
+                    
+                    if clip_tokens_batch is not None:
+                        features_dict['clip_text_input_ids'] = clip_tokens_batch['input_ids'][idx]
+                        features_dict['clip_text_attention_mask'] = clip_tokens_batch['attention_mask'][idx]
+                    
+                    non_image_features_map[item_id] = features_dict
+                    
+                    # Cache in L2 if available
+                    if self.processed_feature_cache:
+                        self.processed_feature_cache.set(item_id, features_dict)
+        
+        # Step 4: Load images (can potentially be parallelized)
+        image_tensors_map = {}
+        for item_id in uncached_items:
+            try:
+                image_tensor = self.dataset._load_and_process_image(item_id)
+                image_tensors_map[item_id] = image_tensor
+            except Exception as e:
+                print(f"Error loading image for {item_id}: {e}")
+                # Create placeholder
+                placeholder_size = (224, 224)
+                if hasattr(self.dataset.image_processor, 'size'):
+                    proc_size = self.dataset.image_processor.size
+                    if isinstance(proc_size, dict) and 'shortest_edge' in proc_size:
+                        placeholder_size = (proc_size['shortest_edge'], proc_size['shortest_edge'])
+                image_tensors_map[item_id] = torch.zeros(3, placeholder_size[0], placeholder_size[1], dtype=torch.float)
+        
+        # Step 5: Assemble complete features and update caches
+        for idx, item_id in zip(uncached_indices, uncached_items):
+            # Get non-image features
+            non_image_feats = non_image_features_map.get(item_id)
+            if non_image_feats is None:
+                # Create fallback features
+                main_tokenizer_max_len = getattr(self.dataset.tokenizer, 'model_max_length', 128)
+                num_features = len(self.dataset.numerical_feat_cols) if self.dataset.numerical_feat_cols else 7
+                
+                non_image_feats = {
+                    'text_input_ids': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'text_attention_mask': torch.zeros(main_tokenizer_max_len, dtype=torch.long),
+                    'numerical_features': torch.zeros(num_features, dtype=torch.float32)
+                }
+                
+                if self.dataset.clip_tokenizer_for_contrastive:
+                    non_image_feats['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
+                    non_image_feats['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
+            
+            # Get image tensor
+            image_tensor = image_tensors_map.get(item_id, torch.zeros(3, 224, 224, dtype=torch.float))
+            
+            # Combine all features
+            complete_features = {**non_image_feats, 'image': image_tensor}
+            
+            # Update L1 cache
+            self.item_features_cache[item_id] = complete_features
+            
+            # Update features list
+            features_list[idx] = complete_features
+        
+        return features_list
 
         # Combine non-image features (from L2 cache or freshly processed) and image tensor
         # Ensure non_image_features is not None before trying to merge
@@ -779,3 +876,403 @@ class Recommender:
     def save_item_features_cache(self, cache_path: str) -> None:
         """Alias for save_embeddings_cache for backward compatibility."""
         self.save_embeddings_cache(cache_path)
+
+    def get_recommendations_parallel(
+        self,
+        user_id: str,
+        top_k: int = 10,
+        filter_seen: bool = True,
+        candidates: Optional[List[str]] = None,
+        num_workers: int = 4,
+        chunk_size: int = 5000
+    ) -> List[Tuple[str, float]]:
+        """
+        Get top-k recommendations using parallel processing.
+        
+        Args:
+            user_id: User ID
+            top_k: Number of recommendations
+            filter_seen: Whether to filter already seen items
+            candidates: Optional list of candidate items
+            num_workers: Number of parallel workers
+            chunk_size: Size of chunks for parallel processing
+        """
+        # Get user index
+        try:
+            user_idx: int = self.dataset.user_encoder.transform([user_id])[0]
+        except Exception as e:
+            print(f"User {user_id} not found in training data or encoder error: {e}")
+            return []
+        
+        # Get candidate items
+        if candidates is None:
+            candidates = list(self.dataset.item_encoder.classes_)
+        
+        # Filter seen items if requested
+        if filter_seen:
+            user_items_history: set = self.dataset.get_user_history(user_id)
+            candidates = [item for item in candidates if item not in user_items_history]
+        
+        if not candidates:
+            return []
+        
+        # Score items in parallel
+        scores = self._score_items_parallel(
+            user_idx, 
+            candidates, 
+            num_workers=num_workers,
+            chunk_size=chunk_size
+        )
+        
+        # Sort and return top-k
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:top_k]
+    
+    def _score_items_parallel(
+        self,
+        user_idx: int,
+        items: List[str],
+        num_workers: int = 4,
+        chunk_size: int = 5000
+    ) -> List[Tuple[str, float]]:
+        """Score items using parallel processing"""
+        
+        # Split items into chunks
+        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        
+        # Use ThreadPoolExecutor for I/O-bound feature loading
+        all_scores = []
+        
+        # Create a worker function that includes all necessary context
+        def process_chunk(chunk_items: List[str]) -> List[Tuple[str, float]]:
+            return self._score_item_batch_optimized(user_idx, chunk_items)
+        
+        # Process chunks in parallel
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all chunks
+            future_to_chunk = {
+                executor.submit(process_chunk, chunk): i 
+                for i, chunk in enumerate(chunks)
+            }
+            
+            # Collect results as they complete
+            with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
+                for future in as_completed(future_to_chunk):
+                    chunk_idx = future_to_chunk[future]
+                    try:
+                        chunk_scores = future.result()
+                        all_scores.extend(chunk_scores)
+                        pbar.update(1)
+                    except Exception as e:
+                        print(f"Error processing chunk {chunk_idx}: {e}")
+                        pbar.update(1)
+        
+        return all_scores
+    
+    def _score_item_batch_optimized(
+        self, 
+        user_idx: int, 
+        item_ids: List[str],
+        batch_size: int = 125
+    ) -> List[Tuple[str, float]]:
+        """
+        Optimized batch scoring with sub-batching for GPU efficiency.
+        This method processes a chunk of items in smaller GPU batches.
+        """
+        all_scores = []
+        
+        # Process in sub-batches for GPU
+        for i in range(0, len(item_ids), batch_size):
+            sub_batch = item_ids[i:i + batch_size]
+            scores = self._score_item_batch(user_idx, sub_batch)
+            all_scores.extend(scores)
+        
+        return all_scores
+
+
+class ParallelScoringDataset(torch.utils.data.Dataset):
+    """Dataset for parallel scoring of items"""
+    
+    def __init__(
+        self,
+        user_idx: int,
+        item_ids: List[str],
+        recommender: 'Recommender',
+        batch_feature_loading: bool = True
+    ):
+        self.user_idx = user_idx
+        self.item_ids = item_ids
+        self.recommender = recommender
+        self.batch_feature_loading = batch_feature_loading
+        
+        # Pre-compute item indices
+        self.valid_items = []
+        self.item_indices = []
+        
+        for item_id in item_ids:
+            try:
+                item_idx = recommender.dataset.item_encoder.transform([item_id])[0]
+                self.valid_items.append(item_id)
+                self.item_indices.append(item_idx)
+            except:
+                continue
+    
+    def __len__(self):
+        return len(self.valid_items)
+    
+    def __getitem__(self, idx):
+        item_id = self.valid_items[idx]
+        item_idx = self.item_indices[idx]
+        
+        # Get features (will use cache if available)
+        features = self.recommender._get_item_features(item_id)
+        
+        if features is None:
+            # Return placeholder
+            features = self._get_placeholder_features()
+        
+        return {
+            'item_id': item_id,
+            'item_idx': item_idx,
+            'user_idx': self.user_idx,
+            **features
+        }
+    
+    def _get_placeholder_features(self):
+        """Get placeholder features with correct dimensions"""
+        # Implementation similar to what's in _get_item_features
+        return {
+            'image': torch.zeros(3, 224, 224),
+            'text_input_ids': torch.zeros(128, dtype=torch.long),
+            'text_attention_mask': torch.zeros(128, dtype=torch.long),
+            'numerical_features': torch.zeros(7)
+        }
+    
+    def preload_features_parallel(
+        self,
+        item_ids: List[str],
+        num_workers: int = 4,
+        chunk_size: int = 1000
+    ) -> None:
+        """
+        Pre-load features for items in parallel to warm up caches.
+        This is especially useful before evaluation.
+        """
+        # Split items into chunks
+        chunks = [item_ids[i:i + chunk_size] for i in range(0, len(item_ids), chunk_size)]
+        
+        def load_chunk_features(chunk_items: List[str]) -> Dict[str, Dict[str, torch.Tensor]]:
+            """Load features for a chunk of items"""
+            chunk_features = {}
+            
+            # Use the batch feature loader
+            features_list = self._get_batch_features(chunk_items)
+            
+            for item_id, features in zip(chunk_items, features_list):
+                if features is not None:
+                    chunk_features[item_id] = features
+            
+            return chunk_features
+        
+        # Process chunks in parallel
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(load_chunk_features, chunk) for chunk in chunks]
+            
+            with tqdm(total=len(chunks), desc="Pre-loading features") as pbar:
+                for future in as_completed(futures):
+                    try:
+                        chunk_features = future.result()
+                        # Update L1 cache
+                        self.item_features_cache.update(chunk_features)
+                        pbar.update(1)
+                    except Exception as e:
+                        print(f"Error loading chunk: {e}")
+                        pbar.update(1)
+        
+        print(f"Pre-loaded features for {len(self.item_features_cache)} items")
+
+    def _score_items_with_dataloader(
+        self,
+        user_idx: int,
+        items: List[str],
+        batch_size: int = 125,
+        num_workers: int = 4
+    ) -> List[Tuple[str, float]]:
+        """Score items using PyTorch DataLoader for true parallel processing"""
+        
+        # Create dataset
+        dataset = ParallelScoringDataset(user_idx, items, self)
+        
+        # Create DataLoader with multiple workers
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=True,
+            prefetch_factor=2 if num_workers > 0 else None,
+            persistent_workers=True if num_workers > 0 else False
+        )
+        
+        all_scores = []
+        
+        # Process batches
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Scoring batches"):
+                # Move batch to device
+                batch_user_idx = batch['user_idx'].to(self.device)
+                batch_item_idx = batch['item_idx'].to(self.device)
+                batch_images = batch['image'].to(self.device)
+                batch_text_ids = batch['text_input_ids'].to(self.device)
+                batch_text_masks = batch['text_attention_mask'].to(self.device)
+                batch_numerical = batch['numerical_features'].to(self.device)
+                
+                # Prepare model input
+                model_input = {
+                    'user_idx': batch_user_idx,
+                    'item_idx': batch_item_idx,
+                    'image': batch_images,
+                    'text_input_ids': batch_text_ids,
+                    'text_attention_mask': batch_text_masks,
+                    'numerical_features': batch_numerical
+                }
+                
+                # Add CLIP inputs if available
+                if 'clip_text_input_ids' in batch:
+                    model_input['clip_text_input_ids'] = batch['clip_text_input_ids'].to(self.device)
+                    model_input['clip_text_attention_mask'] = batch['clip_text_attention_mask'].to(self.device)
+                
+                # Get predictions
+                output = self.model(**model_input)
+                if isinstance(output, tuple):
+                    scores = output[0].squeeze()
+                else:
+                    scores = output.squeeze()
+                
+                # Collect results
+                item_ids = batch['item_id']
+                for item_id, score in zip(item_ids, scores.cpu().numpy()):
+                    all_scores.append((item_id, float(score)))
+        
+        return all_scores
+
+
+class ParallelScoringDataset(torch.utils.data.Dataset):
+    """Dataset for parallel scoring of items"""
+    
+    def __init__(
+        self,
+        user_idx: int,
+        item_ids: List[str],
+        recommender: 'Recommender',
+        batch_feature_loading: bool = True
+    ):
+        self.user_idx = user_idx
+        self.item_ids = item_ids
+        self.recommender = recommender
+        self.batch_feature_loading = batch_feature_loading
+        
+        # Pre-compute item indices
+        self.valid_items = []
+        self.item_indices = []
+        
+        for item_id in item_ids:
+            try:
+                item_idx = recommender.dataset.item_encoder.transform([item_id])[0]
+                self.valid_items.append(item_id)
+                self.item_indices.append(item_idx)
+            except:
+                continue
+    
+    def __len__(self):
+        return len(self.valid_items)
+    
+    def __getitem__(self, idx):
+        item_id = self.valid_items[idx]
+        item_idx = self.item_indices[idx]
+        
+        # Get features (will use cache if available)
+        features = self.recommender._get_item_features(item_id)
+        
+        if features is None:
+            # Return placeholder
+            features = self._get_placeholder_features()
+        
+        return {
+            'item_id': item_id,
+            'item_idx': item_idx,
+            'user_idx': self.user_idx,
+            **features
+        }
+    
+    def _get_placeholder_features(self):
+        """Get placeholder features with correct dimensions"""
+        return {
+            'image': torch.zeros(3, 224, 224),
+            'text_input_ids': torch.zeros(128, dtype=torch.long),
+            'text_attention_mask': torch.zeros(128, dtype=torch.long),
+            'numerical_features': torch.zeros(7)
+        }
+
+def _score_items_with_dataloader(
+    self,
+    user_idx: int,
+    items: List[str],
+    batch_size: int = 125,
+    num_workers: int = 4
+) -> List[Tuple[str, float]]:
+    """Score items using PyTorch DataLoader for true parallel processing"""
+    
+    # Create dataset
+    dataset = ParallelScoringDataset(user_idx, items, self)
+    
+    # Create DataLoader with multiple workers
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=True if num_workers > 0 else False
+    )
+    
+    all_scores = []
+    
+    # Process batches
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Scoring batches"):
+            # Move batch to device
+            batch_user_idx = batch['user_idx'].to(self.device)
+            batch_item_idx = batch['item_idx'].to(self.device)
+            batch_images = batch['image'].to(self.device)
+            batch_text_ids = batch['text_input_ids'].to(self.device)
+            batch_text_masks = batch['text_attention_mask'].to(self.device)
+            batch_numerical = batch['numerical_features'].to(self.device)
+            
+            # Prepare model input
+            model_input = {
+                'user_idx': batch_user_idx,
+                'item_idx': batch_item_idx,
+                'image': batch_images,
+                'text_input_ids': batch_text_ids,
+                'text_attention_mask': batch_text_masks,
+                'numerical_features': batch_numerical
+            }
+            
+            # Add CLIP inputs if available
+            if 'clip_text_input_ids' in batch:
+                model_input['clip_text_input_ids'] = batch['clip_text_input_ids'].to(self.device)
+                model_input['clip_text_attention_mask'] = batch['clip_text_attention_mask'].to(self.device)
+            
+            # Get predictions
+            output = self.model(**model_input)
+            if isinstance(output, tuple):
+                scores = output[0].squeeze()
+            else:
+                scores = output.squeeze()
+            
+            # Collect results
+            item_ids = batch['item_id']
+            for item_id, score in zip(item_ids, scores.cpu().numpy()):
+                all_scores.append((item_id, float(score)))
+    
+    return all_scores
