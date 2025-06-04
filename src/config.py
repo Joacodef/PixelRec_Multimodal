@@ -167,6 +167,15 @@ class OfflineImageCompressionConfig: # Ensure this dataclass is defined
     resize_target_longest_edge: Optional[int] = 1024
 
 @dataclass
+class ImageCacheConfig:
+    """Configuration for image caching behavior"""
+    strategy: str = 'hybrid'  # 'hybrid', 'disk', 'memory', 'disabled'
+    max_memory_items: int = 1000
+    cache_directory: str = 'data/cache/image_tensors'
+    precompute_at_startup: bool = False
+    preprocessing_batch_size: int = 100
+
+@dataclass
 class DataConfig:
     """Data loading and preprocessing configuration parameters"""
     item_info_path: str = 'data/raw/item_info/Pixel200K.csv'
@@ -194,6 +203,7 @@ class DataConfig:
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
     cache_processed_images: bool = False
+    image_cache_config: ImageCacheConfig = field(default_factory=ImageCacheConfig)
 
 @dataclass
 class RecommendationConfig:

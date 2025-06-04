@@ -100,6 +100,11 @@ def main():
     training_config = config.training
     print(f"Loaded configuration from {args.config}")
 
+    if not hasattr(data_config, 'image_cache_config'):
+        from src.config import ImageCacheConfig
+        data_config.image_cache_config = ImageCacheConfig()
+        print("Warning: image_cache_config not found in config file. Using defaults.")
+
     # Determine the image folder to be used by the Dataset
     effective_image_folder = data_config.image_folder
     if hasattr(data_config, 'offline_image_compression') and \
@@ -139,40 +144,81 @@ def main():
         # Initialize and manage the shared image cache
         shared_image_cache = None
         if cache_images_flag:
-            cache_directory_path = Path(config.checkpoint_dir) / 'image_tensor_cache'
-            shared_image_cache = SharedImageCache(cache_path=cache_directory_path) 
+            # Use the new image_cache_config from data_config
+            cache_config = data_config.image_cache_config
+            cache_directory_path = Path(cache_config.cache_directory)
             
-            # Load existing cache if available
+            print(f"Initializing image cache:")
+            print(f"  Strategy: {cache_config.strategy}")
+            print(f"  Max memory items: {cache_config.max_memory_items}")
+            print(f"  Cache directory: {cache_directory_path}")
+            
+            shared_image_cache = SharedImageCache(
+                cache_path=cache_directory_path,
+                max_memory_items=cache_config.max_memory_items,
+                strategy=cache_config.strategy
+            )
+            
+            # Load existing cache information if available
             shared_image_cache.load_from_disk()
             
-            # Precompute all images if cache is empty or force recompute
-            if not shared_image_cache.cache:
-                print("\nPrecomputing all images for cache...")
+            # Determine if we should precompute images
+            should_precompute = False
+            if cache_config.precompute_at_startup:
+                should_precompute = True
+                print("Precomputing requested via config...")
+            elif cache_config.strategy in ['hybrid', 'disk']:
+                # Check if cache directory is empty or doesn't exist
+                if cache_directory_path.exists():
+                    cached_files = list(cache_directory_path.glob("*.pt"))
+                    if len(cached_files) == 0:
+                        should_precompute = True
+                        print("Cache directory is empty, will precompute...")
+                    else:
+                        print(f"Found {len(cached_files)} cached files, skipping precomputation")
+                else:
+                    should_precompute = True
+                    print("Cache directory doesn't exist, will precompute...")
+            else:
+                print(f"Strategy '{cache_config.strategy}' doesn't require disk precomputation")
+            
+            if should_precompute:
+                print(f"\nPrecomputing images with batch size {cache_config.preprocessing_batch_size}...")
+                
                 # Get all unique item IDs from the full item info
                 all_item_ids = item_info_df_full['item_id'].unique().tolist()
+                print(f"Found {len(all_item_ids)} unique items to process")
                 
                 # Create a temporary dataset to get the image processor
+                print("Creating temporary dataset for image processor...")
                 temp_dataset = MultimodalDataset(
                     interactions_df=pd.DataFrame({'user_id': [], 'item_id': []}),
-                    item_info_df=item_info_df_full, # Use full item info to get correct image processor
+                    item_info_df=item_info_df_full,
                     image_folder=effective_image_folder,
                     vision_model_name=model_config.vision_model,
                     language_model_name=model_config.language_model,
                     create_negative_samples=False,
-                    cache_processed_images=False  # Do not use cache for this temporary dataset
+                    cache_processed_images=False  # Don't use cache for this temporary dataset
                 )
                 
                 # Precompute all images and store in the shared cache
+                print("Starting image preprocessing...")
                 shared_image_cache.precompute_all_images(
                     item_ids=all_item_ids,
                     image_folder=effective_image_folder,
                     image_processor=temp_dataset.image_processor,
-                    force_recompute=False 
+                    force_recompute=False,
+                    batch_size=cache_config.preprocessing_batch_size
                 )
                 
-                # Save the updated cache to disk
-                # shared_image_cache.save_to_disk() # Will save to the directory
-                print(f"Image cache processed and saved to {cache_directory_path}")
+                print("Image cache preprocessing completed!")
+                shared_image_cache.print_stats()
+            else:
+                print("Using existing cache or skipping precomputation")
+                if hasattr(shared_image_cache, 'print_stats'):
+                    shared_image_cache.print_stats()
+        else:
+            print("Image caching is disabled")
 
         # Handle numerical scaler fitting or loading
         numerical_scaler = None
@@ -183,6 +229,7 @@ def main():
             else:
                 print(f"Scaler not found at {scaler_path_obj}. Fitting a new one...")
                 numerical_scaler = fit_numerical_scaler(item_info_df_full, data_config.numerical_features_cols, data_config.numerical_normalization_method, scaler_path_obj)
+
 
         print("\nCreating dataset for encoder fitting...")
         # Create a full dataset instance to fit the global user and item encoders

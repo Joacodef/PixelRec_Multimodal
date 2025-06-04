@@ -41,22 +41,19 @@ class PretrainedMultimodalRecommender(nn.Module):
         contrastive_temperature: float = 0.07
     ):
         super(PretrainedMultimodalRecommender, self).__init__()
-
-        # FIRST: Store model names as instance variables
-        self.vision_model_name = vision_model_name
-        self.language_model_name = language_model_name
-
-        # THEN: Set configs and validate
+        
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
-        
-        # NOW: Validate configurations
-        self._validate_model_configs()
-        
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
+        self.language_model_name = language_model_name
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
         self.num_numerical_features = 7
+
+        self.vision_model_name = vision_model_name
+
+        # NOW: Validate configurations
+        self._validate_model_configs()
         
         # Architectural parameters
         self.num_attention_heads = num_attention_heads
