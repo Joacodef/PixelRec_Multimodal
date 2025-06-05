@@ -168,26 +168,29 @@ class Trainer:
                 'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                 'numerical_features': batch['numerical_features'],
             }
-            # Add CLIP specific inputs if they exist in the batch
             if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
             if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
 
-            output, vision_features, text_features = None, None, None
+            # Initialize features for loss to None
+            vision_features_for_loss = None
+            text_features_for_loss = None
+
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                 model_call_args['return_embeddings'] = True
+                # model.forward returns: output, vision_for_contrastive, text_for_contrastive, projected_vision_main_task_emb
+                # Unpack all 4 returned values; the fourth is ignored here.
                 output_tuple = self.model(**model_call_args)
-                if isinstance(output_tuple, tuple) and len(output_tuple) >= 3: # Ensure it's a tuple with enough elements
-                     output, vision_features, text_features = output_tuple[0], output_tuple[1], output_tuple[2]
-                elif isinstance(output_tuple, torch.Tensor): # Model might return only output tensor if not all features generated
-                    output = output_tuple
-                else: # Unexpected output
-                    output = output_tuple[0] if isinstance(output_tuple, tuple) else output_tuple # Best guess or raise error
+                output, vision_features_for_loss, text_features_for_loss, _ = output_tuple
             else:
+                model_call_args['return_embeddings'] = False
                 output = self.model(**model_call_args)
+                # vision_features_for_loss and text_features_for_loss remain None
             
-            output = output.squeeze() # Ensure output is 1D
+            output = output.squeeze() # Ensure output is 1D for BCE loss
             loss_dict = self.criterion(
-                output, batch['label'], vision_features, text_features,
+                output, batch['label'], 
+                vision_features_for_loss, # Pass the correctly unpacked (or None) features
+                text_features_for_loss,   # Pass the correctly unpacked (or None) features
                 self.model.temperature if hasattr(self.model, 'temperature') else None
             )
             loss_dict['total'].backward()
@@ -229,32 +232,30 @@ class Trainer:
                     'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                     'numerical_features': batch['numerical_features'],
                 }
-                # *** ADDED THIS BLOCK FOR CLIP INPUTS ***
                 if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
-                # *** END OF ADDED BLOCK ***
                 
-                output_val, vision_features_val, text_features_val = None, None, None
-                # Determine if we need to ask for embeddings (e.g., if contrastive loss is part of validation)
-                # For simplicity, let's assume criterion for validation might also use these features
-                # if the main model is configured for contrastive learning.
+                # Initialize features for loss to None
+                vision_features_for_loss_val = None
+                text_features_for_loss_val = None
+
                 if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                     model_call_args_val['return_embeddings'] = True
+                    # model.forward returns: output, vision_for_contrastive, text_for_contrastive, projected_vision_main_task_emb
+                    # Unpack all 4 returned values; the fourth is ignored here.
                     output_tuple_val = self.model(**model_call_args_val)
-                    if isinstance(output_tuple_val, tuple) and len(output_tuple_val) >= 3:
-                        output_val, vision_features_val, text_features_val = output_tuple_val[0], output_tuple_val[1], output_tuple_val[2]
-                    elif isinstance(output_tuple_val, torch.Tensor):
-                         output_val = output_tuple_val
-                    else: # Unexpected
-                        output_val = output_tuple_val[0] if isinstance(output_tuple_val, tuple) else output_tuple_val
-                else: # No contrastive learning or not returning embeddings for validation
-                    model_call_args_val['return_embeddings'] = False # Explicitly set if not already default
+                    output_val, vision_features_for_loss_val, text_features_for_loss_val, _ = output_tuple_val
+                else:
+                    model_call_args_val['return_embeddings'] = False
                     output_val = self.model(**model_call_args_val)
+                    # vision_features_for_loss_val and text_features_for_loss_val remain None
 
                 output_val = output_val.squeeze()
 
                 loss_dict_val = self.criterion(
-                    output_val, batch['label'], vision_features_val, text_features_val,
+                    output_val, batch['label'], 
+                    vision_features_for_loss_val, # Pass the correctly unpacked (or None) features
+                    text_features_for_loss_val,   # Pass the correctly unpacked (or None) features
                     self.model.temperature if hasattr(self.model, 'temperature') else None
                 )
                 
@@ -270,13 +271,14 @@ class Trainer:
                     correct_preds += (predictions == batch['label']).sum().item()
                 total_samples += batch['label'].size(0)
         
-        len_val_loader = len(val_loader) if val_loader else 0 # Should not be 0 if this func is called
+        len_val_loader = len(val_loader) if val_loader else 0
         return {
             'total_loss': total_loss_val / len_val_loader if len_val_loader > 0 else 0,
             'bce_loss': bce_loss_val / len_val_loader if len_val_loader > 0 else 0,
             'contrastive_loss': contrastive_loss_val_val / len_val_loader if len_val_loader > 0 else 0,
             'accuracy': correct_preds / total_samples if total_samples > 0 else 0
         }
+
 
     def _batch_to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
