@@ -429,46 +429,7 @@ class MultimodalRecommender(nn.Module):
 
         # CHECK INPUT TO NUMERICAL PROJECTION
         check_tensor(numerical_features, "numerical_features (INPUT to projection)") # Use your existing helper
-
-        # Original projection call
-        # projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
-        
-        # --- START DEBUGGING self.numerical_projection ---
-        if debug_this_batch: # Or batch_idx == 96 specifically
-            print(f"\nDEBUGGING self.numerical_projection (debug_this_batch is True):")
-            x_num = numerical_features
-            if torch.isnan(x_num).any() or torch.isinf(x_num).any():
-                print("  INPUT numerical_features to numerical_projection itself contains NaN/Inf!")
-            else:
-                print("  INPUT numerical_features to numerical_projection is clean.")
-
-            for i_proj, proj_layer in enumerate(self.numerical_projection): # self.numerical_projection is nn.Sequential
-                x_num_before_layer = x_num
-                x_num = proj_layer(x_num)
-                is_nan_after_proj_layer = torch.isnan(x_num).any().item()
-                print(f"  After numerical_projection layer {i_proj} ({type(proj_layer).__name__}): shape={x_num.shape}, any_nan={is_nan_after_proj_layer}")
-                if isinstance(proj_layer, nn.Linear):
-                    print(f"    Linear weight mean_abs: {proj_layer.weight.abs().mean().item()}")
-                if is_nan_after_proj_layer:
-                    print(f"    Input to this projection layer had NaNs: {torch.isnan(x_num_before_layer).any().item()}")
-                    if torch.isfinite(x_num_before_layer).any():
-                        print(f"    Input finite min/max/mean: {x_num_before_layer[torch.isfinite(x_num_before_layer)].min().item()}, "
-                                f"{x_num_before_layer[torch.isfinite(x_num_before_layer)].max().item()}, "
-                                f"{x_num_before_layer[torch.isfinite(x_num_before_layer)].mean().item()}")
-                    else:
-                        print(f"    Input to this projection layer had no finite values.")
-                    projected_numerical_emb_main_task = x_num # Assign potentially NaN tensor
-                    # raise ValueError(f"NaN after numerical_projection layer {i_proj}") # Optionally raise error to stop
-                    break # Stop further projection if NaN found
-            projected_numerical_emb_main_task = x_num
-        else: # Normal execution path if not debugging this batch
-            projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
-        # --- END DEBUGGING self.numerical_projection ---
-        
-        check_tensor(projected_numerical_emb_main_task, "projected_numerical_emb_main_task (OUTPUT of projection)")
-
         projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
-        check_tensor(projected_numerical_emb_main_task, "projected_numerical_emb_main_task")
 
         # Features for Contrastive Loss (only if return_embeddings is True)
         vision_features_for_contrastive_loss = None
@@ -522,26 +483,6 @@ class MultimodalRecommender(nn.Module):
             x_before_layer = x
             x = layer_module(x)
             is_nan_after = torch.isnan(x).any().item()
-            if debug_this_batch:
-                print(f"DEBUG: After fusion layer {i} ({type(layer_module).__name__}): shape={x.shape}, any_nan={is_nan_after}")
-                if isinstance(layer_module, nn.BatchNorm1d):
-                    print(f"  BatchNorm running_mean: {layer_module.running_mean.abs().mean().item() if layer_module.running_mean is not None else 'N/A'}") # Print mean of abs values
-                    print(f"  BatchNorm running_var: {layer_module.running_var.abs().mean().item() if layer_module.running_var is not None else 'N/A'}")
-                    print(f"  BatchNorm weight mean: {layer_module.weight.abs().mean().item() if layer_module.weight is not None else 'N/A'}")
-                    print(f"  Input to BN had NaNs: {torch.isnan(x_before_layer).any().item()}")
-                    print(f"  Input to BN min/max/mean (finite): "
-                        f"{x_before_layer[torch.isfinite(x_before_layer)].min().item() if torch.isfinite(x_before_layer).any() else 'N/A'}, "
-                        f"{x_before_layer[torch.isfinite(x_before_layer)].max().item() if torch.isfinite(x_before_layer).any() else 'N/A'}, "
-                        f"{x_before_layer[torch.isfinite(x_before_layer)].mean().item() if torch.isfinite(x_before_layer).any() else 'N/A'}")
-
-            if is_nan_after and debug_this_batch: # Stop if NaN appears
-                print(f"STOPPING: NaN detected after fusion layer {i} ({type(layer_module).__name__})")
-                # To save tensors for offline debugging:
-                # torch.save(x_before_layer, f"debug_tensor_input_to_layer_{i}_{item_id if item_id else 'unknown'}.pt")
-                # torch.save(x, f"debug_tensor_output_of_layer_{i}_{item_id if item_id else 'unknown'}.pt")
-                # Or raise an error to stop and inspect
-                # raise ValueError(f"NaN detected after fusion layer {i} ({type(layer_module).__name__})")
-                #break # Or return x here to see the NaN propagate
         output = x
         check_tensor(output, "final_output (from self.fusion MLP)")
 

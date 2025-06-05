@@ -17,17 +17,6 @@ import dataclasses
 import wandb
 import os
 
-torch.autograd.set_detect_anomaly(True)
-
-# --- Add this block to check the environment variable ---
-cuda_launch_blocking_val = os.environ.get('CUDA_LAUNCH_BLOCKING')
-print(f"DEBUG: Value of CUDA_LAUNCH_BLOCKING environment variable: {cuda_launch_blocking_val}")
-if cuda_launch_blocking_val == "1":
-    print("DEBUG: CUDA_LAUNCH_BLOCKING is set to 1. CUDA operations will be synchronous.")
-else:
-    print("DEBUG: CUDA_LAUNCH_BLOCKING is NOT set to 1 or is not set at all. CUDA operations may be asynchronous.")
-# --- End of block ---
-
 # Add parent directory to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 

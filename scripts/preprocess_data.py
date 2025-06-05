@@ -115,7 +115,18 @@ class PreprocessingPipeline:
         interactions_df['item_id'] = interactions_df['item_id'].astype(str)
         interactions_df['user_id'] = interactions_df['user_id'].astype(str)
         
+        print("\nChecking for NaN values in numerical columns...")
+        for col in self.data_config.numerical_features_cols:
+            if col in item_info_df.columns:
+                nan_count = item_info_df[col].isna().sum()
+                if nan_count > 0:
+                    print(f"WARNING: {nan_count} NaN values found in column '{col}'")
+                    # Fill NaN values with 0 or median
+                    item_info_df[col] = item_info_df[col].fillna(0)
+                    print(f"Filled NaN values in '{col}' with 0")
+
         print(f"Loaded {len(item_info_df)} items and {len(interactions_df)} interactions")
+        
         return item_info_df, interactions_df
     
     def _clean_text_data(self, item_info_df):
@@ -178,6 +189,21 @@ class PreprocessingPipeline:
         if not numerical_cols:
             print("No numerical columns specified. Skipping scaler processing.")
             return
+
+        # First, fill NaN values
+        for col in numerical_cols:
+            if col in item_info_df.columns:
+                # Fill NaN with 0 or median
+                item_info_df[col] = item_info_df[col].fillna(0)
+        
+        # Then fit and apply scaler
+        if self.data_config.numerical_normalization_method != 'none':
+            # This should already be happening, but make sure it's working
+            self.numerical_processor.fit_scaler(
+                item_info_df, 
+                numerical_cols, 
+                self.data_config.numerical_normalization_method
+        )
         
         # Check if scaler already exists
         if scaler_path.exists():
@@ -251,6 +277,20 @@ class PreprocessingPipeline:
         except Exception as e:
             print(f"Error during feature caching: {e}")
             print("Continuing without feature caching...")
+
+    def clean_invalid_items(item_info_df, numerical_cols):
+        """Remove items where all numerical features are NaN"""
+        # Check which items have all NaN values
+        all_nan_mask = item_info_df[numerical_cols].isna().all(axis=1)
+        invalid_items = item_info_df[all_nan_mask]['item_id'].tolist()
+        
+        if invalid_items:
+            print(f"Found {len(invalid_items)} items with all NaN values: {invalid_items[:5]}...")
+            # Remove these items
+            item_info_df = item_info_df[~all_nan_mask]
+            print(f"Removed invalid items. Remaining items: {len(item_info_df)}")
+    
+    return item_info_df
     
     def _print_summary(self, item_info_df, interactions_df):
         """Print preprocessing summary"""

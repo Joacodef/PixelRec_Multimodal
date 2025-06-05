@@ -226,18 +226,23 @@ class MultimodalDataset(Dataset):
             )
 
             # Numerical features
-            numerical_values = [float(item_row.get(col, 0)) for col in self.numerical_feat_cols]
+            numerical_values = []
+            for col in self.numerical_feat_cols:
+                value = float(item_row.get(col, 0))
+                # Robust handling of invalid values
+                if not np.isfinite(value):  # Catches both NaN and Inf
+                    print(f"Warning: Invalid value {value} in column '{col}' for item {item_id}, using 0")
+                    value = 0.0
+                numerical_values.append(value)
+
             numerical_features_np = np.array(numerical_values, dtype=np.float32).reshape(1, -1)
 
             if self.numerical_scaler is not None and self.numerical_normalization_method not in ['none', 'log1p']:
                 try:
                     numerical_features_np = self.numerical_scaler.transform(numerical_features_np)
                 except Exception as e:
-                    print(f"Warning: Could not transform numerical features for item {item_id} with scaler: {e}. Using unscaled features.")
-            elif self.numerical_normalization_method == 'log1p':
-                if np.any(numerical_features_np < 0):
-                     print(f"Warning: log1p applied to negative values for item {item_id}")
-                numerical_features_np = np.log1p(numerical_features_np)
+                    print(f"Warning: Could not transform numerical features: {e}")
+
             numerical_features_tensor = torch.tensor(numerical_features_np.flatten(), dtype=torch.float32)
             # Ensure numerical_features_tensor has the correct fixed size
             expected_num_feat_len = len(self.numerical_feat_cols)
@@ -532,12 +537,13 @@ class MultimodalDataset(Dataset):
 
     def _get_item_numerical_features(self, item_id: str, item_row: pd.Series) -> torch.Tensor:
         """Extract numerical features from item row"""
-        return torch.tensor([
-            float(item_row.get('view_number', 0)),
-            float(item_row.get('comment_number', 0)),
-            float(item_row.get('thumbup_number', 0)),
-            float(item_row.get('share_number', 0)),
-            float(item_row.get('coin_number', 0)),
-            float(item_row.get('favorite_number', 0)),
-            float(item_row.get('barrage_number', 0)),
-        ], dtype=torch.float32)
+        numerical_values = []
+        for col in self.numerical_feat_cols:
+            value = float(item_row.get(col, 0))
+            # Replace NaN/Inf with 0
+            if np.isnan(value) or np.isinf(value):
+                print(f"Warning: NaN/Inf found in {col} for item {item_id}, replacing with 0")
+                value = 0.0
+            numerical_values.append(value)
+        
+        return torch.tensor(numerical_values, dtype=torch.float32)

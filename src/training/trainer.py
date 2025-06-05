@@ -172,11 +172,9 @@ class Trainer:
                 'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                 'numerical_features': batch['numerical_features'],
             }
-            # When preparing model_call_args or model_call_args_val
-            if batch_idx == 5: # Or whatever batch_idx causes NaNs, or if the NaN warning was triggered
-                model_call_args['debug_this_batch'] = True # or model_call_args_val
-            else:
-                model_call_args['debug_this_batch'] = False # or model_call_args_val
+           
+            # model_call_args['debug_this_batch'] = True # or model_call_args_val
+            
             # Adds CLIP-specific text inputs if they are present in the batch.
             if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
             if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
@@ -186,8 +184,6 @@ class Trainer:
             text_features_for_loss = None
             output_before_squeeze = None # Initialize
 
-            model_call_args['debug_this_batch'] = True
-
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                 model_call_args['return_embeddings'] = True
                 output_tuple = self.model(**model_call_args)
@@ -195,44 +191,9 @@ class Trainer:
             else:
                 model_call_args['return_embeddings'] = False
                 output_before_squeeze = self.model(**model_call_args)
-            # --- End of existing model call logic ---
-
-            # +++ START NEW DIAGNOSTIC (BEFORE SQUEEZE) +++
-            if model_call_args['debug_this_batch']: # Only for the problematic batch
-                is_nan_before_squeeze = torch.isnan(output_before_squeeze).any().item()
-                is_inf_before_squeeze = torch.isinf(output_before_squeeze).any().item()
-                print(f"\nTRAINER DEBUG (batch {batch_idx}): BEFORE squeeze:")
-                print(f"  output_before_squeeze contains NaN: {is_nan_before_squeeze}")
-                print(f"  output_before_squeeze contains Inf: {is_inf_before_squeeze}")
-                if not (is_nan_before_squeeze or is_inf_before_squeeze):
-                    print(f"  Min: {output_before_squeeze.min().item()}, Max: {output_before_squeeze.max().item()}, Mean: {output_before_squeeze.mean().item()}")
-                elif torch.isfinite(output_before_squeeze).any(): # If some values are finite
-                    finite_vals_pre_squeeze = output_before_squeeze[torch.isfinite(output_before_squeeze)]
-                    print(f"  Finite values in output_before_squeeze - min: {finite_vals_pre_squeeze.min().item()}, max: {finite_vals_pre_squeeze.max().item()}, mean: {finite_vals_pre_squeeze.mean().item()}")
-                else:
-                    print(f"  output_before_squeeze contains no finite values.")
-            # +++ END NEW DIAGNOSTIC (BEFORE SQUEEZE) +++
+            # --- End of existing model call logic ---           
             
-            output = output_before_squeeze.squeeze() # The squeeze operation
-
-            # +++ START EXISTING DIAGNOSTIC (AFTER SQUEEZE) +++
-            has_nan = torch.isnan(output).any()
-            has_inf = torch.isinf(output).any()
-
-            if has_nan or has_inf: # This is your existing check
-                print(f"\nWARNING: NaN or Inf detected in TRAINING output AFTER squeeze at batch_idx {batch_idx}!")
-                print(f"  output (after squeeze) contains NaN: {has_nan.item()}")
-                print(f"  output (after squeeze) contains Inf: {has_inf.item()}")
-                finite_values = output[torch.isfinite(output)]
-                if finite_values.numel() > 0:
-                    print(f"  Finite values in output (after squeeze) - min: {finite_values.min().item()}, max: {finite_values.max().item()}, mean: {finite_values.mean().item()}")
-                else:
-                    print("  output (after squeeze) contains no finite values (all NaN/Inf).")
-                
-                print(f"  Problematic TRAINING batch (idx {batch_idx}) details:")
-                if 'user_idx' in batch: print(f"    User indices (first 5): {batch['user_idx'][:5].tolist()}")
-                if 'item_idx' in batch: print(f"    Item indices (first 5): {batch['item_idx'][:5].tolist()}")
-            # +++ END EXISTING DIAGNOSTIC (AFTER SQUEEZE) +++
+            output = output_before_squeeze.squeeze() # The squeeze operation           
             
             # Calculates loss using the criterion.
             loss_dict = self.criterion(
@@ -305,11 +266,10 @@ class Trainer:
                     'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                     'numerical_features': batch['numerical_features'],
                 }
-                # When preparing model_call_args or model_call_args_val
-                if batch_idx == 5: # Or whatever batch_idx causes NaNs, or if the NaN warning was triggered
-                    model_call_args['debug_this_batch'] = True # or model_call_args_val
-                else:
-                    model_call_args['debug_this_batch'] = False # or model_call_args_val
+                # When preparing model_call_args_val for validation
+               
+                # model_call_args_val['debug_this_batch'] = True
+
                 # Adds CLIP-specific text inputs if they are present in the batch.
                 if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
