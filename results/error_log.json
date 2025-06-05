@@ -1,7 +1,0 @@
-{
-  "error_occurred": true,
-  "error_time": "2025-06-05T16:04:42.182152",
-  "error_type": "TypeError",
-  "error_message": "SimpleFeatureCache.__init__() got an unexpected keyword argument 'vision_model'",
-  "traceback": "Traceback (most recent call last):\n  File \"E:\\ProyectoRecsys\\repo\\scripts\\train.py\", line 321, in main\n    simple_cache_instance = SimpleFeatureCache(\n                            ^^^^^^^^^^^^^^^^^^^\nTypeError: SimpleFeatureCache.__init__() got an unexpected keyword argument 'vision_model'\n"
-}

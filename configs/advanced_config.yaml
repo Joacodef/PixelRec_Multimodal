@@ -30,17 +30,13 @@ model:
   # Projection layers (advanced)
   projection_hidden_dim: null       # Hidden dim in projections (null = direct projection)
   
-  # Cross-modal attention (enhanced model only)
-  use_cross_modal_attention: true   # Enable cross-modal attention
-  cross_modal_attention_weight: 0.5 # Weight for cross-modal features
-  
   # Advanced architectural choices
   final_activation: sigmoid         # Options: sigmoid, tanh, none
   init_method: xavier_uniform       # Options: xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
 
 training:
   # Basic training parameters
-  batch_size: 64
+  batch_size: 128
   epochs: 30
   learning_rate: 0.001
   weight_decay: 0.01               # L2 regularization
