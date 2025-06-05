@@ -237,10 +237,7 @@ class PreprocessingPipeline:
                 is_train_mode=False,
                 cache_features=False
             )
-            
-            # Finalize dataset setup
-            temp_dataset.finalize_setup()
-            
+
             # Precompute features
             success = self.feature_cache_processor.precompute_features(
                 item_info_df, temp_dataset

@@ -8,7 +8,7 @@ from typing import Optional, Any
 from tqdm import tqdm
 
 try:
-    from ..feature_cache import ProcessedFeatureCache
+    from ..simple_cache import SimpleFeatureCache as ProcessedFeatureCache
 except ImportError:
     ProcessedFeatureCache = None
 
