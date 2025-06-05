@@ -72,6 +72,8 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         if len(negative_candidates) < self.num_negatives:
             return negative_candidates
         
+        np.random.seed(42) 
+
         if self.sampling_strategy == 'random':
             return random.sample(negative_candidates, self.num_negatives)
         elif self.sampling_strategy == 'popularity':

@@ -133,11 +133,11 @@ data:
   # Data splitting configuration (advanced)
   splitting:
     random_state: 42
-    train_final_ratio: 0.40
+    train_final_ratio: 0.7
     val_final_ratio: 0.15
-    test_final_ratio: 0.45
-    min_interactions_per_user: 5
-    min_interactions_per_item: 5
+    test_final_ratio: 0.15
+    min_interactions_per_user: 10
+    min_interactions_per_item: 10
     validate_no_leakage: true
 
 recommendation:

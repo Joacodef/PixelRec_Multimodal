@@ -318,67 +318,118 @@ class MultimodalDataset(Dataset):
 
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
-        """Create positive and negative samples, using self.negative_sampling_ratio"""
+        # Creates positive samples and samples negative items for each user.
+        # This version is further optimized to work with item indices for sampling,
+        # reducing per-user array reconstruction overhead.
+
         if self.interactions.empty:
+            # Returns an empty DataFrame with predefined columns if there are no interactions.
             return pd.DataFrame(columns=['user_id', 'item_id', 'user_idx', 'item_idx', 'label'])
 
         positive_df = self.interactions.copy()
         if 'label' not in positive_df.columns:
+            # Assigns a 'label' of 1 to all positive interactions.
             positive_df['label'] = 1
-        
-        negative_samples = []
-        
+
+        negative_sample_records = [] # Stores negative samples as a list of tuples for efficiency.
+
+        # Ensure item encoder has been fitted and classes_ are available.
         if not hasattr(self.item_encoder, 'classes_') or self.item_encoder.classes_ is None or len(self.item_encoder.classes_) == 0:
-            all_item_ids_str_list = self.item_info_df_original['item_id'].astype(str).unique().tolist()
-            if not all_item_ids_str_list : # If no items from item_info either
-                 return positive_df.sample(frac=1, random_state=42).reset_index(drop=True) if not positive_df.empty else positive_df
-        else:
-            all_item_ids_str_list = self.item_encoder.classes_.tolist()
+            # Fallback if item encoder is not ready (e.g., empty interactions during init for encoder fitting)
+            # This part should ideally not be hit if dataset is used for training after proper init.
+            all_item_ids_str_list_temp = self.item_info_df_original['item_id'].astype(str).unique().tolist()
+            if not all_item_ids_str_list_temp:
+                 return positive_df.sample(frac=1, random_state=42).reset_index(drop=True) if not positive_df.empty else pd.DataFrame(columns=['user_id', 'item_id', 'user_idx', 'item_idx', 'label'])
+            # If item_encoder was not fitted but we have items from item_info, this logic is problematic
+            # as we need an encoder. For safety, if encoder isn't ready, just return positives.
+            # This scenario implies an issue with dataset initialization order or usage.
+            print("Warning: Item encoder not properly initialized with classes. Negative sampling might be incomplete or skipped.")
+            return positive_df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-        all_items_set = set(all_item_ids_str_list)
+        # Master array of all unique item indices (0 to n_items-1).
+        all_item_indices_global = np.arange(len(self.item_encoder.classes_))
+
+        # Ensures 'user_id' in interactions is string type for consistent grouping.
+        # The 'user_idx' column is assumed to be present from the __init__ method.
+        interactions_for_grouping = self.interactions.copy()
+        interactions_for_grouping['user_id_str_for_grouping'] = interactions_for_grouping['user_id'].astype(str)
         
-        unique_user_ids_str = self.interactions['user_id'].astype(str).unique()
+        # Groups interactions by the string representation of user_id.
+        grouped_user_interactions = interactions_for_grouping.groupby('user_id_str_for_grouping')
 
-        for user_id_str in tqdm(unique_user_ids_str, desc="Creating negative samples"):
-            user_positive_interactions = self.interactions[self.interactions['user_id'].astype(str) == user_id_str]
-            user_positive_items_set = set(user_positive_interactions['item_id'].astype(str))
+        for user_id_str, user_interactions_df in tqdm(grouped_user_interactions, desc="Creating negative samples"):
+            # Retrieves the pre-computed integer index for the user.
+            user_idx_val = user_interactions_df['user_idx'].iloc[0]
+
+            # Collects all unique item IDs (strings) the current user has interacted with.
+            user_positive_items_str_set = set(user_interactions_df['item_id'].astype(str))
             
-            available_negative_items = list(all_items_set - user_positive_items_set)
-            
-            if not available_negative_items:
+            if not user_positive_items_str_set: # Should not happen if users have interactions
                 continue
 
-            num_positives_for_user = len(user_positive_items_set)
+            try:
+                # Transforms the user's positive item strings to their integer indices.
+                user_positive_item_indices_arr = self.item_encoder.transform(list(user_positive_items_str_set))
+            except ValueError:
+                # Handles cases where some positive items might not be in the encoder (data inconsistency).
+                # print(f"Warning: Could not transform some positive items for user {user_id_str}.") # Optional
+                continue
+            
+            # Creates a boolean mask to identify positive items in the global list of all item indices.
+            is_positive_mask = np.zeros(len(all_item_indices_global), dtype=bool)
+            is_positive_mask[user_positive_item_indices_arr] = True
+            
+            # Derives the array of available negative indices by inverting the mask.
+            available_negative_indices = all_item_indices_global[~is_positive_mask]
+            
+            if len(available_negative_indices) == 0:
+                # Skips user if no items are available for negative sampling.
+                continue
+
+            num_positives_for_user = len(user_positive_items_str_set)
+            # Calculates the number of negative samples to generate.
             num_negatives_to_sample = int(num_positives_for_user * self.negative_sampling_ratio)
-            num_negatives_to_sample = min(num_negatives_to_sample, len(available_negative_items))
+            # Ensures not to sample more negatives than available.
+            num_negatives_to_sample = min(num_negatives_to_sample, len(available_negative_indices))
 
             if num_negatives_to_sample > 0:
-                sampled_negatives_str_list = np.random.choice(available_negative_items, num_negatives_to_sample, replace=False)
-                
+                # Randomly samples indices from the available negative indices.
+                # These sampled indices are directly the item_idx_val for negative samples.
+                np.random.seed(42)
+                sampled_item_idx_vals_arr = np.random.choice(
+                    available_negative_indices,
+                    num_negatives_to_sample,
+                    replace=False
+                )
+
                 try:
-                    user_idx_val = self.user_encoder.transform([user_id_str])[0]
-                except ValueError: # Should not happen if user_id_str comes from self.interactions
-                    print(f"User {user_id_str} not in encoder during negative sampling.")
+                    # Converts the sampled item indices back to their original string IDs for record-keeping.
+                    sampled_negatives_str_list = self.item_encoder.inverse_transform(sampled_item_idx_vals_arr)
+                except ValueError:
+                    # Should be rare if sampled_item_idx_vals_arr contains valid indices.
+                    # print(f"Warning: Could not inverse_transform some sampled negative indices for user {user_id_str}.") # Optional
                     continue
-
-                for neg_item_str in sampled_negatives_str_list:
-                    try:
-                        item_idx_val = self.item_encoder.transform([neg_item_str])[0]
-                    except ValueError: # Can happen if all_items_set was augmented from item_info
-                        print(f"Item {neg_item_str} not in encoder during negative sampling.")
-                        continue
-                        
-                    negative_samples.append({
-                        'user_id': user_id_str, 'item_id': neg_item_str,
-                        'user_idx': user_idx_val, 'item_idx': item_idx_val,
-                        'label': 0
-                    })
+                
+                # Appends negative sample data as tuples.
+                for neg_item_str, item_idx_val in zip(sampled_negatives_str_list, sampled_item_idx_vals_arr):
+                    negative_sample_records.append((
+                        user_id_str,
+                        neg_item_str,
+                        user_idx_val,
+                        item_idx_val,
+                        0 # label for negative samples
+                    ))
         
-        negative_df = pd.DataFrame(negative_samples) if negative_samples else pd.DataFrame(columns=positive_df.columns)
+        # Defines columns for the negative samples DataFrame.
+        negative_df_columns = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
+        # Converts the list of tuples (records) into a pandas DataFrame.
+        negative_df = pd.DataFrame(negative_sample_records, columns=negative_df_columns) if negative_sample_records else pd.DataFrame(columns=positive_df.columns)
         
+        # Concatenates the DataFrame of positive interactions with the DataFrame of negative samples.
         all_samples = pd.concat([positive_df, negative_df], ignore_index=True)
+        
+        # Shuffles all samples randomly for unbiased training and resets the DataFrame index.
         return all_samples.sample(frac=1, random_state=42).reset_index(drop=True)
-
 
     def get_item_popularity(self) -> Dict[str, int]: # Changed value to int for counts
         """Get item popularity scores (counts)"""

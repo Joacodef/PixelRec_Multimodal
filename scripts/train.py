@@ -12,7 +12,6 @@ import pandas as pd
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from src.data.processors import NumericalProcessor
 from typing import List
 import dataclasses
 import wandb
@@ -24,6 +23,7 @@ from src.config import Config, TextAugmentationConfig
 from src.data.dataset import MultimodalDataset
 from src.models.multimodal import MultimodalRecommender
 from src.training.trainer import Trainer
+from src.data.processors import NumericalProcessor
 
 # Use simplified cache instead of old cache system
 try:
