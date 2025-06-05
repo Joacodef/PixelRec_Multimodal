@@ -32,7 +32,7 @@ data:
   cache_config:
     enabled: true
     max_memory_items: 1000
-    cache_directory: 'data/cache/features'
+    cache_directory: 'cache'
     use_disk: false            
 
   # Numerical features

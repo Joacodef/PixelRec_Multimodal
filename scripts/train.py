@@ -295,7 +295,7 @@ def main():
             
             # Use config cache_directory or auto-generated one
             effective_cache_dir = cache_config.cache_directory
-            if cache_config.cache_directory == 'data/cache/features':
+            if cache_config.cache_directory == 'cache':
                 # Default config path, use model-specific instead
                 effective_cache_dir = auto_cache_dir
             
@@ -318,13 +318,16 @@ def main():
             else:
                 print(f"  → Cache directory is empty - features will be computed during training")
             
+            base_cache_directory_from_config = cache_config.cache_directory
+
             simple_cache_instance = SimpleFeatureCache(
+                vision_model=model_config.vision_model,         
+                language_model=model_config.language_model,     
+                base_cache_dir=base_cache_directory_from_config, 
                 max_memory_items=cache_config.max_memory_items,
-                cache_dir=effective_cache_dir,
-                use_disk=cache_config.use_disk,
-                vision_model=model_config.vision_model,
-                language_model=model_config.language_model
+                use_disk=cache_config.use_disk
             )
+
             simple_cache_instance.print_stats()
         else:
             print("Feature caching is disabled")

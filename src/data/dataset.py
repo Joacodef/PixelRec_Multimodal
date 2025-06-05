@@ -78,12 +78,14 @@ class MultimodalDataset(Dataset):
             
             print(f"    - Cache directory: {effective_cache_dir}")
             
+            base_dir_for_sfc = cache_dir if cache_dir else "cache"
+
             self.feature_cache = SimpleFeatureCache(
-                max_memory_items=cache_max_items,
-                cache_dir=effective_cache_dir,
-                use_disk=cache_to_disk,
-                vision_model=vision_model_name,
-                language_model=language_model_name
+                vision_model=vision_model_name,       
+                language_model=language_model_name,   
+                base_cache_dir=base_dir_for_sfc,
+                max_memory_items=cache_max_items,     
+                use_disk=cache_to_disk               
             )
         else:
             self.feature_cache = None
