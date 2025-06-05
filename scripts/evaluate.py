@@ -13,6 +13,7 @@ import pickle
 from tqdm import tqdm
 from typing import Optional, Any, Union # Added Any for ProcessedFeatureCache if import fails
 import random
+import warnings
 
 # Add parent directory
 import sys
@@ -84,6 +85,8 @@ def create_recommender(
 
 
 def main():
+
+    warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.clip.modeling_clip")
     parser = argparse.ArgumentParser(description="Evaluate model performance")
     parser.add_argument(
         '--config',
@@ -153,11 +156,11 @@ def main():
     )
 
     parser.add_argument(
-    '--use_sampling',
-    action='store_true',
-    default=True,  # Enable by default
-    help='Use negative sampling for evaluation (much faster)'
-    )
+        '--use_sampling',
+        action='store_true',
+        default=True,  # Enable by default
+        help='Use negative sampling for evaluation (much faster)'
+        )
     parser.add_argument(
         '--no_sampling',
         dest='use_sampling',

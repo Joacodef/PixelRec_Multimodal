@@ -1,6 +1,6 @@
 model:
   model_class: pretrained
-  vision_model: clip
+  vision_model: resnet
   language_model: sentence-bert
   embedding_dim: 64
   freeze_vision: true
@@ -98,10 +98,14 @@ data:
   cache_processed_images: true
   image_cache_config:
     strategy: hybrid
-    max_memory_items: 1500
+    max_memory_items: 1000
     cache_directory: data/cache/image_tensors
     precompute_at_startup: false
     preprocessing_batch_size: 50
+  processed_features_cache_config:
+    strategy: hybrid
+    max_memory_items: 5000
+    cache_directory: data/cache/processed_features
 recommendation:
   top_k: 50
   diversity_weight: 0.3

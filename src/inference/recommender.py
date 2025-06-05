@@ -70,7 +70,7 @@ class Recommender:
         top_k: int = 10,
         filter_seen: bool = True,
         candidates: Optional[List[str]] = None,
-        batch_size: int = 125 
+        batch_size: int = 256 
     ) -> List[Tuple[str, float]]:
         """Get top-k recommendations for a user.
         
@@ -182,7 +182,7 @@ class Recommender:
         self, 
         user_idx: int, 
         items: List[str],
-        batch_size: int = 125,  
+        batch_size: int = 256,  
         show_progress: bool = True
     ) -> List[Tuple[str, float]]:
         """Score a list of items for a user using batched processing"""
@@ -339,7 +339,7 @@ class Recommender:
         self, 
         user_idx: int, 
         items: List[str],
-        batch_size: int = 125
+        batch_size: int = 256
     ) -> List[Dict[str, Any]]:
         """Score items and return with embeddings and other info using batched processing"""
         scored_items_list: List[Dict[str, Any]] = []
@@ -884,88 +884,90 @@ class Recommender:
         filter_seen: bool = True,
         candidates: Optional[List[str]] = None,
         num_workers: int = 4,
-        chunk_size: int = 5000
+        chunk_size: int = 5000,
+        show_progress: bool = False # Added parameter to control internal tqdm
     ) -> List[Tuple[str, float]]:
-        """
-        Get top-k recommendations using parallel processing.
-        
-        Args:
-            user_id: User ID
-            top_k: Number of recommendations
-            filter_seen: Whether to filter already seen items
-            candidates: Optional list of candidate items
-            num_workers: Number of parallel workers
-            chunk_size: Size of chunks for parallel processing
-        """
+        """Get top-k recommendations using parallel processing."""
         # Get user index
         try:
             user_idx: int = self.dataset.user_encoder.transform([user_id])[0]
         except Exception as e:
-            print(f"User {user_id} not found in training data or encoder error: {e}")
+            # print(f"User {user_id} not found in training data or encoder error: {e}") # Commenting out for cleaner output during normal runs
             return []
         
         # Get candidate items
+        current_candidates: List[str]
         if candidates is None:
-            candidates = list(self.dataset.item_encoder.classes_)
+            if hasattr(self.dataset, 'item_encoder') and hasattr(self.dataset.item_encoder, 'classes_') and self.dataset.item_encoder.classes_ is not None:
+                current_candidates = list(self.dataset.item_encoder.classes_)
+            else:
+                # print(f"Warning: Item encoder or classes not available for user {user_id}. Returning empty recommendations.") # Cleaner output
+                return []
+        else:
+            current_candidates = list(candidates)
         
         # Filter seen items if requested
         if filter_seen:
             user_items_history: set = self.dataset.get_user_history(user_id)
-            candidates = [item for item in candidates if item not in user_items_history]
+            current_candidates = [item for item in current_candidates if item not in user_items_history]
         
-        if not candidates:
+        if not current_candidates:
             return []
         
         # Score items in parallel
-        scores = self._score_items_parallel(
+        scores: List[Tuple[str, float]] = self._score_items_parallel(
             user_idx, 
-            candidates, 
+            current_candidates, 
             num_workers=num_workers,
-            chunk_size=chunk_size
+            chunk_size=chunk_size,
+            show_progress=show_progress # Pass the flag here
         )
-        
+            
         # Sort and return top-k
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
-    
+
     def _score_items_parallel(
         self,
         user_idx: int,
         items: List[str],
-        num_workers: int = 4,
-        chunk_size: int = 5000
+        num_workers: int = 8,
+        chunk_size: int = 5000,
+        show_progress: bool = True # Added parameter
     ) -> List[Tuple[str, float]]:
-        """Score items using parallel processing"""
+        """Score items using parallel processing with controlled tqdm."""
         
-        # Split items into chunks
         chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        all_scores: List[Tuple[str, float]] = []
         
-        # Use ThreadPoolExecutor for I/O-bound feature loading
-        all_scores = []
-        
-        # Create a worker function that includes all necessary context
         def process_chunk(chunk_items: List[str]) -> List[Tuple[str, float]]:
+            # _score_item_batch_optimized calls _score_item_batch, which does not have its own tqdm.
+            # So, no need to pass show_progress further down from here for tqdm control.
             return self._score_item_batch_optimized(user_idx, chunk_items)
         
-        # Process chunks in parallel
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all chunks
             future_to_chunk = {
                 executor.submit(process_chunk, chunk): i 
                 for i, chunk in enumerate(chunks)
             }
             
-            # Collect results as they complete
-            with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
-                for future in as_completed(future_to_chunk):
-                    chunk_idx = future_to_chunk[future]
-                    try:
-                        chunk_scores = future.result()
-                        all_scores.extend(chunk_scores)
-                        pbar.update(1)
-                    except Exception as e:
-                        print(f"Error processing chunk {chunk_idx}: {e}")
-                        pbar.update(1)
+            iterable_chunks = as_completed(future_to_chunk)
+            if show_progress: # Only show this tqdm if explicitly asked
+                iterable_chunks = tqdm(
+                    iterable_chunks,
+                    total=len(chunks),
+                    desc="Processing chunks", 
+                    leave=False,  # Cleans up the bar after completion
+                    position=1    # For nested progress bars, assumes outer is 0
+                )
+
+            for future in iterable_chunks:
+                chunk_idx = future_to_chunk[future]
+                try:
+                    chunk_scores = future.result()
+                    all_scores.extend(chunk_scores)
+                except Exception as e:
+                    print(f"Error processing chunk {chunk_idx} during parallel scoring: {e}")
         
         return all_scores
     
@@ -973,7 +975,7 @@ class Recommender:
         self, 
         user_idx: int, 
         item_ids: List[str],
-        batch_size: int = 125
+        batch_size: int = 256
     ) -> List[Tuple[str, float]]:
         """
         Optimized batch scoring with sub-batching for GPU efficiency.
@@ -1095,7 +1097,7 @@ class ParallelScoringDataset(torch.utils.data.Dataset):
         self,
         user_idx: int,
         items: List[str],
-        batch_size: int = 125,
+        batch_size: int = 256,
         num_workers: int = 4
     ) -> List[Tuple[str, float]]:
         """Score items using PyTorch DataLoader for true parallel processing"""
@@ -1217,7 +1219,7 @@ def _score_items_with_dataloader(
     self,
     user_idx: int,
     items: List[str],
-    batch_size: int = 125,
+    batch_size: int = 256,
     num_workers: int = 4
 ) -> List[Tuple[str, float]]:
     """Score items using PyTorch DataLoader for true parallel processing"""
