@@ -1,7 +1,7 @@
-# scripts/evaluate.py - Updated to use simplified cache
+# scripts/evaluate.py - Simplified without cross-modal attention
 #!/usr/bin/env python
 """
-Evaluate model performance with simplified caching
+Evaluate model performance with simplified architecture
 """
 import argparse
 import torch
@@ -21,7 +21,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config
 from src.data.dataset import MultimodalDataset
-from src.models.multimodal import PretrainedMultimodalRecommender, EnhancedMultimodalRecommender 
+from src.models.multimodal import MultimodalRecommender
 from src.inference.recommender import Recommender as MultimodalModelRecommender
 from src.evaluation.tasks import EvaluationTask, create_evaluator
 from src.inference.baseline_recommenders import (
@@ -57,7 +57,6 @@ def create_recommender(
     device: Optional[torch.device] = None,    
     history_interactions_df: Optional[pd.DataFrame] = None,
     config_obj: Optional[Config] = None,
-    # Updated parameter - use simplified cache instead of processed_feature_cache
     simple_cache_instance: Optional[SimpleFeatureCache] = None
 ):
     """Create the specified type of recommender with simplified cache"""
@@ -193,8 +192,6 @@ def main():
         numerical_scaler=numerical_scaler
     )
     
-    # Finalize setup is now handled automatically in __init__
-    
     encoders_dir = Path(config_obj.checkpoint_dir) / 'encoders'
     print(f"Loading encoders from {encoders_dir}...")
     try:
@@ -212,9 +209,9 @@ def main():
     model_instance_multimodal = None
     if args.recommender_type == 'multimodal':
         print("Initializing multimodal model...")
-        model_class_to_use = PretrainedMultimodalRecommender
-        if hasattr(config_obj.model, 'model_class') and config_obj.model.model_class == 'enhanced':
-            model_class_to_use = EnhancedMultimodalRecommender
+        
+        # Simplified model initialization - no more complex model class selection
+        print("Using MultimodalRecommender")
         
         model_params = {
             'n_users': dataset_for_encoders.n_users,
@@ -223,11 +220,11 @@ def main():
             'vision_model_name': config_obj.model.vision_model,
             'language_model_name': config_obj.model.language_model,
             'use_contrastive': config_obj.model.use_contrastive,
-            'dropout_rate': 0.0, 
+            'dropout_rate': 0.0,  # No dropout during evaluation
             'freeze_vision': config_obj.model.freeze_vision,
             'freeze_language': config_obj.model.freeze_language,
             'num_attention_heads': config_obj.model.num_attention_heads,
-            'attention_dropout': 0.0,
+            'attention_dropout': 0.0,  # No dropout during evaluation
             'fusion_hidden_dims': config_obj.model.fusion_hidden_dims,
             'fusion_activation': config_obj.model.fusion_activation,
             'use_batch_norm': config_obj.model.use_batch_norm,
@@ -236,13 +233,8 @@ def main():
             'init_method': config_obj.model.init_method,
             'contrastive_temperature': config_obj.model.contrastive_temperature,
         }
-        if model_class_to_use == EnhancedMultimodalRecommender:
-             model_params.update({
-                'use_cross_modal_attention': config_obj.model.use_cross_modal_attention,
-                'cross_modal_attention_weight': config_obj.model.cross_modal_attention_weight
-            })
 
-        model_instance_multimodal = model_class_to_use(**model_params).to(device)
+        model_instance_multimodal = MultimodalRecommender(**model_params).to(device)
         
         checkpoint_path_str = 'best_model.pth' 
         if hasattr(config_obj, 'eval_checkpoint_name'): 
@@ -372,7 +364,7 @@ def main():
         'parallel_evaluation': args.use_parallel,
         'num_workers': args.num_workers if args.use_parallel else 0,
         'parallel_chunk_size': args.parallel_chunk_size if args.use_parallel else 0,
-        'simplified_cache_used': True  # New metadata field
+        'simplified_architecture': True  # New metadata field
     }
     evaluator.print_summary(results)
 

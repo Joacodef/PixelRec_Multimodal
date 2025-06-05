@@ -1,6 +1,6 @@
-# src/config.py - Updated with smart defaults for missing parameters
+# src/config.py - Simplified without cross-modal attention complexity
 """
-Configuration module with smart defaults for simple and advanced configs
+Configuration module with simplified model architecture
 """
 from dataclasses import dataclass, field, asdict, is_dataclass, fields
 from typing import Optional, Dict, Any, List, Union
@@ -24,7 +24,7 @@ MODEL_CONFIGS = {
 
 @dataclass
 class ModelConfig:
-    """Model configuration with smart defaults"""
+    """Simplified model configuration without cross-modal attention complexity"""
     # ESSENTIAL (always required)
     vision_model: str = 'resnet'
     language_model: str = 'sentence-bert'
@@ -32,7 +32,6 @@ class ModelConfig:
     use_contrastive: bool = True
     
     # ADVANCED (with sensible defaults)
-    model_class: str = 'pretrained'
     freeze_vision: bool = True
     freeze_language: bool = True
     contrastive_temperature: float = 0.07
@@ -43,8 +42,6 @@ class ModelConfig:
     fusion_activation: str = 'relu'
     use_batch_norm: bool = True
     projection_hidden_dim: Optional[int] = None
-    use_cross_modal_attention: bool = True
-    cross_modal_attention_weight: float = 0.5
     final_activation: str = 'sigmoid'
     init_method: str = 'xavier_uniform'
 

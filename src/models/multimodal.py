@@ -1,7 +1,7 @@
 # src/models/multimodal.py
 """
-Multimodal recommender model architecture using pre-trained vision and language models.
-Now with fully configurable architecture from config file.
+Simplified multimodal recommender model architecture using pre-trained vision and language models.
+Removed cross-modal attention complexity for better maintainability.
 """
 import torch
 import torch.nn as nn
@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Union, List
 from ..config import MODEL_CONFIGS
 
 
-class PretrainedMultimodalRecommender(nn.Module):
+class MultimodalRecommender(nn.Module):
     def __init__(
         self,
         n_users: int,
@@ -29,7 +29,7 @@ class PretrainedMultimodalRecommender(nn.Module):
         freeze_language: bool = True,
         use_contrastive: bool = True,
         dropout_rate: float = 0.3,
-        # Additional architectural parameters
+        # Architectural parameters
         num_attention_heads: int = 4,
         attention_dropout: float = 0.1,
         fusion_hidden_dims: List[int] = None,
@@ -40,7 +40,7 @@ class PretrainedMultimodalRecommender(nn.Module):
         init_method: str = 'xavier_uniform',
         contrastive_temperature: float = 0.07
     ):
-        super(PretrainedMultimodalRecommender, self).__init__()
+        super(MultimodalRecommender, self).__init__()
         
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
@@ -52,7 +52,7 @@ class PretrainedMultimodalRecommender(nn.Module):
 
         self.vision_model_name = vision_model_name
 
-        # NOW: Validate configurations
+        # Validate configurations
         self._validate_model_configs()
         
         # Architectural parameters
@@ -115,18 +115,15 @@ class PretrainedMultimodalRecommender(nn.Module):
                 self.clip_text_model = CLIPTextModel.from_pretrained(hf_model_name)
         elif model_key == 'dino': 
             self.vision_model = Dinov2Model.from_pretrained(hf_model_name)
-        elif model_key == 'resnet' or model_key == 'convnext': # Handle resnet and convnext specifically
+        elif model_key == 'resnet' or model_key == 'convnext':
             # Load as a base model to get features before a classification head
             self.vision_model = AutoModel.from_pretrained(hf_model_name)
         else: 
-            # Fallback for any other vision model not explicitly handled,
-            # or if you intend to use AutoModelForImageClassification for some.
-            # This was your original 'else' logic.
             print(f"Warning: Vision model key '{model_key}' not explicitly handled for base model loading. Defaulting to AutoModelForImageClassification.")
             self.vision_model = AutoModelForImageClassification.from_pretrained(
                 hf_model_name,
                 num_labels=self.vision_config['dim'], 
-                ignore_mismatched_sizes=True # This might be relevant if using num_labels
+                ignore_mismatched_sizes=True
             )
         if freeze:
             for param in self.vision_model.parameters():
@@ -211,7 +208,6 @@ class PretrainedMultimodalRecommender(nn.Module):
                 self.embedding_dim
             )
             self.temperature = nn.Parameter(torch.tensor(self.contrastive_temperature))
-
 
     def _init_fusion_network(self):
         """Initializes the attention-based fusion network and final prediction layers with configurable architecture."""
@@ -357,7 +353,6 @@ class PretrainedMultimodalRecommender(nn.Module):
         
         return vision_output
     
-    
     def _get_language_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Extracts language features from text inputs using the main language model."""
         outputs = self.language_model(input_ids=input_ids, attention_mask=attention_mask)
@@ -458,7 +453,6 @@ class PretrainedMultimodalRecommender(nn.Module):
                 dim=-1 
             )
         return item_full_embedding
-
 
     def _validate_model_configs(self):
         """Validate that model configurations are available and consistent."""
@@ -564,74 +558,3 @@ class PretrainedMultimodalRecommender(nn.Module):
             print(f"Warning: Error probing CLIP text output dimension: {e}")
         
         return 512  # Safe default
-
-
-
-class EnhancedMultimodalRecommender(PretrainedMultimodalRecommender):
-    """
-    An enhanced version of the multimodal recommender with cross-modal attention.
-    Inherits all configurable parameters from PretrainedMultimodalRecommender.
-    """
-    def __init__(
-        self, 
-        *args, 
-        use_cross_modal_attention: bool = True,
-        cross_modal_attention_weight: float = 0.5,
-        **kwargs
-    ):
-        """
-        Initializes the EnhancedMultimodalRecommender.
-        
-        Args:
-            use_cross_modal_attention: Whether to use cross-modal attention
-            cross_modal_attention_weight: Weight for cross-modal attention contribution
-            *args, **kwargs: Arguments passed to parent class
-        """
-        super().__init__(*args, **kwargs)
-        
-        self.use_cross_modal_attention = use_cross_modal_attention
-        self.cross_modal_attention_weight = cross_modal_attention_weight
-        
-        if self.use_cross_modal_attention:
-            from .layers import CrossModalAttention 
-            self.vision_text_attention = CrossModalAttention(self.embedding_dim)
-            self.text_vision_attention = CrossModalAttention(self.embedding_dim)
-    
-    def _apply_attention_fusion(
-        self, user_emb: torch.Tensor, item_emb: torch.Tensor, vision_emb: torch.Tensor,
-        language_emb: torch.Tensor, numerical_emb: torch.Tensor, batch_size: int
-    ) -> torch.Tensor:
-        """Override to add cross-modal attention if enabled."""
-        
-        # Apply cross-modal attention if enabled
-        if self.use_cross_modal_attention and hasattr(self, 'vision_text_attention'):
-            vision_enhanced, text_enhanced = self._apply_cross_modal_fusion(vision_emb, language_emb)
-            vision_emb = vision_enhanced
-            language_emb = text_enhanced
-        
-        # Continue with standard attention fusion
-        return super()._apply_attention_fusion(
-            user_emb, item_emb, vision_emb, language_emb, numerical_emb, batch_size
-        )
-        
-    def _apply_cross_modal_fusion(
-        self, vision_emb: torch.Tensor, language_emb: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Applies cross-modal attention between vision and language embeddings.
-
-        Args:
-            vision_emb: Projected vision embeddings.
-            language_emb: Projected language embeddings.
-
-        Returns:
-            A tuple containing enhanced vision and language embeddings.
-        """
-        vision_contextualized_by_text = self.vision_text_attention(vision_emb, language_emb)
-        text_contextualized_by_vision = self.text_vision_attention(language_emb, vision_emb)
-
-        # Weighted combination with original embeddings
-        vision_enhanced = vision_emb + self.cross_modal_attention_weight * vision_contextualized_by_text
-        text_enhanced = language_emb + self.cross_modal_attention_weight * text_contextualized_by_vision
-
-        return vision_enhanced, text_enhanced

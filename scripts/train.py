@@ -1,7 +1,7 @@
-# scripts/train.py - Updated with simplified cache system
+# scripts/train.py - Simplified without cross-modal attention
 #!/usr/bin/env python
 """
-Training script for the multimodal recommender system with simplified caching
+Training script for the simplified multimodal recommender system
 """
 import argparse
 import sys
@@ -22,7 +22,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config, TextAugmentationConfig
 from src.data.dataset import MultimodalDataset
-from src.models.multimodal import PretrainedMultimodalRecommender, EnhancedMultimodalRecommender
+from src.models.multimodal import MultimodalRecommender
 from src.training.trainer import Trainer
 
 # Use simplified cache instead of old cache system
@@ -306,13 +306,8 @@ def main():
 
         print("\nInitializing model...")
         
-        # Select model class based on configuration
-        model_class_to_use = PretrainedMultimodalRecommender
-        if hasattr(model_config, 'model_class') and model_config.model_class == 'enhanced':
-            model_class_to_use = EnhancedMultimodalRecommender
-            print("Using EnhancedMultimodalRecommender")
-        else:
-            print("Using PretrainedMultimodalRecommender")
+        # Simplified model initialization - no more model class selection
+        print("Using MultimodalRecommender")
         
         # Prepare model parameters based on configuration
         model_params = {
@@ -335,13 +330,8 @@ def main():
             'init_method': model_config.init_method,
             'contrastive_temperature': model_config.contrastive_temperature,
         }
-        # Add cross-modal attention parameters if using Enhanced model
-        if model_class_to_use == EnhancedMultimodalRecommender:
-            model_params.update({
-                'use_cross_modal_attention': model_config.use_cross_modal_attention,
-                'cross_modal_attention_weight': model_config.cross_modal_attention_weight
-            })
-        model = model_class_to_use(**model_params).to(device)
+        
+        model = MultimodalRecommender(**model_params).to(device)
 
         # Print model parameter counts
         total_params = sum(p.numel() for p in model.parameters())

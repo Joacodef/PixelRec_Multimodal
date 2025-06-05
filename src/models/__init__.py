@@ -1,11 +1,11 @@
 # src/models/__init__.py
 """Model architectures and components"""
 
-from .multimodal import PretrainedMultimodalRecommender
+from .multimodal import MultimodalRecommender, PretrainedMultimodalRecommender
 from .losses import ContrastiveLoss, BPRLoss, MultimodalRecommenderLoss
 
 __all__ = [
-    'PretrainedMultimodalRecommender',
+    'MultimodalRecommender',
     'ContrastiveLoss',
     'BPRLoss',
     'MultimodalRecommenderLoss'
