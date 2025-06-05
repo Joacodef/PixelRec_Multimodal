@@ -1,6 +1,3 @@
-Okay, I will generate the `configuration.md` file based on the provided YAML files and the existing `configuration.md`.
-
-```markdown
 # Configuration Usage Guide
 
 ## Overview
@@ -10,7 +7,7 @@ This system utilizes YAML-based configuration files to manage model, training, d
 1.  **`configs/simple_config.yaml`**: Contains essential settings for quick setup and common use cases.
 2.  **`configs/advanced_config.yaml`**: Offers a comprehensive set of options for detailed experimentation and fine-tuning.
 
-All executable scripts in the `scripts/` directory accept a `--config` argument to specify which configuration file to use.
+All executable scripts in the `scripts/` directory accept a `--config` argument to specify which configuration file to use (defaulting to `configs/simple_config.yaml` if not provided for some scripts like `train.py`).
 
 ## Using Configuration Files
 
@@ -21,7 +18,7 @@ For most common tasks and initial experiments, `simple_config.yaml` is recommend
 **Example Usage:**
 ```bash
 python scripts/train.py --config configs/simple_config.yaml
-python scripts/evaluate.py --config configs/simple_config.yaml --test_data <path_to_test_data> --train_data <path_to_train_data> --eval_task retrieval
+python scripts/evaluate.py --config configs/simple_config.yaml --test_data data/splits/split_tiny/test.csv --train_data data/splits/split_tiny/train.csv --eval_task retrieval
 ```
 
 **Customizing `simple_config.yaml`:**
@@ -53,7 +50,7 @@ The `advanced_config.yaml` file allows customization of:
 
 The system is designed to use default values for parameters that are not explicitly specified in the loaded YAML file. This means you can create minimal configuration files containing only the parameters you wish to change from their defaults. The `Config` class (`src/config.py`) defines these defaults.
 
-For example, if you use `simple_config.yaml`, parameters related to advanced model architecture details (like `fusion_hidden_dims` or `optimizer_type`) will be automatically set to their default values as defined in `src/config.py`.
+For example, if you use `simple_config.yaml`, parameters related to advanced model architecture details (like `model.fusion_hidden_dims` or `training.optimizer_type`) will be automatically set to their default values as defined in `src/config.py`. The `Config.from_yaml` method handles this merging of YAML-specified values with dataclass defaults.
 
 ## Key Configuration Sections
 
@@ -61,35 +58,81 @@ Below are the main sections found in the configuration files and their purpose:
 
 ### `model`
 Defines the architecture of the multimodal recommender.
-* `vision_model`, `language_model`: Specifies the pre-trained backbones.
-* `embedding_dim`: Sets the size of the latent embeddings.
-* `use_contrastive`: Enables or disables contrastive learning.
-* **Advanced options** (in `advanced_config.yaml`): `freeze_vision`, `freeze_language`, `contrastive_temperature`, `dropout_rate`, `num_attention_heads`, `fusion_hidden_dims`, `fusion_activation`, `use_batch_norm`, `projection_hidden_dim`, `final_activation`, `init_method`.
+* `vision_model`: Specifies the pre-trained vision backbone. Options include `clip`, `resnet`, `dino`, `convnext`. The actual Hugging Face model names and expected dimensions are defined in `MODEL_CONFIGS` in `src/config.py`.
+* `language_model`: Specifies the pre-trained language backbone. Options include `sentence-bert`, `mpnet`, `bert`, `roberta`. Similar to vision models, details are in `MODEL_CONFIGS`.
+* `embedding_dim`: Sets the size of the latent embeddings for users, items, and projected modalities.
+* `use_contrastive`: Enables or disables contrastive learning (primarily for vision-text alignment if using CLIP).
+* **Advanced options** (more extensively in `advanced_config.yaml`):
+    * `freeze_vision`, `freeze_language`: Boolean flags to freeze the weights of the pre-trained backbones.
+    * `contrastive_temperature`: Temperature parameter for the contrastive loss.
+    * `dropout_rate`: Dropout rate used in various parts of the model (e.g., projection layers, fusion network).
+    * `num_attention_heads`: Number of heads in the multi-head self-attention layer for feature fusion.
+    * `attention_dropout`: Dropout rate within the multi-head attention mechanism.
+    * `fusion_hidden_dims`: A list of integers defining the sizes of hidden layers in the final fusion MLP.
+    * `fusion_activation`: Activation function used in the fusion MLP (e.g., `relu`, `gelu`).
+    * `use_batch_norm`: Boolean to enable batch normalization in the fusion MLP.
+    * `projection_hidden_dim`: Optional integer for an intermediate hidden layer dimension in modality projection layers. If `null` or `None`, a direct projection is used.
+    * `final_activation`: Activation function for the final output layer (e.g., `sigmoid`, `tanh`, `none`).
+    * `init_method`: Method for initializing embedding layers (e.g., `xavier_uniform`, `kaiming_normal`).
 
 ### `training`
 Controls the training process.
-* `batch_size`, `learning_rate`, `epochs`, `patience`: Basic training loop parameters.
-* **Advanced options** (in `advanced_config.yaml`): `weight_decay`, `gradient_clip`, `num_workers`, `contrastive_weight`, `bce_weight`, `use_lr_scheduler`, `lr_scheduler_type`, `optimizer_type`, and specific optimizer parameters (e.g., `adam_beta1`).
+* `batch_size`: Number of samples per training batch. Adjust based on GPU memory.
+* `learning_rate`: Initial learning rate for the optimizer.
+* `epochs`: Maximum number of training epochs.
+* `patience`: Number of epochs to wait for improvement in validation loss before early stopping.
+* **Advanced options** (more extensively in `advanced_config.yaml`):
+    * `weight_decay`: L2 regularization factor for the optimizer.
+    * `gradient_clip`: Maximum norm for gradient clipping.
+    * `num_workers`: Number of worker processes for the DataLoader.
+    * `contrastive_weight`: Weight for the contrastive loss component in the total loss.
+    * `bce_weight`: Weight for the binary cross-entropy loss component.
+    * `use_lr_scheduler`: Boolean to enable a learning rate scheduler.
+    * `lr_scheduler_type`: Type of scheduler (e.g., `reduce_on_plateau`, `cosine`, `step`).
+    * `lr_scheduler_patience`, `lr_scheduler_factor`, `lr_scheduler_min_lr`: Parameters specific to the chosen scheduler.
+    * `optimizer_type`: Type of optimizer (e.g., `adamw`, `adam`, `sgd`).
+    * `adam_beta1`, `adam_beta2`, `adam_eps`: Parameters for Adam-based optimizers.
 
 ### `data`
 Manages data paths, preprocessing, and loading.
-* Paths: `item_info_path`, `interactions_path`, `image_folder`, `processed_item_info_path`, `processed_interactions_path`, `split_data_path`, etc.
+* **Paths**:
+    * `item_info_path`, `interactions_path`, `image_folder`: Paths to raw data.
+    * `processed_item_info_path`, `processed_interactions_path`: Paths where preprocessed data will be saved/loaded from.
+    * `scaler_path`: Path to save/load the numerical feature scaler.
+    * `processed_image_destination_folder`: Directory where processed (e.g., validated, compressed) images are stored.
+    * `split_data_path`: Base directory for train/val/test splits.
+    * `train_data_path`, `val_data_path`, `test_data_path`: Paths to specific split files.
 * `cache_config`: Nested configuration for the `SimpleFeatureCache`.
-    * `enabled`: Boolean to turn caching on/off.
-    * `max_memory_items`: Maximum items to keep in memory.
-    * `cache_directory`: Path for disk-based cache.
-    * `use_disk`: Boolean to enable disk persistence.
-* `numerical_features_cols`: List of columns to be treated as numerical features.
-* **Advanced options** (in `advanced_config.yaml`): `scaler_path`, `processed_image_destination_folder`, `negative_sampling_ratio`, `numerical_normalization_method`, and nested configurations for `text_augmentation`, `offline_image_compression`, `offline_image_validation`, `offline_text_cleaning`, and `splitting`.
+    * `enabled`: Boolean to turn item feature caching on/off.
+    * `max_memory_items`: Maximum number of items to keep in the in-memory LRU cache.
+    * `cache_directory`: **Base directory** for feature caches. Model-specific subdirectories (e.g., `resnet_sentence-bert/`) will be created under this path by `SimpleFeatureCache`. For example, if `cache_directory` is `cache/`, features for ResNet vision and Sentence-BERT language models will be stored in `cache/resnet_sentence-bert/`.
+    * `use_disk`: Boolean to enable disk persistence for the cached features.
+* `numerical_features_cols`: List of column names in `item_info_df` to be treated as numerical features.
+* **Advanced options** (more extensively in `advanced_config.yaml`):
+    * `negative_sampling_ratio`: Ratio of negative samples to positive samples for training.
+    * `numerical_normalization_method`: Method for scaling numerical features (e.g., `standardization`, `min_max`, `log1p`, `none`).
+    * `text_augmentation`: Nested configuration for text augmentation during training.
+        * `enabled`, `augmentation_type`, `delete_prob`, `swap_prob`.
+    * `offline_image_compression`: Nested configuration for image compression during preprocessing.
+        * `enabled`, `compress_if_kb_larger_than`, `target_quality`, `resize_if_pixels_larger_than`, `resize_target_longest_edge`.
+    * `offline_image_validation`: Nested configuration for image validation.
+        * `check_corrupted`, `min_width`, `min_height`, `allowed_extensions`.
+    * `offline_text_cleaning`: Nested configuration for text cleaning.
+        * `remove_html`, `normalize_unicode`, `to_lowercase`.
+    * `splitting`: Nested configuration for data splitting.
+        * `random_state`, `train_final_ratio`, `val_final_ratio`, `test_final_ratio`, `min_interactions_per_user`, `min_interactions_per_item`, `validate_no_leakage`.
 
 ### `recommendation`
-Parameters for generating recommendations.
-* `top_k`: Number of recommendations to generate.
-* **Advanced options** (in `advanced_config.yaml`): `filter_seen`, `diversity_weight`, `novelty_weight`, `max_candidates`.
+Parameters for generating recommendations during inference.
+* `top_k`: Number of recommendations to generate per user.
+* **Advanced options** (in `advanced_config.yaml`):
+    * `filter_seen`: Boolean to filter out items previously interacted with by the user.
+    * `diversity_weight`, `novelty_weight`: Weights for diversity and novelty in reranking (Note: actual implementation of diverse/novel recommendations needs to be present in `Recommender` class).
+    * `max_candidates`: Maximum candidate items to consider before ranking.
 
 ### Root Level
-* `checkpoint_dir`: Directory to save model checkpoints.
-* `results_dir`: Directory to save evaluation results and other outputs.
+* `checkpoint_dir`: Directory to save model checkpoints (e.g., `best_model.pth`, `final_model.pth`) and encoders.
+* `results_dir`: Directory to save evaluation results, training metadata, figures, and other outputs.
 
 ## Example Workflows
 
@@ -98,18 +141,19 @@ Parameters for generating recommendations.
 2.  Edit `configs/my_experiment.yaml` to change a few key parameters (e.g., `model.vision_model`, `training.batch_size`).
 3.  Run scripts using your custom config:
     ```bash
+    python scripts/preprocess_data.py --config configs/my_experiment.yaml
+    python scripts/create_splits.py --config configs/my_experiment.yaml
     python scripts/train.py --config configs/my_experiment.yaml
     ```
 
 ### Detailed Research:
-1.  Use `configs/advanced_config.yaml` as a base.
+1.  Use `configs/advanced_config.yaml` as a base or create a copy.
 2.  Modify specific architectural, training, or data processing parameters for your experiment.
 3.  Run scripts:
     ```bash
+    python scripts/preprocess_data.py --config configs/advanced_config.yaml
+    python scripts/create_splits.py --config configs/advanced_config.yaml
     python scripts/train.py --config configs/advanced_config.yaml
     ```
-    (Or your modified version of the advanced config).
 4.  Ensure to save the exact configuration file used alongside your results for reproducibility. The training script automatically saves the run's configuration to the `results_dir`.
 
-This approach provides flexibility, allowing users to start with simple settings and progressively delve into more complex configurations as needed.
-```
