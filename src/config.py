@@ -1,4 +1,4 @@
-# src/config.py
+# src/config.py - Updated with simplified cache
 """
 Configuration module for multimodal recommender
 """
@@ -158,7 +158,7 @@ class DataSplittingConfig:
     validate_no_leakage: bool = True  # Check for user/item leakage
 
 @dataclass
-class OfflineImageCompressionConfig: # Ensure this dataclass is defined
+class OfflineImageCompressionConfig:
     """Configuration for offline image compression."""
     enabled: bool = True
     compress_if_kb_larger_than: int = 500
@@ -166,22 +166,14 @@ class OfflineImageCompressionConfig: # Ensure this dataclass is defined
     resize_if_pixels_larger_than: Optional[List[int]] = field(default_factory=lambda: [2048, 2048])
     resize_target_longest_edge: Optional[int] = 1024
 
+# SIMPLIFIED: Single cache config instead of dual cache system
 @dataclass
-class ImageCacheConfig:
-    """Configuration for image caching behavior"""
-    strategy: str = 'hybrid'  # 'hybrid', 'disk', 'memory', 'disabled'
+class SimpleCacheConfig:
+    """Configuration for simplified feature caching"""
+    enabled: bool = True
     max_memory_items: int = 1000
-    cache_directory: str = 'data/cache/image_tensors'
-    precompute_at_startup: bool = False
-    preprocessing_batch_size: int = 100
-
-@dataclass
-class ProcessedFeaturesCacheConfig:
-    strategy: str = 'hybrid'
-    max_memory_items: int = 10000
-    cache_directory: str = 'data/cache/processed_features'
-    # Add precompute_at_startup if you plan to handle precomputation here or via another script
-    # precompute_at_startup: bool = False
+    cache_directory: str = 'data/cache/features'
+    use_disk: bool = False
 
 @dataclass
 class DataConfig:
@@ -200,9 +192,8 @@ class DataConfig:
     negative_sampling_ratio: float = 1.0
 
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
-    numerical_normalization_method: str = 'log1p' # Example: 'log1p', 'standardization', 'min_max', 'none'
+    numerical_normalization_method: str = 'log1p'
 
-    # Ensure the type hint uses the defined dataclass name
     offline_image_compression: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
@@ -213,9 +204,17 @@ class DataConfig:
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
 
-    cache_processed_images: bool = False
-    image_cache_config: ImageCacheConfig = field(default_factory=ImageCacheConfig)
-    processed_features_cache_config: ProcessedFeaturesCacheConfig = field(default_factory=ProcessedFeaturesCacheConfig)
+    # SIMPLIFIED: Single cache config instead of dual system
+    cache_config: SimpleCacheConfig = field(default_factory=SimpleCacheConfig)
+    
+    def __post_init__(self):
+        """Set up backward compatibility properties"""
+        # Set backward compatibility properties
+        self.cache_processed_images = self.cache_config.enabled
+        self.cache_features = self.cache_config.enabled
+        self.cache_max_items = self.cache_config.max_memory_items
+        self.cache_dir = self.cache_config.cache_directory
+        self.cache_to_disk = self.cache_config.use_disk
 
 @dataclass
 class RecommendationConfig:
@@ -243,12 +242,31 @@ class Config:
             yaml_config = yaml.safe_load(f)
 
         def _create_dataclass_from_dict(dc_type: Any, cfg_dict: Optional[Dict], default_instance: Any) -> Any:
-            if cfg_dict is None: # If the key doesn't exist in YAML, return the default instance
+            if cfg_dict is None:
                 return default_instance
             
             # Start with default values, then update with YAML values
-            current_args = asdict(default_instance) # Get defaults as dict
-            current_args.update(cfg_dict) # Update with values from YAML
+            current_args = asdict(default_instance)
+            current_args.update(cfg_dict)
+            
+            # Handle special case for DataConfig cache parameters
+            if dc_type == DataConfig:
+                # Extract old-style cache parameters and convert them to cache_config
+                temp_cache_params = {}
+                old_cache_keys = ['cache_features', 'cache_processed_images', 'cache_max_items', 'cache_dir', 'cache_to_disk']
+                for key in old_cache_keys:
+                    if key in current_args:
+                        temp_cache_params[key] = current_args.pop(key)
+                
+                # If we have old-style parameters, create cache_config from them
+                if temp_cache_params:
+                    cache_enabled = temp_cache_params.get('cache_features', temp_cache_params.get('cache_processed_images', True))
+                    current_args['cache_config'] = {
+                        'enabled': cache_enabled,
+                        'max_memory_items': temp_cache_params.get('cache_max_items', 1000),
+                        'cache_directory': temp_cache_params.get('cache_dir', 'data/cache/features'),
+                        'use_disk': temp_cache_params.get('cache_to_disk', False)
+                    }
             
             # Recursively instantiate nested dataclasses
             for field_name, field_info in dc_type.__dataclass_fields__.items():
@@ -264,19 +282,15 @@ class Config:
                 else:
                     actual_field_type = field_type_hint
                 
-                # Handle cases where field_type_hint might be a string (forward reference)
                 if isinstance(actual_field_type, str):
-                    # Attempt to resolve string to actual type (basic implementation)
-                    resolved_type = globals().get(actual_field_type) # Or locals(), or a more robust mechanism
+                    resolved_type = globals().get(actual_field_type)
                     if resolved_type and is_dataclass(resolved_type):
                         actual_field_type = resolved_type
-                    else: # Fallback or raise error if type string can't be resolved
+                    else:
                         actual_field_type = None
-
 
                 if actual_field_type and is_dataclass(actual_field_type) and \
                    isinstance(current_args.get(field_name), dict):
-                    # Get the default instance for the nested dataclass field
                     nested_default_instance = getattr(default_instance, field_name)
                     current_args[field_name] = _create_dataclass_from_dict(
                         actual_field_type, 
@@ -284,23 +298,19 @@ class Config:
                         nested_default_instance
                     )
             
-            return dc_type(**current_args)
+            # Create the instance
+            instance = dc_type(**current_args)
+            
+            return instance
 
         # Instantiate main config sections
         model_config = _create_dataclass_from_dict(ModelConfig, yaml_config.get('model'), ModelConfig())
         training_config = _create_dataclass_from_dict(TrainingConfig, yaml_config.get('training'), TrainingConfig())
         rec_config = _create_dataclass_from_dict(RecommendationConfig, yaml_config.get('recommendation'), RecommendationConfig())
 
-        # Instantiate DataConfig and its nested dataclasses
+        # Instantiate DataConfig
         data_yaml_dict = yaml_config.get('data', {})
-        default_data_instance = DataConfig() # Get a default DataConfig instance
-
-        # For DataConfig, we directly pass its yaml_dict and its default instance
-        # to _create_dataclass_from_dict. The recursive nature of 
-        # _create_dataclass_from_dict will handle the nested fields like
-        # text_augmentation, offline_image_validation, offline_text_cleaning, splitting,
-        # and importantly, offline_image_compression.
-        
+        default_data_instance = DataConfig()
         data_config = _create_dataclass_from_dict(DataConfig, data_yaml_dict, default_data_instance)
 
         return cls(
@@ -316,7 +326,14 @@ class Config:
         """Saves the current configuration to a YAML file."""
         def as_dict_recursive(data_obj: Any) -> Any:
             if is_dataclass(data_obj):
-                return {f.name: as_dict_recursive(getattr(data_obj, f.name)) for f in fields(data_obj)}
+                result = {}
+                for f in fields(data_obj):
+                    # Skip internal/temporary fields
+                    if f.name.startswith('_'):
+                        continue
+                    value = getattr(data_obj, f.name)
+                    result[f.name] = as_dict_recursive(value)
+                return result
             elif isinstance(data_obj, list):
                 return [as_dict_recursive(i) for i in data_obj]
             elif isinstance(data_obj, dict):

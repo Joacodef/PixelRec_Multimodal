@@ -1,7 +1,7 @@
-# scripts/evaluate.py
+# scripts/evaluate.py - Updated to use simplified cache
 #!/usr/bin/env python
 """
-Evaluate model performance
+Evaluate model performance with simplified caching
 """
 import argparse
 import torch
@@ -11,7 +11,7 @@ from pathlib import Path
 import json
 import pickle
 from tqdm import tqdm
-from typing import Optional, Any, Union # Added Any for ProcessedFeatureCache if import fails
+from typing import Optional, Any
 import random
 import warnings
 
@@ -29,15 +29,25 @@ from src.inference.baseline_recommenders import (
     ItemKNNRecommender, UserKNNRecommender,
     BaselineRecommender 
 )
-from src.data.image_cache import SharedImageCache
-# Import the new ProcessedFeatureCache
-# Adjust the import path if you saved ProcessedFeatureCache elsewhere
+
+# Use simplified cache instead of old cache system
 try:
-    from src.data.feature_cache import ProcessedFeatureCache
+    from src.data.simple_cache import SimpleFeatureCache
 except ImportError:
-    ProcessedFeatureCache = None # Fallback if not found, will print warning later
-    print("Warning: ProcessedFeatureCache class could not be imported from src.data.feature_cache.")
-    print("Ensure the file exists and the path is correct for optimal performance.")
+    # Create a minimal cache if the file doesn't exist
+    class SimpleFeatureCache:
+        def __init__(self, *args, **kwargs):
+            self.cache = {}
+            print("Using fallback SimpleFeatureCache")
+        
+        def get(self, item_id):
+            return self.cache.get(item_id)
+        
+        def set(self, item_id, features):
+            self.cache[item_id] = features
+        
+        def print_stats(self):
+            print(f"Simple cache: {len(self.cache)} items")
 
 
 def create_recommender(
@@ -47,25 +57,28 @@ def create_recommender(
     device: Optional[torch.device] = None,    
     history_interactions_df: Optional[pd.DataFrame] = None,
     config_obj: Optional[Config] = None,
-    # Add parameter for the new cache
-    processed_feature_cache_instance: Optional[Any] = None # Use Any for now
-) -> Union[BaselineRecommender, MultimodalModelRecommender]: # Use Union for broader compatibility
-    """Create the specified type of recommender"""
+    # Updated parameter - use simplified cache instead of processed_feature_cache
+    simple_cache_instance: Optional[SimpleFeatureCache] = None
+):
+    """Create the specified type of recommender with simplified cache"""
 
     k_neighbors_val = 50 
     if config_obj and hasattr(config_obj, 'model') and hasattr(config_obj.model, 'k_neighbors'): 
         k_neighbors_val = config_obj.model.k_neighbors
 
-
     if recommender_type == 'multimodal':
         if model is None:
             raise ValueError("Model required for multimodal recommender")
-        # Pass the new cache to the MultimodalModelRecommender
+        
+        # Use simplified recommender with single cache
         return MultimodalModelRecommender(
             model, 
             dataset, 
-            device, 
-            processed_feature_cache=processed_feature_cache_instance
+            device,
+            # Pass simplified cache parameters instead of old complex cache
+            cache_max_items=1000,
+            cache_dir='data/cache/features' if simple_cache_instance else None,
+            cache_to_disk=False
         )
 
     elif recommender_type == 'random':
@@ -85,102 +98,24 @@ def create_recommender(
 
 
 def main():
-
     warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.clip.modeling_clip")
+    
     parser = argparse.ArgumentParser(description="Evaluate model performance")
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='configs/default_config.yaml',
-        help='Path to configuration file'
-    )
-    parser.add_argument(
-        '--test_data',
-        type=str,
-        required=True,
-        help='Path to test data CSV file (user_id, item_id interactions)'
-    )
-    parser.add_argument(
-        '--train_data',
-        type=str, 
-        help='Path to training data CSV file (crucial for defining "seen" history for baselines and "novelty" for evaluators)'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        default='evaluation_results.json',
-        help='Path to save evaluation results JSON file'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda' if torch.cuda.is_available() else 'cpu',
-        help='Device to use for evaluation (cuda or cpu)'
-    )
-    parser.add_argument(
-        '--recommender_type',
-        type=str,
-        default='multimodal',
-        choices=['multimodal', 'random', 'popularity', 'item_knn', 'user_knn'],
-        help='Type of recommender to evaluate'
-    )
-    parser.add_argument(
-        '--eval_task',
-        type=str,
-        default='retrieval', 
-        choices=['retrieval', 'ranking', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy'],
-        help='Evaluation task to perform'
-    )
-    # Argument to control warm-up of Recommender's L1 cache
-    parser.add_argument(
-        '--warmup_recommender_l1_cache',
-        action='store_true',
-        help="Enable warm-up of the Recommender's internal L1 feature cache. Uses more RAM upfront but can be faster if L2 (ProcessedFeatureCache) is disk-based."
-    )
-    parser.add_argument(
-        '--num_workers',
-        type=int,
-        default=4,
-        help='Number of parallel workers for evaluation'
-    )
-    parser.add_argument(
-        '--use_parallel',
-        action='store_true',
-        help='Use parallel processing for multimodal evaluation'
-    )
-    parser.add_argument(
-        '--parallel_chunk_size',
-        type=int,
-        default=5000,
-        help='Chunk size for parallel processing'
-    )
-
-    parser.add_argument(
-        '--use_sampling',
-        action='store_true',
-        default=True,  # Enable by default
-        help='Use negative sampling for evaluation (much faster)'
-        )
-    parser.add_argument(
-        '--no_sampling',
-        dest='use_sampling',
-        action='store_false',
-        help='Disable negative sampling (use full evaluation)'
-    )
-    parser.add_argument(
-        '--num_negatives',
-        type=int,
-        default=100,
-        help='Number of negative samples per positive item (default: 100)'
-    )
-    parser.add_argument(
-        '--sampling_strategy',
-        type=str,
-        default='random',
-        choices=['random', 'popularity', 'popularity_inverse'],
-        help='Strategy for negative sampling'
-    )
-
+    parser.add_argument('--config', type=str, default='configs/default_config.yaml', help='Path to configuration file')
+    parser.add_argument('--test_data', type=str, required=True, help='Path to test data CSV file')
+    parser.add_argument('--train_data', type=str, help='Path to training data CSV file')
+    parser.add_argument('--output', type=str, default='evaluation_results.json', help='Path to save evaluation results JSON file')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for evaluation')
+    parser.add_argument('--recommender_type', type=str, default='multimodal', choices=['multimodal', 'random', 'popularity', 'item_knn', 'user_knn'], help='Type of recommender to evaluate')
+    parser.add_argument('--eval_task', type=str, default='retrieval', choices=['retrieval', 'ranking', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy'], help='Evaluation task to perform')
+    parser.add_argument('--warmup_recommender_cache', action='store_true', help="Enable warm-up of the Recommender's cache")
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of parallel workers for evaluation')
+    parser.add_argument('--use_parallel', action='store_true', help='Use parallel processing for multimodal evaluation')
+    parser.add_argument('--parallel_chunk_size', type=int, default=5000, help='Chunk size for parallel processing')
+    parser.add_argument('--use_sampling', action='store_true', default=True, help='Use negative sampling for evaluation (much faster)')
+    parser.add_argument('--no_sampling', dest='use_sampling', action='store_false', help='Disable negative sampling (use full evaluation)')
+    parser.add_argument('--num_negatives', type=int, default=100, help='Number of negative samples per positive item (default: 100)')
+    parser.add_argument('--sampling_strategy', type=str, default='random', choices=['random', 'popularity', 'popularity_inverse'], help='Strategy for negative sampling')
 
     args = parser.parse_args()
 
@@ -193,12 +128,11 @@ def main():
     
     train_df = None
     if args.train_data:
-        print(f"Loading training data from {args.train_data} (this will be used for baseline history)...")
+        print(f"Loading training data from {args.train_data}...")
         train_df = pd.read_csv(args.train_data)
     else:
         if args.eval_task in ['retrieval', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy']:
-            print(f"Warning: --train_data not provided. For '{args.eval_task}' task, evaluation of novelty might be skewed, and baselines will use full dataset history.")
-
+            print(f"Warning: --train_data not provided for '{args.eval_task}' task.")
 
     print("Loading item info and interaction data for dataset initialization...")
     item_info_df = pd.read_csv(config_obj.data.processed_item_info_path)
@@ -220,65 +154,47 @@ def main():
        config_obj.data.processed_image_destination_folder:
         effective_image_folder = config_obj.data.processed_image_destination_folder
 
-    # Initialize SharedImageCache (for image tensors)
-    shared_image_cache_eval = None
-    if config_obj.data.cache_processed_images:
-        cache_config_eval = config_obj.data.image_cache_config
-        cache_directory_path_eval = Path(cache_config_eval.cache_directory)
-        print(f"Initializing SharedImageCache for evaluation (image tensors):")
-        print(f"  Strategy: {cache_config_eval.strategy}")
-        print(f"  Cache directory: {cache_directory_path_eval}")
-        shared_image_cache_eval = SharedImageCache(
-            cache_path=str(cache_directory_path_eval), # Ensure path is string
-            max_memory_items=cache_config_eval.max_memory_items,
-            strategy=cache_config_eval.strategy
-        )
-        shared_image_cache_eval.load_from_disk() 
-        shared_image_cache_eval.print_stats()
-    else:
-        print("SharedImageCache (for image tensors) is disabled for evaluation.")
-
-    # Initialize ProcessedFeatureCache (for non-image features like text tokens, numericals)
-    processed_feature_cache_instance = None
-    if ProcessedFeatureCache and hasattr(config_obj.data, 'processed_features_cache_config'):
-        pfc_config = config_obj.data.processed_features_cache_config
-        pfc_cache_dir = Path(pfc_config.cache_directory)
-        print(f"Initializing ProcessedFeatureCache for evaluation (non-image features):")
-        print(f"  Strategy: {pfc_config.strategy}")
-        print(f"  Cache directory: {pfc_cache_dir}")
-        processed_feature_cache_instance = ProcessedFeatureCache(
-            cache_path=str(pfc_cache_dir), # Ensure path is string
-            max_memory_items=pfc_config.max_memory_items,
-            strategy=pfc_config.strategy
-        )
-        processed_feature_cache_instance.load_from_disk_meta() # Scans disk for metadata
-        processed_feature_cache_instance.print_stats()
+    # Initialize simplified cache using new config structure
+    simple_cache_instance = None
+    cache_config = config_obj.data.cache_config
+    
+    if cache_config.enabled:
+        print(f"Initializing SimpleFeatureCache:")
+        print(f"  Max memory items: {cache_config.max_memory_items}")
+        print(f"  Cache directory: {cache_config.cache_directory}")
+        print(f"  Use disk: {cache_config.use_disk}")
         
-        # Optional: Precomputation/Warm-up for ProcessedFeatureCache if configured
-        # This would typically be done by a separate script or integrated into train/preprocess.
-        # If pfc_config.precompute_at_startup is true, you might add logic here to call
-        # a precomputation method for ProcessedFeatureCache if it doesn't have many items on disk.
-        # For now, we assume it's pre-populated or will populate on-the-fly.
-
+        simple_cache_instance = SimpleFeatureCache(
+            max_memory_items=cache_config.max_memory_items,
+            cache_dir=cache_config.cache_directory,
+            use_disk=cache_config.use_disk
+        )
+        simple_cache_instance.print_stats()
     else:
-        print("ProcessedFeatureCache (for non-image features) is not configured or class not imported.")
+        print("Feature caching is disabled")
 
-
+    # Create dataset with simplified cache parameters using new config structure
+    cache_config = config_obj.data.cache_config
     dataset_for_encoders = MultimodalDataset(
         interactions_df=interactions_df_for_dataset_init,
         item_info_df=item_info_df,
         image_folder=effective_image_folder,
         vision_model_name=config_obj.model.vision_model,
         language_model_name=config_obj.model.language_model,
-        create_negative_samples=False, 
+        create_negative_samples=False,
+        # Simplified cache parameters using new config structure
+        cache_features=cache_config.enabled,
+        cache_max_items=cache_config.max_memory_items,
+        cache_dir=cache_config.cache_directory,
+        cache_to_disk=cache_config.use_disk,
+        # Keep some existing parameters for compatibility
         numerical_feat_cols=config_obj.data.numerical_features_cols,
         numerical_normalization_method=config_obj.data.numerical_normalization_method,
-        numerical_scaler=numerical_scaler,
-        cache_processed_images=config_obj.data.cache_processed_images,
-        shared_image_cache=shared_image_cache_eval # For image tensors
+        numerical_scaler=numerical_scaler
     )
-    dataset_for_encoders.finalize_setup() 
-
+    
+    # Finalize setup is now handled automatically in __init__
+    
     encoders_dir = Path(config_obj.checkpoint_dir) / 'encoders'
     print(f"Loading encoders from {encoders_dir}...")
     try:
@@ -336,7 +252,7 @@ def main():
         if not checkpoint_path.exists():
              checkpoint_path = Path(config_obj.checkpoint_dir) / 'final_model.pth' 
         if not checkpoint_path.exists():
-            print(f"Error: Multimodal model checkpoint not found at {Path(config_obj.checkpoint_dir) / checkpoint_path_str} or final_model.pth.")
+            print(f"Error: Multimodal model checkpoint not found.")
             sys.exit(1)
         
         print(f"Loading multimodal model checkpoint from {checkpoint_path}...")
@@ -351,7 +267,7 @@ def main():
         device=device,
         history_interactions_df=train_df, 
         config_obj=config_obj,
-        processed_feature_cache_instance=processed_feature_cache_instance
+        simple_cache_instance=simple_cache_instance
     )
 
     # Set up parallel processing for multimodal recommender if requested
@@ -378,56 +294,40 @@ def main():
             
             recommender_instance.get_recommendations = parallel_get_recommendations
 
-    # Warm up cache if requested (only do this once)
-    if args.recommender_type == 'multimodal' and args.warmup_recommender_l1_cache:
-        print("Warming up Recommender's L1 internal item_features_cache...")
+    # Warm up cache if requested
+    if args.recommender_type == 'multimodal' and args.warmup_recommender_cache:
+        print("Warming up Recommender's cache...")
         
         if hasattr(dataset_for_encoders, 'item_encoder') and \
            hasattr(dataset_for_encoders.item_encoder, 'classes_') and \
            dataset_for_encoders.item_encoder.classes_ is not None:
             
             all_item_ids_for_warmup = dataset_for_encoders.item_encoder.classes_
-            print(f"Attempting to warm up Recommender L1 cache for {len(all_item_ids_for_warmup)} items.")
+            print(f"Warming up cache for {len(all_item_ids_for_warmup)} items.")
             
-            # Use parallel pre-loading if available and parallel mode is enabled
-            if args.use_parallel and hasattr(recommender_instance, 'preload_features_parallel'):
-                print("Pre-loading features in parallel...")
-                recommender_instance.preload_features_parallel(
-                    all_item_ids_for_warmup,
-                    num_workers=args.num_workers,
-                    chunk_size=1000
-                )
-            else:
-                # Sequential warming
-                for item_id_to_warm in tqdm(all_item_ids_for_warmup, desc="Warming Recommender L1 cache"):
-                    try:
+            # Simple cache warmup - just call _get_item_features for each item
+            for item_id_to_warm in tqdm(all_item_ids_for_warmup[:1000], desc="Warming cache"):  # Limit to 1000 for speed
+                try:
+                    if hasattr(recommender_instance, '_get_item_features'):
                         recommender_instance._get_item_features(item_id_to_warm) 
-                    except Exception as e:
-                        # Only print first few errors to avoid spam
-                        if all_item_ids_for_warmup.tolist().index(item_id_to_warm) < 5:
-                            print(f"Warning: Error warming L1 cache for item {item_id_to_warm}: {e}")
+                except Exception as e:
+                    if all_item_ids_for_warmup.tolist().index(item_id_to_warm) < 5:
+                        print(f"Warning: Error warming cache for item {item_id_to_warm}: {e}")
             
             # Print cache statistics
-            print(f"\nCache warming completed:")
-            print(f"L1 cache size: {len(recommender_instance.item_features_cache)} items")
-            
-            if processed_feature_cache_instance:
-                print("\nProcessedFeatureCache (L2) stats:")
-                processed_feature_cache_instance.print_stats()
-            
-            if shared_image_cache_eval:
-                print("\nSharedImageCache (images) stats:")
-                shared_image_cache_eval.print_stats()
+            print(f"Cache warming completed")
+            if hasattr(recommender_instance, 'print_cache_stats'):
+                recommender_instance.print_cache_stats()
+            elif simple_cache_instance:
+                simple_cache_instance.print_stats()
         else:
-            print("Warning: Could not get all item IDs to warm up Recommender's L1 cache.")
+            print("Warning: Could not get all item IDs to warm up cache.")
 
     if args.use_parallel and args.recommender_type != 'multimodal':
         print("Warning: Parallel mode only supported for multimodal recommender. Ignoring --use_parallel.")
         args.use_parallel = False
 
     print("\nStarting evaluation...")
-    
-    results = {}
     
     task_map = {
         'retrieval': EvaluationTask.TOP_K_RETRIEVAL,
@@ -458,7 +358,7 @@ def main():
     )
         
     print(f"Task: {evaluator.task_name}")
-    print(f"Filter seen items (evaluator's perspective for ground truth): {evaluator.filter_seen}")
+    print(f"Filter seen items: {evaluator.filter_seen}")
     
     results = evaluator.evaluate()
     results['evaluation_metadata'] = {
@@ -468,10 +368,11 @@ def main():
         'top_k': config_obj.recommendation.top_k, 
         'test_file': args.test_data,
         'train_file_used_for_history': args.train_data if args.train_data else "None",
-        'l1_cache_warmup_enabled': args.warmup_recommender_l1_cache,
+        'cache_warmup_enabled': args.warmup_recommender_cache,
         'parallel_evaluation': args.use_parallel,
         'num_workers': args.num_workers if args.use_parallel else 0,
-        'parallel_chunk_size': args.parallel_chunk_size if args.use_parallel else 0
+        'parallel_chunk_size': args.parallel_chunk_size if args.use_parallel else 0,
+        'simplified_cache_used': True  # New metadata field
     }
     evaluator.print_summary(results)
 

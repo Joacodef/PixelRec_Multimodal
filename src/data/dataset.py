@@ -1,6 +1,6 @@
-# src/data/dataset.py
+# src/data/dataset.py - Simplified version
 """
-Dataset module for multimodal recommendation system
+Simplified dataset with single cache system
 """
 import torch
 from torch.utils.data import Dataset
@@ -9,18 +9,15 @@ import numpy as np
 from PIL import Image
 import os
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoTokenizer, AutoImageProcessor, CLIPTokenizer, CLIPProcessor
+from transformers import AutoTokenizer, AutoImageProcessor, CLIPTokenizer
 from tqdm import tqdm
-import random
-import pickle
-from typing import Dict, Optional, Tuple, Any, Union, List
+from typing import Dict, Optional, Any, List
 
-from ..config import MODEL_CONFIGS, TextAugmentationConfig, DataConfig
-from .preprocessing import augment_text, normalize_features
+from .simple_cache import SimpleFeatureCache
 
 
 class MultimodalDataset(Dataset):
-    """Dataset for multimodal recommendation with images and text"""
+    """Simplified multimodal dataset with single cache"""
 
     def __init__(
         self,
@@ -30,452 +27,245 @@ class MultimodalDataset(Dataset):
         vision_model_name: str = 'clip',
         language_model_name: str = 'sentence-bert',
         create_negative_samples: bool = True,
-        negative_sampling_ratio: float = 1.0,
-        text_augmentation_config: Optional[TextAugmentationConfig] = None,
-        numerical_feat_cols: List[str] = [],
-        numerical_normalization_method: str = 'none',
-        numerical_scaler: Optional[Any] = None,
-        is_train_mode: bool = False,
-        cache_processed_images: bool = False,
-        shared_image_cache: Optional['SharedImageCache'] = None  # Add this parameter
+        # Simplified cache options
+        cache_features: bool = True,
+        cache_max_items: int = 1000,
+        cache_dir: Optional[str] = None,
+        cache_to_disk: bool = False,
+        **kwargs  # For backward compatibility
     ):
         self.interactions = interactions_df.copy()
         self.item_info = item_info_df.set_index('item_id')
         self.image_folder = image_folder
         
-        self._create_negative_samples_flag = create_negative_samples
-        self._negative_sampling_ratio = negative_sampling_ratio 
-
-        self.text_augmentation_config = text_augmentation_config
-        self.numerical_feat_cols = numerical_feat_cols
-        self.numerical_normalization_method = numerical_normalization_method
-        self.numerical_scaler = numerical_scaler
-        self.is_train_mode = is_train_mode
-
-        self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
-        self.language_config = MODEL_CONFIGS['language'][language_model_name]
-
-        self._init_processors(vision_model_name) 
-
+        # Initialize single cache
+        if cache_features:
+            self.feature_cache = SimpleFeatureCache(
+                max_memory_items=cache_max_items,
+                cache_dir=cache_dir,
+                use_disk=cache_to_disk
+            )
+        else:
+            self.feature_cache = None
+        
+        # Initialize encoders and processors (simplified)
         self.user_encoder = LabelEncoder()
         self.item_encoder = LabelEncoder()
-
-        if not self.interactions.empty and 'user_id' in self.interactions.columns:
+        self._init_processors(vision_model_name, language_model_name)
+        
+        # Fit encoders
+        if not self.interactions.empty:
             self.interactions['user_idx'] = self.user_encoder.fit_transform(self.interactions['user_id'])
-        elif 'user_idx' not in self.interactions.columns:
-            self.interactions['user_idx'] = pd.Series(dtype=int)
-
-        if not self.interactions.empty and 'item_id' in self.interactions.columns:
             self.interactions['item_idx'] = self.item_encoder.fit_transform(self.interactions['item_id'])
-        elif 'item_idx' not in self.interactions.columns:
-            self.interactions['item_idx'] = pd.Series(dtype=int)
+            self.n_users = len(self.user_encoder.classes_)
+            self.n_items = len(self.item_encoder.classes_)
         
-        self.n_users = len(self.user_encoder.classes_) if hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None else 0
-        self.n_items = len(self.item_encoder.classes_) if hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None else 0
-        
-        self.vision_model_name = vision_model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(self.language_config['name'])
-
-        self.clip_tokenizer_for_contrastive = None
-        if self.vision_model_name == 'clip':
-            clip_model_hf_name = MODEL_CONFIGS['vision']['clip']['name']
-            self.clip_tokenizer_for_contrastive = CLIPTokenizer.from_pretrained(clip_model_hf_name)
-        
-        if self.numerical_feat_cols and self.numerical_normalization_method != 'none':
-            self._preprocess_all_item_numerical_features()
-
-        self.all_samples = pd.DataFrame()
-
-        # Initialize image cache
-        self.cache_processed_images = cache_processed_images
-        if shared_image_cache is not None:
-            # Use the provided shared cache
-            self.image_cache = shared_image_cache
-            print("Using shared image cache.")
-        elif self.cache_processed_images:
-            # Create instance-specific cache (original behavior)
-            self.image_cache = {}
-            print("Using instance-specific in-memory image cache.")
-        else:
-            self.image_cache = None
-            print("Image caching is DISABLED.")
-
-
-    def _init_processors(self, vision_model_name: str):
-        if vision_model_name == 'clip':
-            self.image_processor = CLIPProcessor.from_pretrained(self.vision_config['name']).image_processor
-        else:
-            self.image_processor = AutoImageProcessor.from_pretrained(self.vision_config['name'])
-        # Add a debug print to confirm processor type
-        # print(f"DEBUG: Initialized self.image_processor: {type(self.image_processor)}")
-
-
-    def finalize_setup(self):
-        if self._create_negative_samples_flag:
-            if not (hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0 and \
-                    hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None and len(self.item_encoder.classes_) > 0):
-                if self.interactions.empty:
-                    self.all_samples = pd.DataFrame()
-                    for col in ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']:
-                        if col not in self.all_samples.columns: self.all_samples[col] = pd.Series(dtype=object if col in ['user_id', 'item_id'] else int)
-                    return
-                self.all_samples = self.interactions.copy()
-                if 'label' not in self.all_samples.columns and not self.all_samples.empty: self.all_samples['label'] = 1
-                return
-            self.all_samples = self._create_samples_with_labels()
+        # Create samples
+        if create_negative_samples:
+            self.all_samples = self._create_samples_with_negatives()
         else:
             self.all_samples = self.interactions.copy()
-            if 'label' not in self.all_samples.columns and not self.all_samples.empty: self.all_samples['label'] = 1
-            elif self.all_samples.empty and 'label' not in self.all_samples.columns: self.all_samples['label'] = pd.Series(dtype=int)
+            if 'label' not in self.all_samples.columns:
+                self.all_samples['label'] = 1
 
-    def _create_samples_with_labels(self):
-        """
-        Generates positive and negative samples for training,
-        optimized for speed in per-user sampling and DataFrame creation.
-        """
-        current_interactions = self.interactions.copy()  # Always start with a copy
+    def _init_processors(self, vision_model_name: str, language_model_name: str):
+        """Initialize image and text processors"""
+        from ..config import MODEL_CONFIGS
         
-        # Initial checks and idx creation
-        if current_interactions.empty:
-            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-            empty_df = pd.DataFrame(columns=cols)
-            for col in ['user_idx', 'item_idx', 'label']: 
-                empty_df[col] = empty_df[col].astype(int)
-            for col in ['user_id', 'item_id']: 
-                empty_df[col] = empty_df[col].astype(object)
-            return empty_df
-
-        if 'user_idx' not in current_interactions.columns or current_interactions['user_idx'].isnull().all():
-            if 'user_id' in current_interactions.columns and hasattr(self.user_encoder, 'classes_') and len(self.user_encoder.classes_) > 0:
-                try:
-                    known_users = list(self.user_encoder.classes_)
-                    current_interactions = current_interactions[current_interactions['user_id'].isin(known_users)].copy()  # Add .copy()
-                    if not current_interactions.empty: 
-                        current_interactions['user_idx'] = self.user_encoder.transform(current_interactions['user_id'])
-                    else: 
-                        current_interactions['user_idx'] = pd.Series(dtype=int)
-                except Exception as e: 
-                    current_interactions['user_idx'] = pd.Series(dtype=int)
-            elif 'user_idx' not in current_interactions.columns: 
-                current_interactions['user_idx'] = pd.Series(dtype=int)
-        
-        if 'item_idx' not in current_interactions.columns or current_interactions['item_idx'].isnull().all():
-            if 'item_id' in current_interactions.columns and hasattr(self.item_encoder, 'classes_') and len(self.item_encoder.classes_) > 0:
-                try:
-                    known_items = list(self.item_encoder.classes_)
-                    current_interactions = current_interactions[current_interactions['item_id'].isin(known_items)].copy()  # Add .copy()
-                    if not current_interactions.empty: 
-                        current_interactions['item_idx'] = self.item_encoder.transform(current_interactions['item_id'])
-                    else: 
-                        current_interactions['item_idx'] = pd.Series(dtype=int)
-                except Exception as e: 
-                    current_interactions['item_idx'] = pd.Series(dtype=int)
-            elif 'item_idx' not in current_interactions.columns: 
-                current_interactions['item_idx'] = pd.Series(dtype=int)
-        
-        if current_interactions.empty or 'user_idx' not in current_interactions.columns or 'item_idx' not in current_interactions.columns or \
-        current_interactions['user_idx'].isnull().all() or current_interactions['item_idx'].isnull().all():
-            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-            empty_df = pd.DataFrame(columns=cols)
-            for col in ['user_idx', 'item_idx', 'label']: 
-                empty_df[col] = empty_df[col].astype(int)
-            for col in ['user_id', 'item_id']: 
-                empty_df[col] = empty_df[col].astype(object)
-            return empty_df
-
-        # Use .dropna() which returns a new DataFrame instead of inplace modification
-        current_interactions = current_interactions.dropna(subset=['user_idx', 'item_idx'])
-        
-        if not current_interactions.empty:
-            # Create a copy before type conversion to avoid SettingWithCopyWarning
-            current_interactions = current_interactions.copy()
-            current_interactions['user_idx'] = current_interactions['user_idx'].astype(int)
-            current_interactions['item_idx'] = current_interactions['item_idx'].astype(int)
+        # Vision processor
+        if vision_model_name == 'clip':
+            from transformers import CLIPProcessor
+            self.image_processor = CLIPProcessor.from_pretrained(
+                MODEL_CONFIGS['vision'][vision_model_name]['name']
+            ).image_processor
         else:
-            cols = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-            empty_df = pd.DataFrame(columns=cols)
-            for col_name in ['user_idx', 'item_idx', 'label']: 
-                empty_df[col_name] = empty_df[col_name].astype(int)
-            for col_name in ['user_id', 'item_id']: 
-                empty_df[col_name] = empty_df[col_name].astype(object)
-            return empty_df
-
-        positive_df = current_interactions.copy()
-        positive_df['label'] = 1
+            self.image_processor = AutoImageProcessor.from_pretrained(
+                MODEL_CONFIGS['vision'][vision_model_name]['name']
+            )
         
-        if not (hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0 and \
-                hasattr(self.item_encoder, 'classes_') and self.item_encoder.classes_ is not None and len(self.item_encoder.classes_) > 0):
-            print("Warning: User or item encoder not fitted or empty. Cannot generate negative samples effectively.")
-            cols_to_return = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-            for col_ in cols_to_return:
-                if col_ not in positive_df.columns:
-                    if col_ in ['user_idx', 'item_idx', 'label']: 
-                        positive_df[col_] = 0
-                    else: 
-                        positive_df[col_] = None
-            return positive_df[cols_to_return].sample(frac=1, random_state=42).reset_index(drop=True)
-
-        idx_to_user_id = pd.Series(self.user_encoder.classes_, index=self.user_encoder.transform(self.user_encoder.classes_))
-        idx_to_item_id = pd.Series(self.item_encoder.classes_, index=self.item_encoder.transform(self.item_encoder.classes_))
+        # Text tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_CONFIGS['language'][language_model_name]['name']
+        )
         
-        all_item_indices_set = set(self.item_encoder.transform(self.item_encoder.classes_))
-        
-        user_item_interaction_dict = positive_df.groupby('user_idx')['item_idx'].apply(set).to_dict()
-        
-        # Prepare lists to hold column data for negative samples
-        neg_user_ids_col = []
-        neg_item_ids_col = []
-        neg_user_idx_col = []
-        neg_item_idx_col = []
-        
-        print("Generating negative samples for training data (optimized collection)...")
-        for user_idx, interacted_item_indices in tqdm(user_item_interaction_dict.items(), desc="Negative Sampling"):
-            possible_negative_indices = list(all_item_indices_set - interacted_item_indices)
-            
-            num_positive = len(interacted_item_indices)
-            num_negative_to_sample = min(int(num_positive * self._negative_sampling_ratio), len(possible_negative_indices))
-            
-            if num_negative_to_sample > 0:
-                sampled_negative_indices = random.sample(possible_negative_indices, num_negative_to_sample)
-                
-                current_user_id_str = idx_to_user_id.get(user_idx)
-                if current_user_id_str is None:
-                    continue
-
-                for neg_item_idx in sampled_negative_indices:
-                    current_item_id_str = idx_to_item_id.get(neg_item_idx)
-                    if current_item_id_str is None:
-                        continue
-
-                    neg_user_ids_col.append(current_user_id_str)
-                    neg_item_ids_col.append(current_item_id_str)
-                    neg_user_idx_col.append(user_idx)
-                    neg_item_idx_col.append(neg_item_idx)
-        
-        negative_df = pd.DataFrame({
-            'user_id': neg_user_ids_col,
-            'item_id': neg_item_ids_col,
-            'user_idx': neg_user_idx_col,
-            'item_idx': neg_item_idx_col,
-            'label': 0
-        })
-        
-        columns_for_concat = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
-        
-        for col in columns_for_concat:
-            if col not in positive_df.columns:
-                if col == 'label': 
-                    positive_df[col] = 1
-                elif col in ['user_idx', 'item_idx']: 
-                    positive_df[col] = pd.Series(dtype=int)
-                else: 
-                    positive_df[col] = pd.Series(dtype=object)
-
-        if not negative_df.empty:
-            all_samples_df = pd.concat([positive_df[columns_for_concat], negative_df[columns_for_concat]], ignore_index=True)
+        # CLIP tokenizer for contrastive learning (if using CLIP vision)
+        if vision_model_name == 'clip':
+            self.clip_tokenizer = CLIPTokenizer.from_pretrained(
+                MODEL_CONFIGS['vision'][vision_model_name]['name']
+            )
         else:
-            all_samples_df = positive_df[columns_for_concat].copy()
-        
-        if not all_samples_df.empty:
-            # Use .dropna() which returns a new DataFrame instead of inplace modification
-            all_samples_df = all_samples_df.dropna(subset=['user_idx', 'item_idx'])
-            
-            if not all_samples_df.empty:
-                # Ensure we're working with a copy before type conversion
-                all_samples_df = all_samples_df.copy()
-                all_samples_df['user_idx'] = all_samples_df['user_idx'].astype(int)
-                all_samples_df['item_idx'] = all_samples_df['item_idx'].astype(int)
-            else:
-                all_samples_df = pd.DataFrame(columns=columns_for_concat)
-                for col_name in ['user_idx', 'item_idx', 'label']: 
-                    all_samples_df[col_name] = all_samples_df[col_name].astype(int)
-                for col_name in ['user_id', 'item_id']: 
-                    all_samples_df[col_name] = all_samples_df[col_name].astype(object)
+            self.clip_tokenizer = None
 
-        return all_samples_df.sample(frac=1, random_state=42).reset_index(drop=True) if not all_samples_df.empty else all_samples_df
-
-        
     def __len__(self) -> int:
         return len(self.all_samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        if self.all_samples.empty or idx >= len(self.all_samples):
-            raise IndexError(f"Dataset is empty or index {idx} is out of bounds for length {len(self.all_samples)}.")
+        """Get a single sample"""
         row = self.all_samples.iloc[idx]
-        user_idx_val, item_idx_val, item_id_val, label_val = row['user_idx'], row['item_idx'], row['item_id'], row['label']
-        item_info_series = self._get_item_info(item_id_val)
-        text_content = self._get_item_text(item_info_series)
-        if self.is_train_mode and self.text_augmentation_config and self.text_augmentation_config.enabled:
-            text_content = augment_text(text_content, augmentation_type=self.text_augmentation_config.augmentation_type, delete_prob=self.text_augmentation_config.delete_prob, swap_prob=self.text_augmentation_config.swap_prob)
-        text_tokens = self.tokenizer(text_content, padding='max_length', truncation=True, max_length=self.tokenizer.model_max_length if hasattr(self.tokenizer, 'model_max_length') and self.tokenizer.model_max_length else 128, return_tensors='pt')
-        numerical_features_tensor = self._get_item_numerical_features(item_id_val, item_info_series)
-
-        image_tensor = self._load_and_process_image(item_id_val)
-
-        batch = {'user_idx': torch.tensor(user_idx_val, dtype=torch.long), 'item_idx': torch.tensor(item_idx_val, dtype=torch.long), 'image': image_tensor, 'text_input_ids': text_tokens['input_ids'].squeeze(0), 'text_attention_mask': text_tokens['attention_mask'].squeeze(0), 'numerical_features': numerical_features_tensor, 'label': torch.tensor(label_val, dtype=torch.float32)}
-        if self.clip_tokenizer_for_contrastive:
-            clip_tokens = self.clip_tokenizer_for_contrastive(text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt')
-            batch['clip_text_input_ids'], batch['clip_text_attention_mask'] = clip_tokens['input_ids'].squeeze(0), clip_tokens['attention_mask'].squeeze(0)
+        item_id = row['item_id']
+        
+        # Try to get features from cache
+        features = None
+        if self.feature_cache:
+            features = self.feature_cache.get(item_id)
+        
+        # Process features if not cached
+        if features is None:
+            features = self._process_item_features(item_id)
+            
+            # Cache the features
+            if self.feature_cache:
+                self.feature_cache.set(item_id, features)
+        
+        # Add user/item indices and label
+        batch = {
+            'user_idx': torch.tensor(row['user_idx'], dtype=torch.long),
+            'item_idx': torch.tensor(row['item_idx'], dtype=torch.long),
+            'label': torch.tensor(row['label'], dtype=torch.float32),
+            **features
+        }
+        
         return batch
 
-    def _preprocess_all_item_numerical_features(self):
-        print("Preprocessing numerical features for all items in item_info...")
-        processed_numerical_data = {}
-        for item_id, row in tqdm(self.item_info.iterrows(), total=len(self.item_info), desc="Processing item numericals"):
-            raw_features = [float(row.get(col, 0) if pd.notna(row.get(col)) else 0) for col in self.numerical_feat_cols]
-            raw_features_np = np.array(raw_features).reshape(1, -1)
-            if self.numerical_normalization_method != 'none':
-                normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
-                processed_numerical_data[item_id] = torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
-            else: processed_numerical_data[item_id] = torch.tensor(raw_features, dtype=torch.float32)
-        self.item_info['_processed_numerical_features'] = pd.Series(processed_numerical_data, index=processed_numerical_data.keys())
-
-    def _get_item_info(self, item_id: str) -> pd.Series:
-        try:
-            if item_id not in self.item_info.index: raise KeyError
-            return self.item_info.loc[item_id]
-        except KeyError:
-            fallback_data = {'title': '', 'tag': '', 'description': ''}
-            for col in self.numerical_feat_cols: fallback_data[col] = 0
-            fallback_data['_processed_numerical_features'] = torch.zeros(len(self.numerical_feat_cols), dtype=torch.float32) if self.numerical_feat_cols else torch.empty(0, dtype=torch.float32)
-            return pd.Series(fallback_data, name=item_id)
-
-    def _get_item_text(self, item_info_series: pd.Series) -> str:
-        return f"{str(item_info_series.get('title', ''))} {str(item_info_series.get('tag', ''))} {str(item_info_series.get('description', ''))}".strip()
-
-    def _get_item_numerical_features(self, item_id: str, item_info_series: pd.Series) -> torch.Tensor:
-        if '_processed_numerical_features' in self.item_info.columns and item_id in self.item_info.index and pd.notna(self.item_info.loc[item_id, '_processed_numerical_features']):
-            processed_feature = self.item_info.loc[item_id, '_processed_numerical_features']
-            if isinstance(processed_feature, torch.Tensor): return processed_feature
-        raw_features = [float(item_info_series.get(col, 0) if pd.notna(item_info_series.get(col,0)) else 0) for col in self.numerical_feat_cols]
-        if not raw_features: return torch.empty(0, dtype=torch.float32)
-        raw_features_np = np.array(raw_features).reshape(1, -1)
-        if self.numerical_normalization_method != 'none':
-            normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
-            return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
-        return torch.tensor(raw_features, dtype=torch.float32)
-
-    def _get_numerical_features(self, item_info_series: pd.Series) -> torch.Tensor:
-        """Get numerical features from item info series (without needing item_id).
+    def _process_item_features(self, item_id: str) -> Dict[str, torch.Tensor]:
+        """Process all features for an item"""
+        # Get item info
+        if item_id in self.item_info.index:
+            item_row = self.item_info.loc[item_id]
+        else:
+            # Create dummy item info
+            item_row = pd.Series({
+                'title': '', 'tag': '', 'description': '',
+                'view_number': 0, 'comment_number': 0, 'thumbup_number': 0,
+                'share_number': 0, 'coin_number': 0, 'favorite_number': 0, 'barrage_number': 0
+            })
         
-        This method is used by the Recommender class during inference.
+        # Process image
+        image_tensor = self._load_and_process_image(item_id)
         
-        Args:
-            item_info_series: Pandas Series containing item information
-            
-        Returns:
-            torch.Tensor: Normalized numerical features
-        """
-        raw_features = [float(item_info_series.get(col, 0) if pd.notna(item_info_series.get(col, 0)) else 0) for col in self.numerical_feat_cols]
-        if not raw_features: 
-            return torch.empty(0, dtype=torch.float32)
-        raw_features_np = np.array(raw_features).reshape(1, -1)
-        if self.numerical_normalization_method != 'none':
-            normalized_vals_np, _ = normalize_features(raw_features_np, method=self.numerical_normalization_method, scaler=self.numerical_scaler)
-            return torch.tensor(normalized_vals_np.flatten(), dtype=torch.float32)
-        return torch.tensor(raw_features, dtype=torch.float32)
+        # Process text
+        text_content = f"{item_row.get('title', '')} {item_row.get('tag', '')} {item_row.get('description', '')}".strip()
+        
+        # Main tokenizer
+        text_tokens = self.tokenizer(
+            text_content,
+            padding='max_length',
+            truncation=True,
+            max_length=128,
+            return_tensors='pt'
+        )
+        
+        # Numerical features
+        numerical_features = torch.tensor([
+            float(item_row.get('view_number', 0)),
+            float(item_row.get('comment_number', 0)),
+            float(item_row.get('thumbup_number', 0)),
+            float(item_row.get('share_number', 0)),
+            float(item_row.get('coin_number', 0)),
+            float(item_row.get('favorite_number', 0)),
+            float(item_row.get('barrage_number', 0)),
+        ], dtype=torch.float32)
+        
+        features = {
+            'image': image_tensor,
+            'text_input_ids': text_tokens['input_ids'].squeeze(0),
+            'text_attention_mask': text_tokens['attention_mask'].squeeze(0),
+            'numerical_features': numerical_features
+        }
+        
+        # Add CLIP tokens if available
+        if self.clip_tokenizer:
+            clip_tokens = self.clip_tokenizer(
+                text_content,
+                padding='max_length',
+                truncation=True,
+                max_length=77,
+                return_tensors='pt'
+            )
+            features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
+            features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
+        
+        return features
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
-        # Check cache first if enabled
-        if self.image_cache is not None:
-            cached_tensor = None
-            
-            # Handle SharedImageCache (object with get/set methods)
-            if hasattr(self.image_cache, 'get') and callable(getattr(self.image_cache, 'get')):
-                cached_tensor = self.image_cache.get(item_id)
-            # Handle dict-style cache (backward compatibility)
-            elif isinstance(self.image_cache, dict):
-                cached_tensor = self.image_cache.get(item_id)
-            else:
-                # Unknown cache type - log warning and continue without cache
-                print(f"Warning: Unknown cache type {type(self.image_cache)}. Proceeding without cache.")
-            
-            if cached_tensor is not None:
-                return cached_tensor
-        
+        """Load and process image for an item"""
+        # Find image file
         base_path = os.path.join(self.image_folder, str(item_id))
-        image_path_to_load = None
+        image_path = None
+        
         for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
-            current_path = f"{base_path}{ext}"
-            if os.path.exists(current_path): 
-                image_path_to_load = current_path
+            potential_path = f"{base_path}{ext}"
+            if os.path.exists(potential_path):
+                image_path = potential_path
                 break
         
-        placeholder_size = (224, 224)
+        # Load image or create placeholder
         try:
-            if hasattr(self.image_processor, 'size'):
-                processor_size = self.image_processor.size
-                if isinstance(processor_size, dict) and 'shortest_edge' in processor_size:
-                    size_val = processor_size['shortest_edge']
-                    placeholder_size = (size_val, size_val)
-                elif isinstance(processor_size, (tuple, list)) and len(processor_size) >= 2:
-                    placeholder_size = (processor_size[0], processor_size[1])
-                elif isinstance(processor_size, int):
-                    placeholder_size = (processor_size, processor_size)
-        except Exception:
-            pass
-
-        try:
-            if image_path_to_load is None:
-                raise FileNotFoundError(f"Image for {item_id} not found.")
-            image = Image.open(image_path_to_load).convert('RGB')
-        except Exception as e:
-            image = Image.new('RGB', placeholder_size, color='grey')
-
-        try:
-            processed_output = self.image_processor(images=image, return_tensors='pt')
-        except Exception as proc_err:
-            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
-
-        image_tensor = None
-        if isinstance(processed_output, dict) and 'pixel_values' in processed_output:
-            image_tensor = processed_output['pixel_values']
-            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1:
-                image_tensor = image_tensor.squeeze(0)
-        elif torch.is_tensor(processed_output): 
-            image_tensor = processed_output
-            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1:
-                image_tensor = image_tensor.squeeze(0) 
-        
-        if image_tensor is None:
-            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
-
-        if image_tensor.ndim == 2:
-            image_tensor = image_tensor.unsqueeze(0)
-        if image_tensor.ndim == 3 and image_tensor.shape[0] == 1:
-            image_tensor = image_tensor.repeat(3,1,1)
-        
-        if not (image_tensor.ndim == 3 and image_tensor.shape[0] == 3):
-            return torch.zeros(3, placeholder_size[0], placeholder_size[1])
+            if image_path:
+                image = Image.open(image_path).convert('RGB')
+            else:
+                image = Image.new('RGB', (224, 224), color='grey')
             
-        # Store in cache if enabled - use consistent interface
-        if self.image_cache is not None:
-            # Handle SharedImageCache (object with get/set methods)
-            if hasattr(self.image_cache, 'set') and callable(getattr(self.image_cache, 'set')):
-                self.image_cache.set(item_id, image_tensor)
-            # Handle dict-style cache (backward compatibility)
-            elif isinstance(self.image_cache, dict):
-                self.image_cache[item_id] = image_tensor
-            # Unknown cache type already handled above with warning
+            # Process image
+            processed = self.image_processor(images=image, return_tensors='pt')
+            
+            if isinstance(processed, dict) and 'pixel_values' in processed:
+                image_tensor = processed['pixel_values'].squeeze(0)
+            else:
+                image_tensor = processed.squeeze(0) if hasattr(processed, 'squeeze') else processed
+            
+            # Ensure correct shape (3, H, W)
+            if image_tensor.dim() == 2:
+                image_tensor = image_tensor.unsqueeze(0).repeat(3, 1, 1)
+            elif image_tensor.dim() == 3 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.repeat(3, 1, 1)
+            
+            return image_tensor
+            
+        except Exception as e:
+            print(f"Error processing image for item {item_id}: {e}")
+            return torch.zeros(3, 224, 224, dtype=torch.float32)
+
+    def _create_samples_with_negatives(self) -> pd.DataFrame:
+        """Create positive and negative samples"""
+        positive_df = self.interactions.copy()
+        positive_df['label'] = 1
         
-        return image_tensor
+        # Simple negative sampling
+        negative_samples = []
+        all_items = set(self.interactions['item_id'].unique())
+        
+        for user_id in tqdm(self.interactions['user_id'].unique(), desc="Creating negative samples"):
+            user_items = set(self.interactions[self.interactions['user_id'] == user_id]['item_id'])
+            negative_items = list(all_items - user_items)
+            
+            # Sample same number of negatives as positives
+            num_negatives = min(len(user_items), len(negative_items))
+            if num_negatives > 0:
+                sampled_negatives = np.random.choice(negative_items, num_negatives, replace=False)
+                user_idx = self.user_encoder.transform([user_id])[0]
+                
+                for neg_item in sampled_negatives:
+                    item_idx = self.item_encoder.transform([neg_item])[0]
+                    negative_samples.append({
+                        'user_id': user_id,
+                        'item_id': neg_item,
+                        'user_idx': user_idx,
+                        'item_idx': item_idx,
+                        'label': 0
+                    })
+        
+        negative_df = pd.DataFrame(negative_samples)
+        all_samples = pd.concat([positive_df, negative_df], ignore_index=True)
+        return all_samples.sample(frac=1, random_state=42).reset_index(drop=True)
 
     def get_item_popularity(self) -> Dict[str, float]:
-        popularity = {}
-        view_col = 'view_number' if 'view_number' in self.numerical_feat_cols else (self.numerical_feat_cols[0] if self.numerical_feat_cols else None)
-        for item_id_val in self.item_info.index:
-            if view_col and view_col in self.item_info.columns:
-                pop_val = self.item_info.loc[item_id_val, view_col]
-                popularity[item_id_val] = float(pop_val) if pd.notna(pop_val) else 0.0
-            else: popularity[item_id_val] = 0.0
-        return popularity
+        """Get item popularity scores"""
+        return self.interactions['item_id'].value_counts().to_dict()
 
-    def get_user_history(self, user_id_to_check: str) -> set:
-        if not hasattr(self.user_encoder, 'classes_') or self.user_encoder.classes_ is None: return set()
-        try:
-            if user_id_to_check not in self.user_encoder.classes_: return set()
-            user_idx_internal = self.user_encoder.transform([user_id_to_check])[0]
-        except ValueError: return set()
-        if 'user_idx' not in self.interactions.columns or self.interactions.empty: return set()
-        user_interactions_df = self.interactions[self.interactions['user_idx'] == user_idx_internal]
-        return set(user_interactions_df['item_id'].unique())
+    def get_user_history(self, user_id: str) -> set:
+        """Get user's interaction history"""
+        if user_id not in self.user_encoder.classes_:
+            return set()
+        user_interactions = self.interactions[self.interactions['user_id'] == user_id]
+        return set(user_interactions['item_id'].unique())
