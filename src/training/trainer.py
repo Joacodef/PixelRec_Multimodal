@@ -155,128 +155,239 @@ class Trainer:
         optimizer: optim.Optimizer,
         gradient_clip: float
     ) -> Dict[str, float]:
-        self.model.train()
+        self.model.train() # Sets the model to training mode.
+        
         total_loss_val, bce_loss_val, contrastive_loss_val = 0, 0, 0
         correct_preds, total_samples = 0, 0
-        progress_bar = tqdm(train_loader, desc=f"Epoch {self.epoch+1} - Training")
+        # Wraps train_loader with tqdm for a progress bar.
+        progress_bar = tqdm(train_loader, desc=f"Epoch {self.epoch+1} - Training", leave=False)
 
-        for batch in progress_bar:
-            optimizer.zero_grad()
-            batch = self._batch_to_device(batch)
+        for batch_idx, batch in enumerate(progress_bar):
+            optimizer.zero_grad() # Clears old gradients.
+            batch = self._batch_to_device(batch) # Moves batch data to the configured device.
+            
+            # Prepares arguments for the model's forward pass from the batch data.
             model_call_args = {
                 'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
                 'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                 'numerical_features': batch['numerical_features'],
             }
+            # When preparing model_call_args or model_call_args_val
+            if batch_idx == 5: # Or whatever batch_idx causes NaNs, or if the NaN warning was triggered
+                model_call_args['debug_this_batch'] = True # or model_call_args_val
+            else:
+                model_call_args['debug_this_batch'] = False # or model_call_args_val
+            # Adds CLIP-specific text inputs if they are present in the batch.
             if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
             if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
 
-            # Initialize features for loss to None
+            # --- Existing model call logic ---
             vision_features_for_loss = None
             text_features_for_loss = None
+            output_before_squeeze = None # Initialize
+
+            model_call_args['debug_this_batch'] = True
 
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                 model_call_args['return_embeddings'] = True
-                # model.forward returns: output, vision_for_contrastive, text_for_contrastive, projected_vision_main_task_emb
-                # Unpack all 4 returned values; the fourth is ignored here.
                 output_tuple = self.model(**model_call_args)
-                output, vision_features_for_loss, text_features_for_loss, _ = output_tuple
+                output_before_squeeze, vision_features_for_loss, text_features_for_loss, _ = output_tuple
             else:
                 model_call_args['return_embeddings'] = False
-                output = self.model(**model_call_args)
-                # vision_features_for_loss and text_features_for_loss remain None
+                output_before_squeeze = self.model(**model_call_args)
+            # --- End of existing model call logic ---
+
+            # +++ START NEW DIAGNOSTIC (BEFORE SQUEEZE) +++
+            if model_call_args['debug_this_batch']: # Only for the problematic batch
+                is_nan_before_squeeze = torch.isnan(output_before_squeeze).any().item()
+                is_inf_before_squeeze = torch.isinf(output_before_squeeze).any().item()
+                print(f"\nTRAINER DEBUG (batch {batch_idx}): BEFORE squeeze:")
+                print(f"  output_before_squeeze contains NaN: {is_nan_before_squeeze}")
+                print(f"  output_before_squeeze contains Inf: {is_inf_before_squeeze}")
+                if not (is_nan_before_squeeze or is_inf_before_squeeze):
+                    print(f"  Min: {output_before_squeeze.min().item()}, Max: {output_before_squeeze.max().item()}, Mean: {output_before_squeeze.mean().item()}")
+                elif torch.isfinite(output_before_squeeze).any(): # If some values are finite
+                    finite_vals_pre_squeeze = output_before_squeeze[torch.isfinite(output_before_squeeze)]
+                    print(f"  Finite values in output_before_squeeze - min: {finite_vals_pre_squeeze.min().item()}, max: {finite_vals_pre_squeeze.max().item()}, mean: {finite_vals_pre_squeeze.mean().item()}")
+                else:
+                    print(f"  output_before_squeeze contains no finite values.")
+            # +++ END NEW DIAGNOSTIC (BEFORE SQUEEZE) +++
             
-            output = output.squeeze() # Ensure output is 1D for BCE loss
+            output = output_before_squeeze.squeeze() # The squeeze operation
+
+            # +++ START EXISTING DIAGNOSTIC (AFTER SQUEEZE) +++
+            has_nan = torch.isnan(output).any()
+            has_inf = torch.isinf(output).any()
+
+            if has_nan or has_inf: # This is your existing check
+                print(f"\nWARNING: NaN or Inf detected in TRAINING output AFTER squeeze at batch_idx {batch_idx}!")
+                print(f"  output (after squeeze) contains NaN: {has_nan.item()}")
+                print(f"  output (after squeeze) contains Inf: {has_inf.item()}")
+                finite_values = output[torch.isfinite(output)]
+                if finite_values.numel() > 0:
+                    print(f"  Finite values in output (after squeeze) - min: {finite_values.min().item()}, max: {finite_values.max().item()}, mean: {finite_values.mean().item()}")
+                else:
+                    print("  output (after squeeze) contains no finite values (all NaN/Inf).")
+                
+                print(f"  Problematic TRAINING batch (idx {batch_idx}) details:")
+                if 'user_idx' in batch: print(f"    User indices (first 5): {batch['user_idx'][:5].tolist()}")
+                if 'item_idx' in batch: print(f"    Item indices (first 5): {batch['item_idx'][:5].tolist()}")
+            # +++ END EXISTING DIAGNOSTIC (AFTER SQUEEZE) +++
+            
+            # Calculates loss using the criterion.
             loss_dict = self.criterion(
                 output, batch['label'], 
-                vision_features_for_loss, # Pass the correctly unpacked (or None) features
-                text_features_for_loss,   # Pass the correctly unpacked (or None) features
+                vision_features_for_loss,
+                text_features_for_loss,
                 self.model.temperature if hasattr(self.model, 'temperature') else None
             )
-            loss_dict['total'].backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip)
-            optimizer.step()
-
-            total_loss_val += loss_dict['total'].item()
-            bce_loss_val += loss_dict['bce'].item()
-            contrastive_loss_val += loss_dict.get('contrastive', torch.tensor(0.0)).item()
             
+            # Backpropagation if total loss is finite, otherwise skip to prevent further errors.
+            if torch.isfinite(loss_dict['total']):
+                loss_dict['total'].backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip) # Clips gradients.
+                optimizer.step() # Updates model parameters.
+            else:
+                print(f"WARNING: Skipping backward pass for batch_idx {batch_idx} due to non-finite loss (NaN or Inf).")
+
+
+            # Accumulates loss values (only if finite).
+            if torch.isfinite(loss_dict['total']): total_loss_val += loss_dict['total'].item()
+            if torch.isfinite(loss_dict['bce']): bce_loss_val += loss_dict['bce'].item()
+            # Uses .get() for contrastive loss.
+            if torch.isfinite(loss_dict.get('contrastive', torch.tensor(0.0))):
+                contrastive_loss_val += loss_dict.get('contrastive', torch.tensor(0.0)).item()
+            
+            # Ensures output and label tensors are at least 1D for accuracy calculation.
             if output.ndim == 0: output = output.unsqueeze(0)
             if batch['label'].ndim == 0: batch['label'] = batch['label'].unsqueeze(0)
             
-            if output.size() == batch['label'].size():
+            # Calculates prediction accuracy for finite outputs.
+            if output.size() == batch['label'].size() and torch.isfinite(output).all():
                 predictions = (output > 0.5).float()
                 correct_preds += (predictions == batch['label']).sum().item()
             total_samples += batch['label'].size(0)
 
+            # Updates the progress bar with current loss and accuracy.
+            current_loss_display = loss_dict['total'].item() if torch.isfinite(loss_dict['total']) else float('nan')
             current_accuracy = correct_preds / total_samples if total_samples > 0 else 0
-            progress_bar.set_postfix({'loss': f"{loss_dict['total'].item():.4f}", 'acc': f"{current_accuracy:.4f}"})
+            progress_bar.set_postfix({'loss': f"{current_loss_display:.4f}", 'acc': f"{current_accuracy:.4f}"})
 
+        # Calculates average metrics over the training epoch.
+        len_train_loader = len(train_loader) if train_loader else 0
+        avg_total_loss = total_loss_val / len_train_loader if len_train_loader > 0 else float('nan') # Use NaN if no valid batches
+        avg_bce_loss = bce_loss_val / len_train_loader if len_train_loader > 0 else float('nan')
+        avg_contrastive_loss = contrastive_loss_val / len_train_loader if len_train_loader > 0 else float('nan')
+        avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0.0
+        
         return {
-            'total_loss': total_loss_val / len(train_loader) if len(train_loader) > 0 else 0,
-            'bce_loss': bce_loss_val / len(train_loader) if len(train_loader) > 0 else 0,
-            'contrastive_loss': contrastive_loss_val / len(train_loader) if len(train_loader) > 0 else 0,
-            'accuracy': correct_preds / total_samples if total_samples > 0 else 0
+            'total_loss': avg_total_loss,
+            'bce_loss': avg_bce_loss,
+            'contrastive_loss': avg_contrastive_loss,
+            'accuracy': avg_accuracy
         }
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        self.model.eval()
+        self.model.eval() # Sets the model to evaluation mode.
         total_loss_val, bce_loss_val, contrastive_loss_val_val = 0, 0, 0
         correct_preds, total_samples = 0, 0
 
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {self.epoch+1} - Validation"):
-                batch = self._batch_to_device(batch)
+        # Wrap val_loader with tqdm for a progress bar.
+        progress_bar_val = tqdm(val_loader, desc=f"Epoch {self.epoch+1} - Validation", leave=False)
+
+        with torch.no_grad(): # Disables gradient calculations during validation.
+            for batch_idx, batch in enumerate(progress_bar_val):
+                batch = self._batch_to_device(batch) # Moves batch data to the configured device.
+                
+                # Prepares arguments for the model's forward pass from the batch data.
                 model_call_args_val = {
                     'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
                     'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                     'numerical_features': batch['numerical_features'],
                 }
+                # When preparing model_call_args or model_call_args_val
+                if batch_idx == 5: # Or whatever batch_idx causes NaNs, or if the NaN warning was triggered
+                    model_call_args['debug_this_batch'] = True # or model_call_args_val
+                else:
+                    model_call_args['debug_this_batch'] = False # or model_call_args_val
+                # Adds CLIP-specific text inputs if they are present in the batch.
                 if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
                 
-                # Initialize features for loss to None
                 vision_features_for_loss_val = None
                 text_features_for_loss_val = None
 
+                # Calls the model's forward pass.
                 if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                     model_call_args_val['return_embeddings'] = True
-                    # model.forward returns: output, vision_for_contrastive, text_for_contrastive, projected_vision_main_task_emb
-                    # Unpack all 4 returned values; the fourth is ignored here.
                     output_tuple_val = self.model(**model_call_args_val)
                     output_val, vision_features_for_loss_val, text_features_for_loss_val, _ = output_tuple_val
                 else:
                     model_call_args_val['return_embeddings'] = False
                     output_val = self.model(**model_call_args_val)
-                    # vision_features_for_loss_val and text_features_for_loss_val remain None
 
-                output_val = output_val.squeeze()
+                output_val = output_val.squeeze() # Removes dimensions of size 1 from the output.
 
+                # +++ START DIAGNOSTIC BLOCK +++
+                # Checks for NaN or Inf values in the model's output before passing to loss.
+                has_nan = torch.isnan(output_val).any()
+                has_inf = torch.isinf(output_val).any()
+
+                if has_nan or has_inf:
+                    print(f"  Problematic batch (idx {batch_idx}) details:")
+                    if 'user_idx' in batch:
+                        print(f"    User indices (first 5): {batch['user_idx'][:5].tolist()}")
+                    if 'item_idx' in batch:
+                        print(f"    Item indices (first 5): {batch['item_idx'][:5].tolist()}")
+                    print(f"\nWARNING: NaN or Inf detected in VALIDATION output_val at batch_idx {batch_idx}!")
+                    print(f"  output_val contains NaN: {has_nan.item()}")
+                    print(f"  output_val contains Inf: {has_inf.item()}")
+                    # It's helpful to see the range of finite values if some parts are problematic
+                    finite_values = output_val[torch.isfinite(output_val)]
+                    if finite_values.numel() > 0:
+                        print(f"  Finite values in output_val - min: {finite_values.min().item()}, max: {finite_values.max().item()}, mean: {finite_values.mean().item()}")
+                    else:
+                        print("  output_val contains no finite values (all NaN/Inf).")
+                    # Consider printing a few problematic values from output_val if needed for more detail
+                    # For example: print(output_val[torch.isnan(output_val) | torch.isinf(output_val)])
+                # +++ END DIAGNOSTIC BLOCK +++
+
+                # Calculates loss using the criterion (e.g., MultimodalRecommenderLoss).
                 loss_dict_val = self.criterion(
                     output_val, batch['label'], 
-                    vision_features_for_loss_val, # Pass the correctly unpacked (or None) features
-                    text_features_for_loss_val,   # Pass the correctly unpacked (or None) features
+                    vision_features_for_loss_val,
+                    text_features_for_loss_val,
                     self.model.temperature if hasattr(self.model, 'temperature') else None
                 )
                 
+                # Accumulates loss values.
                 total_loss_val += loss_dict_val['total'].item()
                 bce_loss_val += loss_dict_val['bce'].item()
+                # Uses .get() for contrastive loss as it might be absent if not use_contrastive.
                 contrastive_loss_val_val += loss_dict_val.get('contrastive', torch.tensor(0.0)).item()
 
+                # Ensures output and label tensors are at least 1D for consistent processing.
                 if output_val.ndim == 0: output_val = output_val.unsqueeze(0)
                 if batch['label'].ndim == 0: batch['label'] = batch['label'].unsqueeze(0)
 
+                # Calculates prediction accuracy.
                 if output_val.size() == batch['label'].size():
-                    predictions = (output_val > 0.5).float()
+                    predictions = (output_val > 0.5).float() # Converts probabilities to binary predictions.
                     correct_preds += (predictions == batch['label']).sum().item()
                 total_samples += batch['label'].size(0)
         
-        len_val_loader = len(val_loader) if val_loader else 0
+        # Calculates average metrics over the validation epoch.
+        len_val_loader = len(val_loader) if val_loader else 0 # Handles case of empty val_loader.
+        avg_total_loss = total_loss_val / len_val_loader if len_val_loader > 0 else 0
+        avg_bce_loss = bce_loss_val / len_val_loader if len_val_loader > 0 else 0
+        avg_contrastive_loss = contrastive_loss_val_val / len_val_loader if len_val_loader > 0 else 0
+        avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0
+        
         return {
-            'total_loss': total_loss_val / len_val_loader if len_val_loader > 0 else 0,
-            'bce_loss': bce_loss_val / len_val_loader if len_val_loader > 0 else 0,
-            'contrastive_loss': contrastive_loss_val_val / len_val_loader if len_val_loader > 0 else 0,
-            'accuracy': correct_preds / total_samples if total_samples > 0 else 0
+            'total_loss': avg_total_loss,
+            'bce_loss': avg_bce_loss,
+            'contrastive_loss': avg_contrastive_loss,
+            'accuracy': avg_accuracy
         }
 
 

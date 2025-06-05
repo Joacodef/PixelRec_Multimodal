@@ -386,53 +386,169 @@ class MultimodalRecommender(nn.Module):
         numerical_features: torch.Tensor,
         clip_text_input_ids: Optional[torch.Tensor] = None, 
         clip_text_attention_mask: Optional[torch.Tensor] = None, 
-        return_embeddings: bool = False
+        return_embeddings: bool = False,
+        debug_this_batch: bool = False # Add this argument for targeted debugging
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
+        
+        def check_tensor(tensor: torch.Tensor, name: str):
+            # Helper function to check and print if a tensor contains NaN or Inf.
+            if debug_this_batch: # Only print for the problematic batch
+                if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+                    print(f"DEBUG: NaN/Inf detected in '{name}'")
+                    print(f"  Shape: {tensor.shape}")
+                    print(f"  Contains NaN: {torch.isnan(tensor).any().item()}")
+                    print(f"  Contains Inf: {torch.isinf(tensor).any().item()}")
+                    finite_vals = tensor[torch.isfinite(tensor)]
+                    if finite_vals.numel() > 0:
+                        print(f"  Finite min: {finite_vals.min().item()}, max: {finite_vals.max().item()}, mean: {finite_vals.mean().item()}")
+                    else:
+                        print(f"  No finite values in '{name}'.")
+                    # To stop execution immediately when a NaN is found for the first time:
+                    # raise ValueError(f"NaN found in {name}") 
+                else:
+                    print(f"DEBUG: '{name}' is clean. Shape: {tensor.shape}, Min: {tensor.min().item()}, Max: {tensor.max().item()}, Mean: {tensor.mean().item()}")
+
+
         batch_size = user_idx.size(0)
 
         user_emb = self.user_embedding(user_idx)
+        check_tensor(user_emb, "user_emb")
         item_emb = self.item_embedding(item_idx)
+        check_tensor(item_emb, "item_emb")
 
         raw_vision_output = self._get_vision_features(image)
-
-        # Features for Main Recommendation Task
+        check_tensor(raw_vision_output, "raw_vision_output")
+        
         projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
+        check_tensor(projected_vision_emb_main_task, "projected_vision_emb_main_task")
+
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
+        check_tensor(raw_language_feat_main_task, "raw_language_feat_main_task")
         projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
+        check_tensor(projected_language_emb_main_task, "projected_language_emb_main_task")
+
+        # CHECK INPUT TO NUMERICAL PROJECTION
+        check_tensor(numerical_features, "numerical_features (INPUT to projection)") # Use your existing helper
+
+        # Original projection call
+        # projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
+        
+        # --- START DEBUGGING self.numerical_projection ---
+        if debug_this_batch: # Or batch_idx == 96 specifically
+            print(f"\nDEBUGGING self.numerical_projection (debug_this_batch is True):")
+            x_num = numerical_features
+            if torch.isnan(x_num).any() or torch.isinf(x_num).any():
+                print("  INPUT numerical_features to numerical_projection itself contains NaN/Inf!")
+            else:
+                print("  INPUT numerical_features to numerical_projection is clean.")
+
+            for i_proj, proj_layer in enumerate(self.numerical_projection): # self.numerical_projection is nn.Sequential
+                x_num_before_layer = x_num
+                x_num = proj_layer(x_num)
+                is_nan_after_proj_layer = torch.isnan(x_num).any().item()
+                print(f"  After numerical_projection layer {i_proj} ({type(proj_layer).__name__}): shape={x_num.shape}, any_nan={is_nan_after_proj_layer}")
+                if isinstance(proj_layer, nn.Linear):
+                    print(f"    Linear weight mean_abs: {proj_layer.weight.abs().mean().item()}")
+                if is_nan_after_proj_layer:
+                    print(f"    Input to this projection layer had NaNs: {torch.isnan(x_num_before_layer).any().item()}")
+                    if torch.isfinite(x_num_before_layer).any():
+                        print(f"    Input finite min/max/mean: {x_num_before_layer[torch.isfinite(x_num_before_layer)].min().item()}, "
+                                f"{x_num_before_layer[torch.isfinite(x_num_before_layer)].max().item()}, "
+                                f"{x_num_before_layer[torch.isfinite(x_num_before_layer)].mean().item()}")
+                    else:
+                        print(f"    Input to this projection layer had no finite values.")
+                    projected_numerical_emb_main_task = x_num # Assign potentially NaN tensor
+                    # raise ValueError(f"NaN after numerical_projection layer {i_proj}") # Optionally raise error to stop
+                    break # Stop further projection if NaN found
+            projected_numerical_emb_main_task = x_num
+        else: # Normal execution path if not debugging this batch
+            projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
+        # --- END DEBUGGING self.numerical_projection ---
+        
+        check_tensor(projected_numerical_emb_main_task, "projected_numerical_emb_main_task (OUTPUT of projection)")
+
         projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
+        check_tensor(projected_numerical_emb_main_task, "projected_numerical_emb_main_task")
 
         # Features for Contrastive Loss (only if return_embeddings is True)
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
 
-        if return_embeddings: 
-            if self.use_contrastive and hasattr(self, 'clip_text_model'):
-                if hasattr(self, 'vision_contrastive_projection'):
-                    vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
-                
-                if clip_text_input_ids is not None and clip_text_attention_mask is not None:
-                    raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
-                    
-                    if hasattr(self, 'text_contrastive_projection') and raw_clip_text_output is not None:
-                        text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
-                else:
-                    raise ValueError(
-                        "CLIP text input IDs and attention mask must be provided "
-                        "when 'use_contrastive' is True and 'return_embeddings' is True."
-                    )
+        if return_embeddings and self.use_contrastive: # Simplified condition based on your model structure
+            if hasattr(self, 'vision_contrastive_projection'):
+                vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
+                if vision_features_for_contrastive_loss is not None: # Check if it's None before calling check_tensor
+                    check_tensor(vision_features_for_contrastive_loss, "vision_features_for_contrastive_loss")
+            
+            if hasattr(self, 'clip_text_model') and clip_text_input_ids is not None and clip_text_attention_mask is not None:
+                raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
+                if raw_clip_text_output is not None and hasattr(self, 'text_contrastive_projection'): # Check if raw_clip_text_output is not None
+                    text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
+                    if text_features_for_contrastive_loss is not None: # Check if it's None before calling check_tensor
+                        check_tensor(text_features_for_contrastive_loss, "text_features_for_contrastive_loss")
         
         # Fusion and Prediction for Main Task
-        combined_features = self._apply_attention_fusion(
-            user_emb, item_emb, projected_vision_emb_main_task,
-            projected_language_emb_main_task, projected_numerical_emb_main_task, batch_size
-        )
-        output = self.fusion(combined_features)
+        # Stack features for attention
+        # Ensure all components are not None and have valid values before stacking
+        # For simplicity, assuming they are valid if no NaN detected so far by check_tensor
+        
+        features_stacked = torch.stack([
+            user_emb, item_emb, 
+            projected_vision_emb_main_task,
+            projected_language_emb_main_task, 
+            projected_numerical_emb_main_task
+        ], dim=0) # Stacking along a new dimension (dim=0)
+        check_tensor(features_stacked, "features_stacked (input to attention)")
+        
+        # Pass through attention layer
+        # MultiheadAttention expects query, key, value: (SeqLen, Batch, Dim) or (Batch, SeqLen, Dim) if batch_first=True
+        # Current stacking: (5, Batch, Dim)
+        # Model's attention layer: batch_first=False is the default for nn.MultiheadAttention if not specified or from config
+        # If your self.attention is configured with batch_first=True, you need .permute(1,0,2) before attention.
+        # Assuming self.attention expects (SeqLen=5, Batch, EmbeddingDim)
+        attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
+        check_tensor(attended_features, "attended_features (output of self.attention)")
+
+        # Reshape for fusion layers
+        # attended_features shape: (5, Batch, EmbeddingDim)
+        # permute to (Batch, 5, EmbeddingDim) then view as (Batch, 5 * EmbeddingDim)
+        combined_features = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
+        check_tensor(combined_features, "combined_features (input to self.fusion MLP)")
+
+        # Pass through the fusion MLP
+        x = combined_features
+        if debug_this_batch: print(f"DEBUG: Input to fusion MLP: shape={x.shape}, any_nan={torch.isnan(x).any().item()}")
+        for i, layer_module in enumerate(self.fusion): # self.fusion is an nn.Sequential
+            x_before_layer = x
+            x = layer_module(x)
+            is_nan_after = torch.isnan(x).any().item()
+            if debug_this_batch:
+                print(f"DEBUG: After fusion layer {i} ({type(layer_module).__name__}): shape={x.shape}, any_nan={is_nan_after}")
+                if isinstance(layer_module, nn.BatchNorm1d):
+                    print(f"  BatchNorm running_mean: {layer_module.running_mean.abs().mean().item() if layer_module.running_mean is not None else 'N/A'}") # Print mean of abs values
+                    print(f"  BatchNorm running_var: {layer_module.running_var.abs().mean().item() if layer_module.running_var is not None else 'N/A'}")
+                    print(f"  BatchNorm weight mean: {layer_module.weight.abs().mean().item() if layer_module.weight is not None else 'N/A'}")
+                    print(f"  Input to BN had NaNs: {torch.isnan(x_before_layer).any().item()}")
+                    print(f"  Input to BN min/max/mean (finite): "
+                        f"{x_before_layer[torch.isfinite(x_before_layer)].min().item() if torch.isfinite(x_before_layer).any() else 'N/A'}, "
+                        f"{x_before_layer[torch.isfinite(x_before_layer)].max().item() if torch.isfinite(x_before_layer).any() else 'N/A'}, "
+                        f"{x_before_layer[torch.isfinite(x_before_layer)].mean().item() if torch.isfinite(x_before_layer).any() else 'N/A'}")
+
+            if is_nan_after and debug_this_batch: # Stop if NaN appears
+                print(f"STOPPING: NaN detected after fusion layer {i} ({type(layer_module).__name__})")
+                # To save tensors for offline debugging:
+                # torch.save(x_before_layer, f"debug_tensor_input_to_layer_{i}_{item_id if item_id else 'unknown'}.pt")
+                # torch.save(x, f"debug_tensor_output_of_layer_{i}_{item_id if item_id else 'unknown'}.pt")
+                # Or raise an error to stop and inspect
+                # raise ValueError(f"NaN detected after fusion layer {i} ({type(layer_module).__name__})")
+                #break # Or return x here to see the NaN propagate
+        output = x
+        check_tensor(output, "final_output (from self.fusion MLP)")
 
         if return_embeddings:
             return output, vision_features_for_contrastive_loss, text_features_for_contrastive_loss, projected_vision_emb_main_task
         
         return output
-
     def get_item_embedding(
         self, item_idx: torch.Tensor, image: torch.Tensor, text_input_ids: torch.Tensor,
         text_attention_mask: torch.Tensor, numerical_features: torch.Tensor

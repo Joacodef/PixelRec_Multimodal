@@ -1,137 +1,115 @@
+Okay, I will generate the `configuration.md` file based on the provided YAML files and the existing `configuration.md`.
+
+```markdown
 # Configuration Usage Guide
 
 ## Overview
-We now have two configuration approaches:
 
-1. **`configs/simple_config.yaml`** - Essential settings only (~15 parameters)
-2. **`configs/advanced_config.yaml`** - All configurable options (~60+ parameters)
+This system utilizes YAML-based configuration files to manage model, training, data, and recommendation parameters. Two primary configuration files are provided:
 
-## Quick Start (Recommended)
+1.  **`configs/simple_config.yaml`**: Contains essential settings for quick setup and common use cases.
+2.  **`configs/advanced_config.yaml`**: Offers a comprehensive set of options for detailed experimentation and fine-tuning.
 
-### Use Simple Config for Most Cases:
+All executable scripts in the `scripts/` directory accept a `--config` argument to specify which configuration file to use.
+
+## Using Configuration Files
+
+### Simple Configuration (`simple_config.yaml`)
+
+For most common tasks and initial experiments, `simple_config.yaml` is recommended. It allows you to quickly adjust core parameters.
+
+**Example Usage:**
 ```bash
 python scripts/train.py --config configs/simple_config.yaml
-python scripts/evaluate.py --config configs/simple_config.yaml --test_data data/splits/split_tiny/test.csv --train_data data/splits/split_tiny/train.csv --eval_task retrieval --recommender_type multimodal --output results/simple_results.json
+python scripts/evaluate.py --config configs/simple_config.yaml --test_data <path_to_test_data> --train_data <path_to_train_data> --eval_task retrieval
 ```
 
-### Customize Simple Config:
-Just edit the essential parameters in `configs/simple_config.yaml`:
+**Customizing `simple_config.yaml`:**
+Edit the file to change parameters such as:
+* `model.vision_model`: e.g., `clip`, `resnet`, `dino`, `convnext`
+* `model.language_model`: e.g., `sentence-bert`, `mpnet`, `bert`, `roberta`
+* `model.embedding_dim`: e.g., `64`, `128`, `256`
+* `training.batch_size`: Adjust based on available GPU memory.
+* `training.learning_rate`: Modify the learning rate.
+* `data.item_info_path`, `data.interactions_path`, `data.image_folder`: Specify paths to your data.
+* `data.cache_config`: Configure feature caching.
 
-```yaml
-model:
-  vision_model: clip        # Change to: clip, resnet, dino, convnext
-  language_model: mpnet     # Change to: sentence-bert, mpnet, bert, roberta
-  embedding_dim: 128        # Change to: 64, 128, 256
-  use_contrastive: false    # Disable contrastive learning
+### Advanced Configuration (`advanced_config.yaml`)
 
-training:
-  batch_size: 32           # Reduce for smaller GPU
-  learning_rate: 0.0005    # Adjust learning rate
-  epochs: 50               # Train longer
-```
+For in-depth research and fine-grained control over all parameters, use `advanced_config.yaml`.
 
-## Advanced Experimentation
-
-### Use Advanced Config for Research:
+**Example Usage:**
 ```bash
 python scripts/train.py --config configs/advanced_config.yaml
 ```
 
-### Advanced Config Allows:
-- **Architectural experiments**: fusion layers, attention heads, activation functions
-- **Training experiments**: optimizers, schedulers, regularization
-- **Data experiments**: augmentation, compression, preprocessing
-- **Model experiments**: cross-modal attention, different initializations
+The `advanced_config.yaml` file allows customization of:
+* **Model Architecture**: Fusion layer dimensions, attention heads, activation functions, dropout rates, initialization methods.
+* **Training Parameters**: Optimizer types (AdamW, Adam, SGD), learning rate scheduler details, weight decay, loss component weights.
+* **Data Processing**: Text augmentation strategies, image compression settings, numerical feature normalization methods, data splitting parameters.
+* **Recommendation Settings**: Diversity and novelty weighting, candidate selection limits.
 
-## Configuration Inheritance
+## Configuration Inheritance and Defaults
 
-The system automatically provides sensible defaults for missing parameters:
+The system is designed to use default values for parameters that are not explicitly specified in the loaded YAML file. This means you can create minimal configuration files containing only the parameters you wish to change from their defaults. The `Config` class (`src/config.py`) defines these defaults.
 
-### Example: Minimal Config
-```yaml
-# configs/minimal.yaml - Just the essentials
-model:
-  vision_model: resnet
-  embedding_dim: 64
+For example, if you use `simple_config.yaml`, parameters related to advanced model architecture details (like `fusion_hidden_dims` or `optimizer_type`) will be automatically set to their default values as defined in `src/config.py`.
 
-training:
-  batch_size: 32
-  epochs: 20
+## Key Configuration Sections
 
-data:
-  train_data_path: data/splits/my_split/train.csv
-  val_data_path: data/splits/my_split/val.csv
-  test_data_path: data/splits/my_split/test.csv
-```
+Below are the main sections found in the configuration files and their purpose:
 
-**This will automatically get:**
-- All other model parameters (dropout_rate: 0.3, fusion_activation: relu, etc.)
-- All other training parameters (learning_rate: 0.001, optimizer: adamw, etc.)
-- All data processing defaults
-- Cache configuration defaults
+### `model`
+Defines the architecture of the multimodal recommender.
+* `vision_model`, `language_model`: Specifies the pre-trained backbones.
+* `embedding_dim`: Sets the size of the latent embeddings.
+* `use_contrastive`: Enables or disables contrastive learning.
+* **Advanced options** (in `advanced_config.yaml`): `freeze_vision`, `freeze_language`, `contrastive_temperature`, `dropout_rate`, `num_attention_heads`, `fusion_hidden_dims`, `fusion_activation`, `use_batch_norm`, `projection_hidden_dim`, `final_activation`, `init_method`.
 
-## Migration Guide
+### `training`
+Controls the training process.
+* `batch_size`, `learning_rate`, `epochs`, `patience`: Basic training loop parameters.
+* **Advanced options** (in `advanced_config.yaml`): `weight_decay`, `gradient_clip`, `num_workers`, `contrastive_weight`, `bce_weight`, `use_lr_scheduler`, `lr_scheduler_type`, `optimizer_type`, and specific optimizer parameters (e.g., `adam_beta1`).
 
-### From Old Complex Config:
-If you have an existing config with 60+ parameters, you can:
+### `data`
+Manages data paths, preprocessing, and loading.
+* Paths: `item_info_path`, `interactions_path`, `image_folder`, `processed_item_info_path`, `processed_interactions_path`, `split_data_path`, etc.
+* `cache_config`: Nested configuration for the `SimpleFeatureCache`.
+    * `enabled`: Boolean to turn caching on/off.
+    * `max_memory_items`: Maximum items to keep in memory.
+    * `cache_directory`: Path for disk-based cache.
+    * `use_disk`: Boolean to enable disk persistence.
+* `numerical_features_cols`: List of columns to be treated as numerical features.
+* **Advanced options** (in `advanced_config.yaml`): `scaler_path`, `processed_image_destination_folder`, `negative_sampling_ratio`, `numerical_normalization_method`, and nested configurations for `text_augmentation`, `offline_image_compression`, `offline_image_validation`, `offline_text_cleaning`, and `splitting`.
 
-1. **Extract essentials** → Move to `simple_config.yaml`
-2. **Keep advanced settings** → Move to `advanced_config.yaml`
-3. **Use either one** - both work with the same system
+### `recommendation`
+Parameters for generating recommendations.
+* `top_k`: Number of recommendations to generate.
+* **Advanced options** (in `advanced_config.yaml`): `filter_seen`, `diversity_weight`, `novelty_weight`, `max_candidates`.
 
-### Backward Compatibility:
-Old configs still work! The system automatically:
-- Converts old cache parameters to new format
-- Provides defaults for missing parameters
-- Handles both nested and flat parameter structures
-
-## Recommendations
-
-### For Development/Testing:
-- ✅ Use `simple_config.yaml`
-- ✅ Focus on: model type, embedding size, batch size, data paths
-- ✅ Let everything else use defaults
-
-### For Research/Publication:
-- ✅ Use `advanced_config.yaml`
-- ✅ Document which parameters you changed from defaults
-- ✅ Save final config with results for reproducibility
-
-### For Production:
-- ✅ Start with `simple_config.yaml`
-- ✅ Gradually tune specific parameters as needed
-- ✅ Keep config files in version control
-
-## Configuration Validation
-
-The system validates:
-- ✅ Required paths exist
-- ✅ Model names are valid
-- ✅ Parameter ranges are sensible
-- ✅ Backward compatibility
+### Root Level
+* `checkpoint_dir`: Directory to save model checkpoints.
+* `results_dir`: Directory to save evaluation results and other outputs.
 
 ## Example Workflows
 
 ### Quick Experiment:
-```bash
-# 1. Copy simple config
-cp configs/simple_config.yaml configs/my_experiment.yaml
-
-# 2. Edit just what you need
-vim configs/my_experiment.yaml  # Change vision_model: clip
-
-# 3. Run experiment
-python scripts/train.py --config configs/my_experiment.yaml
-```
+1.  Copy `configs/simple_config.yaml` to a new file, e.g., `configs/my_experiment.yaml`.
+2.  Edit `configs/my_experiment.yaml` to change a few key parameters (e.g., `model.vision_model`, `training.batch_size`).
+3.  Run scripts using your custom config:
+    ```bash
+    python scripts/train.py --config configs/my_experiment.yaml
+    ```
 
 ### Detailed Research:
-```bash
-# 1. Use advanced config as base
-cp configs/advanced_config.yaml configs/research_v1.yaml
+1.  Use `configs/advanced_config.yaml` as a base.
+2.  Modify specific architectural, training, or data processing parameters for your experiment.
+3.  Run scripts:
+    ```bash
+    python scripts/train.py --config configs/advanced_config.yaml
+    ```
+    (Or your modified version of the advanced config).
+4.  Ensure to save the exact configuration file used alongside your results for reproducibility. The training script automatically saves the run's configuration to the `results_dir`.
 
-# 2. Modify architecture parameters
-# Edit: fusion_hidden_dims, attention_heads, etc.
-
-# 3. Run with full control
-python scripts/train.py --config configs/research_v1.yaml
+This approach provides flexibility, allowing users to start with simple settings and progressively delve into more complex configurations as needed.
 ```

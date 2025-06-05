@@ -276,8 +276,18 @@ class MultimodalDataset(Dataset):
 
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
-        """Load and process image for an item"""
-        base_path = os.path.join(self.image_folder, str(item_id)) # item_id is already str
+        # Loads an image for a given item_id, processes it using the configured
+        # Hugging Face image processor, and returns it as a PyTorch tensor.
+        # Handles caching and falls back to a placeholder if image processing fails.
+
+        if self.feature_cache:
+            cached_features = self.feature_cache.get(item_id)
+            if cached_features and 'image' in cached_features:
+                if isinstance(cached_features['image'], torch.Tensor):
+                    return cached_features['image']
+
+        base_path = os.path.join(self.image_folder, str(item_id))
+        base_path = base_path.replace('\\', '/')
         image_path = None
 
         for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
@@ -286,116 +296,174 @@ class MultimodalDataset(Dataset):
                 image_path = potential_path
                 break
         
-        default_size = (
-            self.image_processor.size['shortest_edge']
-            if isinstance(self.image_processor.size, dict) and 'shortest_edge' in self.image_processor.size
-            else getattr(self.image_processor, 'size', 224) # Fallback
-        )
-        if isinstance(default_size, int): default_size = (default_size, default_size)
-
+        default_size = (224, 224)
+        if hasattr(self.image_processor, 'size'):
+            processor_size = self.image_processor.size
+            if isinstance(processor_size, dict) and 'shortest_edge' in processor_size:
+                size_val = processor_size['shortest_edge']
+                default_size = (size_val, size_val)
+            elif isinstance(processor_size, (tuple, list)) and len(processor_size) >= 2:
+                default_size = (processor_size[0], processor_size[1])
+            elif isinstance(processor_size, int):
+                default_size = (processor_size, processor_size)
 
         try:
             if image_path:
                 image = Image.open(image_path).convert('RGB')
-            else: # Create placeholder
+            else:
                 image = Image.new('RGB', default_size, color='grey')
 
             processed = self.image_processor(images=image, return_tensors='pt')
             
-            image_tensor = processed.get('pixel_values', processed) if isinstance(processed, dict) else processed
-            image_tensor = image_tensor.squeeze(0)
+            image_tensor = None
+            # Prioritize checking processed.data as BatchFeature often stores tensors there.
+            if hasattr(processed, 'data') and isinstance(processed.data, dict) and 'pixel_values' in processed.data:
+                image_tensor = processed.data['pixel_values']
+            # Fallback to direct access if it's a dict and .data wasn't the way.
+            elif isinstance(processed, dict) and 'pixel_values' in processed:
+                image_tensor = processed['pixel_values']
 
-            if image_tensor.dim() == 2: # Grayscale that needs expansion
-                image_tensor = image_tensor.unsqueeze(0).repeat(3, 1, 1)
-            elif image_tensor.shape[0] == 1: # Single channel that needs expansion
+            # Validate that we successfully extracted a tensor.
+            if not isinstance(image_tensor, torch.Tensor):
+                output_type_name = type(processed).__name__
+                data_attr_repr = str(processed.data) if hasattr(processed, 'data') else "N/A (no .data attr)"
+                dict_repr = str(dict(processed)) if isinstance(processed, dict) else "N/A (not a dict)"
+                
+                raise ValueError(
+                    f"Image processor output for item {item_id} (path: {image_path}) did not yield a 'pixel_values' Tensor.\n"
+                    f"Output type from processor: {output_type_name}.\n"
+                    f"Value obtained for image_tensor: {str(image_tensor)[:200]} (Type: {type(image_tensor).__name__}).\n"
+                    f"Representation of processed.data: {data_attr_repr[:500]}...\n"
+                    f"Representation of dict(processed): {dict_repr[:500]}..."
+                )
+
+            # Process the extracted tensor (squeeze, channel checks).
+            if image_tensor.ndim == 4 and image_tensor.shape[0] == 1:
+                image_tensor = image_tensor.squeeze(0)
+            elif image_tensor.ndim != 3:
+                 raise ValueError(
+                    f"Image tensor for item {item_id} has unexpected ndim after squeeze: {image_tensor.ndim}. "
+                    f"Shape: {image_tensor.shape}"
+                )
+
+            if image_tensor.shape[0] == 1: 
                  image_tensor = image_tensor.repeat(3, 1, 1)
+            
+            if not (image_tensor.ndim == 3 and image_tensor.shape[0] == 3):
+                raise ValueError(
+                    f"Image tensor for item {item_id} does not have 3 channels after standardization. "
+                    f"Shape: {image_tensor.shape}"
+                )
             
             return image_tensor
 
         except Exception as e:
-            print(f"Error processing image for item {item_id} (path: {image_path}): {e}. Returning zero tensor.")
+            import traceback
+            detailed_error_traceback = traceback.format_exc()
+            error_type = type(e).__name__
+            error_args = e.args
+            
+            print(f"Error processing image for item {item_id} (path: {image_path}).\n"
+                  f"Type: {error_type}, Args: {error_args}, Str: {str(e)}.\n"
+                  f"Traceback:\n{detailed_error_traceback}\n"
+                  f"Returning zero tensor.")
+            
             return torch.zeros(3, default_size[0], default_size[1], dtype=torch.float32)
 
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
-        # Creates positive samples and samples negative items for each user.
-        # This version is further optimized to work with item indices for sampling,
-        # reducing per-user array reconstruction overhead.
+        # Creates positive interaction samples and generates corresponding negative samples for each user.
+        # Positive interactions are labeled as 1. Negative samples, items not interacted with by the user,
+        # are labeled as 0. The number of negative samples is proportional to the number of positive
+        # interactions for that user, based on self.negative_sampling_ratio.
+        # This method is optimized for performance by minimizing per-user overhead,
+        # using integer indices for sampling, and efficient DataFrame construction.
 
         if self.interactions.empty:
-            # Returns an empty DataFrame with predefined columns if there are no interactions.
+            # Returns an empty DataFrame with standard columns if there are no interactions.
             return pd.DataFrame(columns=['user_id', 'item_id', 'user_idx', 'item_idx', 'label'])
 
+        # Creates a copy of interactions to serve as the base for positive samples.
         positive_df = self.interactions.copy()
         if 'label' not in positive_df.columns:
-            # Assigns a 'label' of 1 to all positive interactions.
+            # Assigns a 'label' of 1 to all interactions in the positive set.
             positive_df['label'] = 1
 
-        negative_sample_records = [] # Stores negative samples as a list of tuples for efficiency.
+        # List to store records for negative samples, each record as a tuple.
+        negative_sample_records = []
 
-        # Ensure item encoder has been fitted and classes_ are available.
+        # Checks if the item encoder has been fitted and contains class information.
+        # If not, attempts to use item_info_df_original as a fallback for item list,
+        # or returns only positive samples if no items can be determined.
         if not hasattr(self.item_encoder, 'classes_') or self.item_encoder.classes_ is None or len(self.item_encoder.classes_) == 0:
-            # Fallback if item encoder is not ready (e.g., empty interactions during init for encoder fitting)
-            # This part should ideally not be hit if dataset is used for training after proper init.
             all_item_ids_str_list_temp = self.item_info_df_original['item_id'].astype(str).unique().tolist()
             if not all_item_ids_str_list_temp:
+                 # No items available for sampling; return shuffled positive samples or an empty DataFrame.
                  return positive_df.sample(frac=1, random_state=42).reset_index(drop=True) if not positive_df.empty else pd.DataFrame(columns=['user_id', 'item_id', 'user_idx', 'item_idx', 'label'])
-            # If item_encoder was not fitted but we have items from item_info, this logic is problematic
-            # as we need an encoder. For safety, if encoder isn't ready, just return positives.
-            # This scenario implies an issue with dataset initialization order or usage.
-            print("Warning: Item encoder not properly initialized with classes. Negative sampling might be incomplete or skipped.")
+            # This warning indicates that negative sampling might be based on a potentially incomplete item list.
+            print("Warning: Item encoder not properly initialized with classes. Negative sampling might be incomplete or use items from item_info_df_original.")
+            # Fallback to using positive samples if item encoder isn't ready for robust negative sampling.
+            # Depending on requirements, one might choose to raise an error or handle differently.
             return positive_df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-        # Master array of all unique item indices (0 to n_items-1).
+        # Creates a NumPy array of all unique item indices (0 to N-1) for efficient operations.
         all_item_indices_global = np.arange(len(self.item_encoder.classes_))
 
-        # Ensures 'user_id' in interactions is string type for consistent grouping.
-        # The 'user_idx' column is assumed to be present from the __init__ method.
-        interactions_for_grouping = self.interactions.copy()
-        interactions_for_grouping['user_id_str_for_grouping'] = interactions_for_grouping['user_id'].astype(str)
+        # Creates a mapping from integer user_idx back to string user_id.
+        # This is used to store the original string user_id in the final samples table.
+        # It assumes self.user_encoder is fitted and classes_ are available.
+        user_idx_to_user_id_map = {}
+        if hasattr(self.user_encoder, 'classes_') and self.user_encoder.classes_ is not None and len(self.user_encoder.classes_) > 0:
+            user_idx_to_user_id_map = pd.Series(
+                self.user_encoder.classes_,
+                index=self.user_encoder.transform(self.user_encoder.classes_)
+            ).to_dict()
         
-        # Groups interactions by the string representation of user_id.
-        grouped_user_interactions = interactions_for_grouping.groupby('user_id_str_for_grouping')
+        # Groups interactions by the integer 'user_idx'. This is generally faster than grouping by strings.
+        # Assumes 'user_idx' column exists and is correctly populated in self.interactions.
+        grouped_user_interactions = self.interactions.groupby('user_idx')
 
-        for user_id_str, user_interactions_df in tqdm(grouped_user_interactions, desc="Creating negative samples"):
-            # Retrieves the pre-computed integer index for the user.
-            user_idx_val = user_interactions_df['user_idx'].iloc[0]
+        # Iterates over each user group to generate negative samples.
+        for user_idx_val, user_interactions_df in tqdm(grouped_user_interactions, desc="Creating negative samples"):
+            # user_idx_val is the integer index of the current user.
+            # user_interactions_df contains all interactions for this user.
 
-            # Collects all unique item IDs (strings) the current user has interacted with.
+            # Collects the string representations of item IDs the current user has interacted with.
             user_positive_items_str_set = set(user_interactions_df['item_id'].astype(str))
             
-            if not user_positive_items_str_set: # Should not happen if users have interactions
+            if not user_positive_items_str_set:
+                # Skips if the user (unexpectedly) has no positive items in their group.
                 continue
 
             try:
                 # Transforms the user's positive item strings to their integer indices.
+                # This is a batch transformation for all positive items of the current user.
                 user_positive_item_indices_arr = self.item_encoder.transform(list(user_positive_items_str_set))
             except ValueError:
-                # Handles cases where some positive items might not be in the encoder (data inconsistency).
-                # print(f"Warning: Could not transform some positive items for user {user_id_str}.") # Optional
+                # Handles cases where some positive items might not be in the encoder.
+                # print(f"Warning: Could not transform some positive items for user_idx {user_idx_val}.") # Optional
                 continue
             
-            # Creates a boolean mask to identify positive items in the global list of all item indices.
+            # Creates a boolean mask to identify positive items within the global list of all item indices.
             is_positive_mask = np.zeros(len(all_item_indices_global), dtype=bool)
-            is_positive_mask[user_positive_item_indices_arr] = True
+            is_positive_mask[user_positive_item_indices_arr] = True # Marks positive item indices.
             
             # Derives the array of available negative indices by inverting the mask.
+            # These are integer indices of items not interacted with by the user.
             available_negative_indices = all_item_indices_global[~is_positive_mask]
             
             if len(available_negative_indices) == 0:
-                # Skips user if no items are available for negative sampling.
+                # Skips user if no items are available for negative sampling (e.g., user interacted with all items).
                 continue
 
             num_positives_for_user = len(user_positive_items_str_set)
-            # Calculates the number of negative samples to generate.
+            # Calculates the number of negative samples to generate for this user.
             num_negatives_to_sample = int(num_positives_for_user * self.negative_sampling_ratio)
-            # Ensures not to sample more negatives than available.
+            # Ensures not to sample more negative items than are available.
             num_negatives_to_sample = min(num_negatives_to_sample, len(available_negative_indices))
 
             if num_negatives_to_sample > 0:
-                # Randomly samples indices from the available negative indices.
-                # These sampled indices are directly the item_idx_val for negative samples.
-                np.random.seed(42)
+                # Randomly samples integer indices from the available negative indices without replacement.
                 sampled_item_idx_vals_arr = np.random.choice(
                     available_negative_indices,
                     num_negatives_to_sample,
@@ -404,13 +472,21 @@ class MultimodalDataset(Dataset):
 
                 try:
                     # Converts the sampled item indices back to their original string IDs for record-keeping.
+                    # This is a batch operation on the (small) list of sampled negative indices.
                     sampled_negatives_str_list = self.item_encoder.inverse_transform(sampled_item_idx_vals_arr)
                 except ValueError:
-                    # Should be rare if sampled_item_idx_vals_arr contains valid indices.
-                    # print(f"Warning: Could not inverse_transform some sampled negative indices for user {user_id_str}.") # Optional
+                    # Handles cases where some sampled indices might not be in the encoder's inverse map.
+                    # print(f"Warning: Could not inverse_transform some sampled negative indices for user_idx {user_idx_val}.") # Optional
                     continue
                 
-                # Appends negative sample data as tuples.
+                # Retrieves the original string user ID for the current user_idx.
+                user_id_str = user_idx_to_user_id_map.get(user_idx_val)
+                if user_id_str is None:
+                    # Fallback or warning if mapping is incomplete.
+                    # print(f"Warning: user_id_str not found for user_idx {user_idx_val}. Using user_idx as string.") # Optional
+                    user_id_str = str(user_idx_val) 
+                
+                # Appends negative sample data as tuples to the records list.
                 for neg_item_str, item_idx_val in zip(sampled_negatives_str_list, sampled_item_idx_vals_arr):
                     negative_sample_records.append((
                         user_id_str,
@@ -423,6 +499,8 @@ class MultimodalDataset(Dataset):
         # Defines columns for the negative samples DataFrame.
         negative_df_columns = ['user_id', 'item_id', 'user_idx', 'item_idx', 'label']
         # Converts the list of tuples (records) into a pandas DataFrame.
+        # If no negative samples were generated, an empty DataFrame with columns from positive_df is created
+        # to ensure consistent structure for concatenation.
         negative_df = pd.DataFrame(negative_sample_records, columns=negative_df_columns) if negative_sample_records else pd.DataFrame(columns=positive_df.columns)
         
         # Concatenates the DataFrame of positive interactions with the DataFrame of negative samples.
@@ -431,6 +509,7 @@ class MultimodalDataset(Dataset):
         # Shuffles all samples randomly for unbiased training and resets the DataFrame index.
         return all_samples.sample(frac=1, random_state=42).reset_index(drop=True)
 
+        
     def get_item_popularity(self) -> Dict[str, int]: # Changed value to int for counts
         """Get item popularity scores (counts)"""
         if self.interactions.empty:

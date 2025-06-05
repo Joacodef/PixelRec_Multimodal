@@ -1,3 +1,4 @@
+# src/models/losses.py
 """
 Loss functions for multimodal recommender system
 """
@@ -104,35 +105,43 @@ class MultimodalRecommenderLoss(nn.Module):
         Compute combined loss.
         
         Args:
-            predictions: Model predictions
-            labels: Ground truth labels
-            vision_features: Vision features for contrastive loss
-            text_features: Text features for contrastive loss
-            temperature: Temperature for contrastive loss
+            predictions: Model predictions (expected to be probabilities after sigmoid).
+            labels: Ground truth labels (0 or 1).
+            vision_features: Vision features for contrastive loss.
+            text_features: Text features for contrastive loss.
+            temperature: Temperature for contrastive loss.
             
         Returns:
-            Dictionary with total loss and individual components
+            Dictionary with total loss and individual components.
         """
-        # Binary cross entropy loss
-        bce_loss = self.bce_loss(predictions, labels)
+        # Define a small epsilon for numerical stability with BCELoss.
+        epsilon = 1e-7
+        # Clamp predictions to the range [epsilon, 1.0 - epsilon]
+        # to prevent values slightly outside [0,1] due to floating point issues.
+        clamped_predictions = torch.clamp(predictions, min=epsilon, max=1.0 - epsilon)
         
-        # Contrastive loss (if applicable)
-        contrastive_loss = torch.tensor(0.0).to(predictions.device)
+        # Binary cross entropy loss using the clamped predictions.
+        bce_loss = self.bce_loss(clamped_predictions, labels)
+        
+        # Contrastive loss (if applicable).
+        # The CUDA error was likely triggered by BCELoss, but reported here due to async execution.
+        # This line itself is unlikely the source of the 'input_val' assert.
+        contrastive_loss_value = torch.tensor(0.0, device=predictions.device)
         if self.use_contrastive and vision_features is not None and text_features is not None:
-            contrastive_loss = self.contrastive_loss(
+            contrastive_loss_value = self.contrastive_loss(
                 vision_features, 
                 text_features, 
                 temperature
             )
         
-        # Total loss
+        # Total loss calculation.
         total_loss = (
             self.bce_weight * bce_loss + 
-            self.contrastive_weight * contrastive_loss
+            self.contrastive_weight * contrastive_loss_value
         )
         
         return {
             'total': total_loss,
             'bce': bce_loss,
-            'contrastive': contrastive_loss
+            'contrastive': contrastive_loss_value # Ensure this key matches what trainer expects
         }
