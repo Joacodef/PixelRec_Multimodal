@@ -22,6 +22,7 @@ class MultimodalRecommender(nn.Module):
         self,
         n_users: int,
         n_items: int,
+        num_numerical_features: int, # Added num_numerical_features
         embedding_dim: int = 128,
         vision_model_name: str = 'clip',
         language_model_name: str = 'sentence-bert',
@@ -48,7 +49,7 @@ class MultimodalRecommender(nn.Module):
         self.language_model_name = language_model_name
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
-        self.num_numerical_features = 7
+        self.num_numerical_features = num_numerical_features # Use the passed argument
 
         self.vision_model_name = vision_model_name
 
@@ -181,7 +182,7 @@ class MultimodalRecommender(nn.Module):
         # Numerical projection
         if self.projection_hidden_dim:
             self.numerical_projection = nn.Sequential(
-                nn.Linear(self.num_numerical_features, self.projection_hidden_dim),
+                nn.Linear(self.num_numerical_features, self.projection_hidden_dim), # Use self.num_numerical_features
                 activation,
                 nn.Dropout(self.dropout_rate),
                 nn.Linear(self.projection_hidden_dim, self.embedding_dim),
@@ -190,7 +191,7 @@ class MultimodalRecommender(nn.Module):
             )
         else:
             self.numerical_projection = nn.Sequential(
-                nn.Linear(self.num_numerical_features, self.embedding_dim),
+                nn.Linear(self.num_numerical_features, self.embedding_dim), # Use self.num_numerical_features
                 activation,
                 nn.Dropout(self.dropout_rate)
             )

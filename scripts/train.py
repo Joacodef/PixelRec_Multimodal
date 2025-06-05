@@ -290,6 +290,7 @@ def main():
         model_params = {
             'n_users': full_dataset_for_encoders.n_users,
             'n_items': full_dataset_for_encoders.n_items,
+            'num_numerical_features': len(data_config.numerical_features_cols), # Pass the correct number of features
             'embedding_dim': model_config.embedding_dim,
             'vision_model_name': model_config.vision_model,
             'language_model_name': model_config.language_model,

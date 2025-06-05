@@ -68,16 +68,21 @@ def create_recommender(
     if recommender_type == 'multimodal':
         if model is None:
             raise ValueError("Model required for multimodal recommender")
+        if config_obj is None:
+            raise ValueError("Config object required for multimodal recommender to determine num_numerical_features")
         
-        # Use simplified recommender with single cache
-        return MultimodalModelRecommender(
+        # Pass config_obj to the Recommender which will instantiate the MultimodalRecommender
+        # The Recommender itself will need to be modified or it needs to pass num_numerical_features
+        # For now, assuming the Recommender class itself might handle passing this to the model it instantiates.
+        # If Recommender directly takes a pre-initialized model (as it seems to do),
+        # then the model must be initialized with num_numerical_features *before* calling create_recommender.
+        return MultimodalModelRecommender( # This is src.inference.recommender.Recommender
             model, 
             dataset, 
             device,
-            # Pass simplified cache parameters instead of old complex cache
-            cache_max_items=1000,
-            cache_dir='data/cache/features' if simple_cache_instance else None,
-            cache_to_disk=False
+            cache_max_items=config_obj.data.cache_config.max_memory_items,
+            cache_dir=config_obj.data.cache_config.cache_directory if simple_cache_instance else None,
+            cache_to_disk=config_obj.data.cache_config.use_disk
         )
 
     elif recommender_type == 'random':
@@ -217,6 +222,7 @@ def main():
         model_params = {
             'n_users': dataset_for_encoders.n_users,
             'n_items': dataset_for_encoders.n_items,
+            'num_numerical_features': len(config_obj.data.numerical_features_cols), # Pass the correct number of features
             'embedding_dim': config_obj.model.embedding_dim,
             'vision_model_name': config_obj.model.vision_model,
             'language_model_name': config_obj.model.language_model,
@@ -256,7 +262,7 @@ def main():
     recommender_instance = create_recommender(
         args.recommender_type,
         dataset=dataset_for_encoders, 
-        model=model_instance_multimodal, 
+        model=model_instance_multimodal, # Pass the already initialized model
         device=device,
         history_interactions_df=train_df, 
         config_obj=config_obj,
