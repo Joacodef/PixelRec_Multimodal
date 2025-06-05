@@ -454,6 +454,26 @@ class MultimodalRecommender(nn.Module):
             )
         return item_full_embedding
 
+    def get_user_item_score(self, user_idx: torch.Tensor, item_idx: torch.Tensor, 
+                           image: torch.Tensor, text_input_ids: torch.Tensor,
+                           text_attention_mask: torch.Tensor, numerical_features: torch.Tensor) -> torch.Tensor:
+        """
+        Get the prediction score for a specific user-item pair.
+        Useful for ranking evaluation.
+        """
+        with torch.no_grad():
+            # Forward pass to get the score
+            output = self.forward(
+                user_idx=user_idx,
+                item_idx=item_idx,
+                image=image,
+                text_input_ids=text_input_ids,
+                text_attention_mask=text_attention_mask,
+                numerical_features=numerical_features,
+                return_embeddings=False
+            )
+            return output.squeeze()  # Remove batch dimension if single item
+
     def _validate_model_configs(self):
         """Validate that model configurations are available and consistent."""
         # Check if vision model config exists
@@ -558,3 +578,7 @@ class MultimodalRecommender(nn.Module):
             print(f"Warning: Error probing CLIP text output dimension: {e}")
         
         return 512  # Safe default
+
+
+# Backward compatibility alias
+PretrainedMultimodalRecommender = MultimodalRecommender

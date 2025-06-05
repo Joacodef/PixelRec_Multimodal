@@ -1,4 +1,4 @@
-# configs/simple_config.yaml - Essential settings only
+# configs/simple_config.yaml - Essential settings only (simplified architecture)
 
 model:
   vision_model: resnet              # Options: clip, resnet, dino, convnext
@@ -33,7 +33,17 @@ data:
     enabled: true                   # Enable feature caching for speed
     max_memory_items: 1000          # Items to keep in memory
     cache_directory: 'data/cache/features'
-    use_disk: false                 # Set to true for larger datasets
+    use_disk: false                 # Keep in memory only
+
+  # Numerical features
+  numerical_features_cols:
+    - view_number
+    - comment_number
+    - thumbup_number
+    - share_number
+    - coin_number
+    - favorite_number
+    - barrage_number
 
 recommendation:
   top_k: 50                         # Number of recommendations to generate

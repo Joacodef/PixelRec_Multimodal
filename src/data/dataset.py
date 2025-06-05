@@ -269,3 +269,40 @@ class MultimodalDataset(Dataset):
             return set()
         user_interactions = self.interactions[self.interactions['user_id'] == user_id]
         return set(user_interactions['item_id'].unique())
+
+
+    
+def _get_item_features(self, item_id: int) -> Optional[Dict[str, torch.Tensor]]:
+    """
+    Extract features for a single item
+    Used by the simplified recommender for scoring
+    """
+    try:
+        # Get item info
+        item_row = self.item_info_df[self.item_info_df['item_id'] == item_id]
+        if item_row.empty:
+            return None
+        
+        item_data = item_row.iloc[0]
+        
+        # Extract image features
+        image_tensor = self._load_and_process_image(item_data['image_path'])
+        if image_tensor is None:
+            return None
+        
+        # Extract text features
+        text_data = self._process_text(item_data['title'], is_train_mode=False)
+        
+        # Extract numerical features
+        numerical_tensor = self._process_numerical_features(item_data)
+        
+        return {
+            'image': image_tensor,
+            'text_input_ids': text_data['input_ids'],
+            'text_attention_mask': text_data['attention_mask'],
+            'numerical_features': numerical_tensor
+        }
+        
+    except Exception as e:
+        print(f"Error extracting features for item {item_id}: {e}")
+        return None

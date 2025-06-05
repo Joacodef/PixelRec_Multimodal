@@ -106,7 +106,7 @@ def main():
     parser.add_argument('--output', type=str, default='evaluation_results.json', help='Path to save evaluation results JSON file')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for evaluation')
     parser.add_argument('--recommender_type', type=str, default='multimodal', choices=['multimodal', 'random', 'popularity', 'item_knn', 'user_knn'], help='Type of recommender to evaluate')
-    parser.add_argument('--eval_task', type=str, default='retrieval', choices=['retrieval', 'ranking', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy'], help='Evaluation task to perform')
+    parser.add_argument('--eval_task', type=str, default='retrieval', choices=['retrieval', 'ranking'], help='Evaluation task to perform')
     parser.add_argument('--warmup_recommender_cache', action='store_true', help="Enable warm-up of the Recommender's cache")
     parser.add_argument('--num_workers', type=int, default=4, help='Number of parallel workers for evaluation')
     parser.add_argument('--use_parallel', action='store_true', help='Use parallel processing for multimodal evaluation')
@@ -125,13 +125,14 @@ def main():
     print(f"Loading test data from {args.test_data}...")
     test_df = pd.read_csv(args.test_data)
     
+    # Remove complex task validation
     train_df = None
     if args.train_data:
         print(f"Loading training data from {args.train_data}...")
         train_df = pd.read_csv(args.train_data)
     else:
-        if args.eval_task in ['retrieval', 'next_item', 'cold_user', 'cold_item', 'beyond_accuracy']:
-            print(f"Warning: --train_data not provided for '{args.eval_task}' task.")
+        if args.eval_task == 'retrieval':
+            print(f"Note: --train_data not provided for '{args.eval_task}' task. Using filter_seen=False.")
 
     print("Loading item info and interaction data for dataset initialization...")
     item_info_df = pd.read_csv(config_obj.data.processed_item_info_path)
@@ -321,17 +322,14 @@ def main():
 
     print("\nStarting evaluation...")
     
+    # Simplified task mapping
     task_map = {
         'retrieval': EvaluationTask.TOP_K_RETRIEVAL,
-        'ranking': EvaluationTask.TOP_K_RANKING,
-        'next_item': EvaluationTask.NEXT_ITEM_PREDICTION,
-        'cold_user': EvaluationTask.COLD_START_USER,
-        'cold_item': EvaluationTask.COLD_START_ITEM,
-        'beyond_accuracy': EvaluationTask.BEYOND_ACCURACY
+        'ranking': EvaluationTask.TOP_K_RANKING
     }
     eval_task_enum_val = task_map.get(args.eval_task)
     if not eval_task_enum_val:
-        raise ValueError(f"Unknown eval_task: {args.eval_task}")
+        raise ValueError(f"Unknown eval_task: {args.eval_task}. Available: {list(task_map.keys())}")
     
     print(f"Creating evaluator for task: {eval_task_enum_val.value}")
 

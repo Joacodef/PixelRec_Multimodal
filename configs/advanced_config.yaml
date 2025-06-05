@@ -2,7 +2,7 @@
 
 model:
   # Basic model selection
-  model_class: pretrained           # Options: 'pretrained' or 'enhanced'
+  model_class: pretrained           # Options: 'pretrained'
   vision_model: resnet              # Options: clip, resnet, dino, convnext
   language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
   embedding_dim: 64
