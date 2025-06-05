@@ -101,7 +101,7 @@ def main():
     warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.clip.modeling_clip")
     
     parser = argparse.ArgumentParser(description="Evaluate model performance")
-    parser.add_argument('--config', type=str, default='configs/default_config.yaml', help='Path to configuration file')
+    parser.add_argument('--config', type=str, default='configs/simple_config.yaml', help='Path to configuration file')
     parser.add_argument('--test_data', type=str, required=True, help='Path to test data CSV file')
     parser.add_argument('--train_data', type=str, help='Path to training data CSV file')
     parser.add_argument('--output', type=str, default='evaluation_results.json', help='Path to save evaluation results JSON file')

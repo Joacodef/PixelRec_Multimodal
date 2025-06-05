@@ -218,8 +218,8 @@ def create_splits(config_path: str, sample_n: Optional[int] = None): # Added sam
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Create standardized splits for evaluation")
-    parser.add_argument('--config', type=str, default='configs/default_config.yaml',
-                        help='Path to configuration file (e.g., configs/default_config.yaml)')
+    parser.add_argument('--config', type=str, default='configs/simple_config.yaml',
+                        help='Path to configuration file (e.g., configs/simple_config.yaml)')
 
     parser.add_argument('--sample_n', type=int, default=None, # Changed from sample_size to sample_n
                         help='Optional: Number of random interactions to sample from the dataset before splitting. If not provided, uses the full dataset.')

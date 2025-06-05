@@ -1,7 +1,7 @@
-# scripts/train.py
+# scripts/train.py - Updated with simplified cache system
 #!/usr/bin/env python
 """
-Training script for the multimodal recommender system
+Training script for the multimodal recommender system with simplified caching
 """
 import argparse
 import sys
@@ -24,26 +24,33 @@ from src.config import Config, TextAugmentationConfig
 from src.data.dataset import MultimodalDataset
 from src.models.multimodal import PretrainedMultimodalRecommender, EnhancedMultimodalRecommender
 from src.training.trainer import Trainer
-from src.data.splitting import DataSplitter # Keep import for potential future use or if some logic relies on it
-from src.data.image_cache import SharedImageCache
+
+# Use simplified cache instead of old cache system
+try:
+    from src.data.simple_cache import SimpleFeatureCache
+except ImportError:
+    # Create a minimal fallback cache if the file doesn't exist
+    class SimpleFeatureCache:
+        def __init__(self, *args, **kwargs):
+            self.cache = {}
+            print("Using fallback SimpleFeatureCache")
+        
+        def get(self, item_id):
+            return self.cache.get(item_id)
+        
+        def set(self, item_id, features):
+            self.cache[item_id] = features
+        
+        def print_stats(self):
+            print(f"Simple cache: {len(self.cache)} items")
 
 
 def fit_numerical_scaler(df: pd.DataFrame, numerical_cols: List[str], method: str, scaler_path: Path):
-    """
-    Fits a numerical scaler to the specified columns of a DataFrame.
-
-    Args:
-        df: The input DataFrame.
-        numerical_cols: List of column names containing numerical features.
-        method: The scaling method ('standardization', 'min_max', 'log1p', 'none').
-        scaler_path: Path to save the fitted scaler.
-
-    Returns:
-        Fitted scaler object or None if no scaling is performed.
-    """
+    """Fits a numerical scaler to the specified columns of a DataFrame."""
     if not numerical_cols or method in ['none', 'log1p']:
         print(f"Scaler fitting skipped for method: {method} or no numerical columns.")
         return None
+    
     data_to_scale = df[numerical_cols].fillna(0).values
     if method == 'standardization':
         scaler = StandardScaler()
@@ -52,6 +59,7 @@ def fit_numerical_scaler(df: pd.DataFrame, numerical_cols: List[str], method: st
     else:
         print(f"Unknown scaling method for fitting: {method}. No scaler fitted.")
         return None
+    
     print(f"Fitting {method} scaler on {len(data_to_scale)} samples...")
     scaler.fit(data_to_scale)
     scaler_path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,15 +69,7 @@ def fit_numerical_scaler(df: pd.DataFrame, numerical_cols: List[str], method: st
     return scaler
 
 def load_numerical_scaler(scaler_path: Path):
-    """
-    Loads a numerical scaler from a pickle file.
-
-    Args:
-        scaler_path: Path to the scaler file.
-
-    Returns:
-        Loaded scaler object or None if the file is not found.
-    """
+    """Loads a numerical scaler from a pickle file."""
     if scaler_path.exists():
         with open(scaler_path, 'rb') as f:
             scaler = pickle.load(f)
@@ -79,13 +79,9 @@ def load_numerical_scaler(scaler_path: Path):
     return None
 
 def main():
-    """
-    Main function for training the multimodal recommender system.
-    Handles configuration loading, data loading, model initialization,
-    training loop, and result saving.
-    """
+    """Main function for training the multimodal recommender system."""
     parser = argparse.ArgumentParser(description='Train multimodal recommender')
-    parser.add_argument('--config', type=str, default='configs/default_config.yaml', help='Path to configuration file')
+    parser.add_argument('--config', type=str, default='configs/simple_config.yaml', help='Path to configuration file')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training')
     parser.add_argument('--use_wandb', action='store_true', help='Enable Weights & Biases logging')
@@ -100,29 +96,17 @@ def main():
     training_config = config.training
     print(f"Loaded configuration from {args.config}")
 
-    if not hasattr(data_config, 'image_cache_config'):
-        from src.config import ImageCacheConfig
-        data_config.image_cache_config = ImageCacheConfig()
-        print("Warning: image_cache_config not found in config file. Using defaults.")
-
-    # Determine the image folder to be used by the Dataset
-    effective_image_folder = data_config.image_folder
-    if hasattr(data_config, 'offline_image_compression') and \
-       data_config.offline_image_compression.enabled and \
-       hasattr(data_config, 'processed_image_destination_folder') and \
-       data_config.processed_image_destination_folder:
-        effective_image_folder = data_config.processed_image_destination_folder
-        print(f"Using processed (compressed/resized) images from: {effective_image_folder}")
-    else:
-        print(f"Using original images from: {effective_image_folder}")
-
-    # Pass the cache_processed_images flag from config to the Dataset
-    cache_images_flag = getattr(data_config, 'cache_processed_images', False)
-
+    # Initialize Weights & Biases if requested
     if args.use_wandb:
         try:
             config_dict_for_wandb = dataclasses.asdict(config)
-            wandb.init(project=args.wandb_project, entity=args.wandb_entity, name=args.wandb_run_name, config=config_dict_for_wandb, reinit=True)
+            wandb.init(
+                project=args.wandb_project, 
+                entity=args.wandb_entity, 
+                name=args.wandb_run_name, 
+                config=config_dict_for_wandb, 
+                reinit=True
+            )
             print("Weights & Biases logging enabled.")
             wandb.define_metric("epoch")
             wandb.define_metric("train/*", step_metric="epoch")
@@ -141,84 +125,25 @@ def main():
         item_info_df_full = pd.read_csv(data_config.processed_item_info_path)
         interactions_df_full = pd.read_csv(data_config.processed_interactions_path)
 
-        # Initialize and manage the shared image cache
-        shared_image_cache = None
-        if cache_images_flag:
-            # Use the new image_cache_config from data_config
-            cache_config = data_config.image_cache_config
-            cache_directory_path = Path(cache_config.cache_directory)
-            
-            print(f"Initializing image cache:")
-            print(f"  Strategy: {cache_config.strategy}")
+        # Initialize simplified cache system
+        simple_cache_instance = None
+        cache_config = data_config.cache_config
+        
+        if cache_config.enabled:
+            print(f"Initializing SimpleFeatureCache:")
+            print(f"  Strategy: Memory-based caching")
             print(f"  Max memory items: {cache_config.max_memory_items}")
-            print(f"  Cache directory: {cache_directory_path}")
+            print(f"  Cache directory: {cache_config.cache_directory}")
+            print(f"  Use disk: {cache_config.use_disk}")
             
-            shared_image_cache = SharedImageCache(
-                cache_path=cache_directory_path,
+            simple_cache_instance = SimpleFeatureCache(
                 max_memory_items=cache_config.max_memory_items,
-                strategy=cache_config.strategy
+                cache_dir=cache_config.cache_directory,
+                use_disk=cache_config.use_disk
             )
-            
-            # Load existing cache information if available
-            shared_image_cache.load_from_disk()
-            
-            # Determine if we should precompute images
-            should_precompute = False
-            if cache_config.precompute_at_startup:
-                should_precompute = True
-                print("Precomputing requested via config...")
-            elif cache_config.strategy in ['hybrid', 'disk']:
-                # Check if cache directory is empty or doesn't exist
-                if cache_directory_path.exists():
-                    cached_files = list(cache_directory_path.glob("*.pt"))
-                    if len(cached_files) == 0:
-                        should_precompute = True
-                        print("Cache directory is empty, will precompute...")
-                    else:
-                        print(f"Found {len(cached_files)} cached files, skipping precomputation")
-                else:
-                    should_precompute = True
-                    print("Cache directory doesn't exist, will precompute...")
-            else:
-                print(f"Strategy '{cache_config.strategy}' doesn't require disk precomputation")
-            
-            if should_precompute:
-                print(f"\nPrecomputing images with batch size {cache_config.preprocessing_batch_size}...")
-                
-                # Get all unique item IDs from the full item info
-                all_item_ids = item_info_df_full['item_id'].unique().tolist()
-                print(f"Found {len(all_item_ids)} unique items to process")
-                
-                # Create a temporary dataset to get the image processor
-                print("Creating temporary dataset for image processor...")
-                temp_dataset = MultimodalDataset(
-                    interactions_df=pd.DataFrame({'user_id': [], 'item_id': []}),
-                    item_info_df=item_info_df_full,
-                    image_folder=effective_image_folder,
-                    vision_model_name=model_config.vision_model,
-                    language_model_name=model_config.language_model,
-                    create_negative_samples=False,
-                    cache_processed_images=False  # Don't use cache for this temporary dataset
-                )
-                
-                # Precompute all images and store in the shared cache
-                print("Starting image preprocessing...")
-                shared_image_cache.precompute_all_images(
-                    item_ids=all_item_ids,
-                    image_folder=effective_image_folder,
-                    image_processor=temp_dataset.image_processor,
-                    force_recompute=False,
-                    batch_size=cache_config.preprocessing_batch_size
-                )
-                
-                print("Image cache preprocessing completed!")
-                shared_image_cache.print_stats()
-            else:
-                print("Using existing cache or skipping precomputation")
-                if hasattr(shared_image_cache, 'print_stats'):
-                    shared_image_cache.print_stats()
+            simple_cache_instance.print_stats()
         else:
-            print("Image caching is disabled")
+            print("Feature caching is disabled")
 
         # Handle numerical scaler fitting or loading
         numerical_scaler = None
@@ -228,8 +153,23 @@ def main():
                 numerical_scaler = load_numerical_scaler(scaler_path_obj)
             else:
                 print(f"Scaler not found at {scaler_path_obj}. Fitting a new one...")
-                numerical_scaler = fit_numerical_scaler(item_info_df_full, data_config.numerical_features_cols, data_config.numerical_normalization_method, scaler_path_obj)
+                numerical_scaler = fit_numerical_scaler(
+                    item_info_df_full, 
+                    data_config.numerical_features_cols, 
+                    data_config.numerical_normalization_method, 
+                    scaler_path_obj
+                )
 
+        # Determine the image folder to be used by the Dataset
+        effective_image_folder = data_config.image_folder
+        if hasattr(data_config, 'offline_image_compression') and \
+           data_config.offline_image_compression.enabled and \
+           hasattr(data_config, 'processed_image_destination_folder') and \
+           data_config.processed_image_destination_folder:
+            effective_image_folder = data_config.processed_image_destination_folder
+            print(f"Using processed (compressed/resized) images from: {effective_image_folder}")
+        else:
+            print(f"Using original images from: {effective_image_folder}")
 
         print("\nCreating dataset for encoder fitting...")
         # Create a full dataset instance to fit the global user and item encoders
@@ -241,39 +181,44 @@ def main():
             language_model_name=model_config.language_model,
             create_negative_samples=False,
             negative_sampling_ratio=0,
+            # Simplified cache parameters
+            cache_features=cache_config.enabled,
+            cache_max_items=cache_config.max_memory_items,
+            cache_dir=cache_config.cache_directory,
+            cache_to_disk=cache_config.use_disk,
+            # Other parameters
             numerical_feat_cols=data_config.numerical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
-            is_train_mode=False,
-            cache_processed_images=cache_images_flag,
-            shared_image_cache=shared_image_cache
+            is_train_mode=False
         )
-        # Call finalize_setup to ensure encoders are fitted
-        full_dataset_for_encoders.finalize_setup()
         
         print(f"Fitted encoders on full dataset:")
         print(f"  Number of users: {full_dataset_for_encoders.n_users}")
         print(f"  Number of items: {full_dataset_for_encoders.n_items}")
         
-        # Load pre-split data from files generated by create_evaluation_splits.py
+        # Load pre-split data from files
         print("\nLoading pre-split training and validation data...")
-        
         train_interactions_df = pd.read_csv(data_config.train_data_path)
         val_interactions_df = pd.read_csv(data_config.val_data_path)
 
         # Filter item_info_df_full to only include items present in the loaded interactions
-        # This ensures that datasets only refer to items present in the splits
-        all_item_ids_in_splits = pd.concat([train_interactions_df['item_id'], val_interactions_df['item_id']]).unique()
-        item_info_df_for_datasets = item_info_df_full[item_info_df_full['item_id'].isin(all_item_ids_in_splits)].reset_index(drop=True)
+        all_item_ids_in_splits = pd.concat([
+            train_interactions_df['item_id'], 
+            val_interactions_df['item_id']
+        ]).unique()
+        item_info_df_for_datasets = item_info_df_full[
+            item_info_df_full['item_id'].isin(all_item_ids_in_splits)
+        ].reset_index(drop=True)
 
         print(f"\nTraining interactions: {len(train_interactions_df)}")
         print(f"Validation interactions: {len(val_interactions_df)}")
 
         print("\nCreating dataset instances using pre-fitted encoders...")
-        # Create training dataset with shared cache and pre-fitted encoders
+        # Create training dataset
         train_dataset = MultimodalDataset(
             interactions_df=train_interactions_df,
-            item_info_df=item_info_df_for_datasets, # Use filtered item info for the dataset
+            item_info_df=item_info_df_for_datasets,
             image_folder=effective_image_folder,
             vision_model_name=model_config.vision_model,
             language_model_name=model_config.language_model,
@@ -284,8 +229,11 @@ def main():
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=True,
-            cache_processed_images=cache_images_flag,
-            shared_image_cache=shared_image_cache
+            # Simplified cache parameters
+            cache_features=cache_config.enabled,
+            cache_max_items=cache_config.max_memory_items,
+            cache_dir=cache_config.cache_directory,
+            cache_to_disk=cache_config.use_disk
         )
         
         # Assign globally fitted encoders and counts to the training dataset
@@ -293,24 +241,26 @@ def main():
         train_dataset.item_encoder = full_dataset_for_encoders.item_encoder
         train_dataset.n_users = full_dataset_for_encoders.n_users
         train_dataset.n_items = full_dataset_for_encoders.n_items
-        train_dataset.finalize_setup()
 
-        # Create validation dataset with shared cache and pre-fitted encoders
+        # Create validation dataset
         val_dataset = MultimodalDataset(
             interactions_df=val_interactions_df,
-            item_info_df=item_info_df_for_datasets, # Use filtered item info for the dataset
+            item_info_df=item_info_df_for_datasets,
             image_folder=effective_image_folder,
             vision_model_name=model_config.vision_model,
             language_model_name=model_config.language_model,
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
-            text_augmentation_config=TextAugmentationConfig(enabled=False), # No augmentation for validation
+            text_augmentation_config=TextAugmentationConfig(enabled=False),  # No augmentation for validation
             numerical_feat_cols=data_config.numerical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False,
-            cache_processed_images=cache_images_flag,
-            shared_image_cache=shared_image_cache
+            # Simplified cache parameters
+            cache_features=cache_config.enabled,
+            cache_max_items=cache_config.max_memory_items,
+            cache_dir=cache_config.cache_directory,
+            cache_to_disk=cache_config.use_disk
         )
         
         # Assign globally fitted encoders and counts to the validation dataset
@@ -318,14 +268,13 @@ def main():
         val_dataset.item_encoder = full_dataset_for_encoders.item_encoder
         val_dataset.n_users = full_dataset_for_encoders.n_users
         val_dataset.n_items = full_dataset_for_encoders.n_items
-        val_dataset.finalize_setup()
         
         print(f"\nDataset sizes after final setup:")
         print(f"  Training samples: {len(train_dataset)}")
         print(f"  Validation samples: {len(val_dataset)}")
 
         # Create data loaders for training and validation
-        train_loader = train_loader = DataLoader(
+        train_loader = DataLoader(
             train_dataset, 
             batch_size=training_config.batch_size, 
             shuffle=True, 
@@ -337,7 +286,7 @@ def main():
         val_loader = DataLoader(
             val_dataset, 
             batch_size=training_config.batch_size, 
-            shuffle=False,  # No shuffling for validation
+            shuffle=False,
             num_workers=training_config.num_workers, 
             pin_memory=True,
             persistent_workers=True if training_config.num_workers > 0 else False,
@@ -401,7 +350,12 @@ def main():
         print(f"Trainable parameters: {trainable_params:,}")
 
         # Initialize trainer with model and device
-        trainer = Trainer(model=model, device=device, checkpoint_dir=config.checkpoint_dir, use_contrastive=model_config.use_contrastive)
+        trainer = Trainer(
+            model=model, 
+            device=device, 
+            checkpoint_dir=config.checkpoint_dir, 
+            use_contrastive=model_config.use_contrastive
+        )
         trainer.criterion.contrastive_weight = training_config.contrastive_weight
         trainer.criterion.bce_weight = training_config.bce_weight
 
@@ -436,6 +390,8 @@ def main():
         # Save the final model checkpoint and encoders
         trainer.save_checkpoint('final_model.pth')
         print(f"\nSaved final model to {config.checkpoint_dir}/final_model.pth")
+        
+        # Save encoders again
         encoders_dir = Path(config.checkpoint_dir) / 'encoders'
         encoders_dir.mkdir(parents=True, exist_ok=True)
         with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
@@ -445,7 +401,7 @@ def main():
         print(f"Saved encoders to {encoders_dir}")
 
         # Plot and save training curves if losses were recorded
-        if train_losses and val_losses :
+        if train_losses and val_losses:
             plt.figure(figsize=(10, 5))
             plt.plot(train_losses, label='Train Loss')
             plt.plot(val_losses, label='Validation Loss')
@@ -476,6 +432,7 @@ def main():
             except Exception as e:
                 print(f"Warning: Failed to save config to wandb: {e}")
         print("\nTraining completed!")
+        
     finally:
         # Ensure Weights & Biases run is finished
         if args.use_wandb and wandb.run is not None:

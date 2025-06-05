@@ -1,0 +1,43 @@
+# configs/simple_config.yaml - Essential settings only
+
+model:
+  vision_model: resnet              # Options: clip, resnet, dino, convnext
+  language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
+  embedding_dim: 64                 # Recommended: 64, 128, 256
+  use_contrastive: true             # Use CLIP-style contrastive learning
+
+training:
+  batch_size: 64                    # Adjust based on GPU memory
+  learning_rate: 0.001              # Standard learning rate
+  epochs: 30                        # Number of training epochs
+  patience: 10                      # Early stopping patience
+
+data:
+  # Data paths 
+  item_info_path: data/raw/item_info/item_info_sample.csv
+  interactions_path: data/raw/interactions/interactions_sample.csv
+  image_folder: data/raw/images
+  
+  # Processed data paths
+  processed_item_info_path: data/processed/item_info.csv
+  processed_interactions_path: data/processed/interactions.csv
+  
+  # Data splits
+  split_data_path: data/splits/split_tiny
+  train_data_path: data/splits/split_tiny/train.csv
+  val_data_path: data/splits/split_tiny/val.csv
+  test_data_path: data/splits/split_tiny/test.csv
+  
+  # Simple cache configuration
+  cache_config:
+    enabled: true                   # Enable feature caching for speed
+    max_memory_items: 1000          # Items to keep in memory
+    cache_directory: 'data/cache/features'
+    use_disk: false                 # Set to true for larger datasets
+
+recommendation:
+  top_k: 50                         # Number of recommendations to generate
+
+# Output directories
+checkpoint_dir: models/checkpoints
+results_dir: results

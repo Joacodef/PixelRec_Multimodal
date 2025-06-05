@@ -1,0 +1,155 @@
+# configs/advanced_config.yaml - All configurable options for experimentation
+
+model:
+  # Basic model selection
+  model_class: pretrained           # Options: 'pretrained' or 'enhanced'
+  vision_model: resnet              # Options: clip, resnet, dino, convnext
+  language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
+  embedding_dim: 64
+  
+  # Pre-trained model freezing
+  freeze_vision: true               # Freeze vision model weights
+  freeze_language: true             # Freeze language model weights
+  
+  # Contrastive learning (advanced)
+  use_contrastive: true
+  contrastive_temperature: 0.07     # Temperature for contrastive loss
+  
+  # Regularization
+  dropout_rate: 0.3                 # Dropout rate for regularization
+  
+  # Attention mechanism (advanced)
+  num_attention_heads: 4            # Number of attention heads
+  attention_dropout: 0.1            # Dropout in attention layers
+  
+  # Fusion network architecture (advanced)
+  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
+  fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
+  use_batch_norm: true              # Use batch normalization
+  
+  # Projection layers (advanced)
+  projection_hidden_dim: null       # Hidden dim in projections (null = direct projection)
+  
+  # Cross-modal attention (enhanced model only)
+  use_cross_modal_attention: true   # Enable cross-modal attention
+  cross_modal_attention_weight: 0.5 # Weight for cross-modal features
+  
+  # Advanced architectural choices
+  final_activation: sigmoid         # Options: sigmoid, tanh, none
+  init_method: xavier_uniform       # Options: xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
+
+training:
+  # Basic training parameters
+  batch_size: 64
+  epochs: 30
+  learning_rate: 0.001
+  weight_decay: 0.01               # L2 regularization
+  patience: 10                     # Early stopping patience
+  gradient_clip: 1.0               # Gradient clipping threshold
+  num_workers: 8                   # DataLoader workers
+  
+  # Loss configuration (advanced)
+  contrastive_weight: 0.1          # Weight for contrastive loss
+  bce_weight: 1.0                  # Weight for binary cross-entropy loss
+  
+  # Learning rate scheduling (advanced)
+  use_lr_scheduler: true
+  lr_scheduler_type: reduce_on_plateau  # Options: reduce_on_plateau, cosine, step
+  lr_scheduler_patience: 2         # Scheduler patience
+  lr_scheduler_factor: 0.5         # LR reduction factor
+  lr_scheduler_min_lr: 0.000001    # Minimum learning rate
+  
+  # Optimizer configuration (advanced)
+  optimizer_type: adamw            # Options: adamw, adam, sgd
+  adam_beta1: 0.9                  # Adam beta1 parameter
+  adam_beta2: 0.999                # Adam beta2 parameter
+  adam_eps: 0.00000001             # Adam epsilon parameter
+
+data:
+  # Data paths
+  item_info_path: data/raw/item_info/item_info_sample.csv
+  interactions_path: data/raw/interactions/interactions_sample.csv
+  image_folder: data/raw/images
+  processed_item_info_path: data/processed/item_info.csv
+  processed_interactions_path: data/processed/interactions.csv
+  scaler_path: data/processed/numerical_scaler.pkl
+  processed_image_destination_folder: data/processed/images
+  
+  # Data splits
+  split_data_path: data/splits/split_tiny
+  train_data_path: data/splits/split_tiny/train.csv
+  val_data_path: data/splits/split_tiny/val.csv
+  test_data_path: data/splits/split_tiny/test.csv
+  
+  # Cache configuration
+  cache_config:
+    enabled: true
+    max_memory_items: 1000
+    cache_directory: 'data/cache/features'
+    use_disk: false
+  
+  # Data preprocessing (advanced)
+  negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
+  
+  # Numerical features (advanced)
+  numerical_features_cols:
+    - view_number
+    - comment_number
+    - thumbup_number
+    - share_number
+    - coin_number
+    - favorite_number
+    - barrage_number
+  numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
+  
+  # Text augmentation (experimental)
+  text_augmentation:
+    enabled: true                  # Enable text augmentation during training
+    augmentation_type: random_delete  # Options: random_delete, random_swap, none
+    delete_prob: 0.05              # Probability of deleting words
+    swap_prob: 0.05                # Probability of swapping adjacent words
+  
+  # Offline image compression (advanced)
+  offline_image_compression:
+    enabled: true
+    compress_if_kb_larger_than: 500
+    target_quality: 85
+    resize_if_pixels_larger_than: [2048, 2048]
+    resize_target_longest_edge: 1024
+  
+  # Offline image validation (advanced)
+  offline_image_validation:
+    check_corrupted: true
+    min_width: 64
+    min_height: 64
+    allowed_extensions: ['.jpg', '.jpeg', '.png']
+  
+  # Offline text cleaning (advanced)
+  offline_text_cleaning:
+    remove_html: true
+    normalize_unicode: true
+    to_lowercase: true
+  
+  # Data splitting configuration (advanced)
+  splitting:
+    random_state: 42
+    train_final_ratio: 0.40
+    val_final_ratio: 0.15
+    test_final_ratio: 0.45
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
+    validate_no_leakage: true
+
+recommendation:
+  # Basic recommendation settings
+  top_k: 50
+  filter_seen: true                # Filter out previously seen items
+  
+  # Advanced recommendation settings
+  diversity_weight: 0.3            # Weight for diversity in recommendations
+  novelty_weight: 0.2              # Weight for novelty in recommendations
+  max_candidates: 1000             # Maximum candidate items to consider
+
+# Output directories
+checkpoint_dir: models/checkpoints
+results_dir: results
