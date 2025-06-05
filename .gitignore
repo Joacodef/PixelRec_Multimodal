@@ -42,3 +42,8 @@ notebooks/
 wandb/
 
 models/backup/
+models/cache/
+
+cache
+cache/*
+cache/*/*

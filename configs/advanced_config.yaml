@@ -86,7 +86,7 @@ data:
     enabled: true
     max_memory_items: 1000
     cache_directory: 'data/cache/features'
-    use_disk: false
+    use_disk: true
   
   # Data preprocessing (advanced)
   negative_sampling_ratio: 1.0     # Ratio of negative samples to positive

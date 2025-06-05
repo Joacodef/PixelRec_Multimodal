@@ -1,0 +1,7 @@
+{
+  "error_occurred": true,
+  "error_time": "2025-06-05T15:04:39.855315",
+  "error_type": "AttributeError",
+  "error_message": "'MultimodalDataset' object has no attribute 'user_encoder'",
+  "traceback": "Traceback (most recent call last):\n  File \"E:\\ProyectoRecsys\\repo\\scripts\\train.py\", line 372, in main\n    full_dataset_for_encoders = MultimodalDataset(\n                                ^^^^^^^^^^^^^^^^^^\n  File \"E:\\ProyectoRecsys\\repo\\src\\data\\dataset.py\", line 55, in __init__\n    self.interactions['user_idx'] = self.user_encoder.fit_transform(\n                                    ^^^^^^^^^^^^^^^^^\nAttributeError: 'MultimodalDataset' object has no attribute 'user_encoder'\n"
+}
