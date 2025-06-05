@@ -166,12 +166,18 @@ def main():
     if cache_config.enabled:
         print(f"Initializing SimpleFeatureCache:")
         print(f"  Max memory items: {cache_config.max_memory_items}")
-        print(f"  Cache directory: {cache_config.cache_directory}")
+        # The cache_directory from config is the base directory.
+        print(f"  Base Cache directory: {cache_config.cache_directory}")
         print(f"  Use disk: {cache_config.use_disk}")
-        
+        print(f"  Vision Model: {config_obj.model.vision_model}")
+        print(f"  Language Model: {config_obj.model.language_model}")
+
+        # CORRECTED INITIALIZATION
         simple_cache_instance = SimpleFeatureCache(
+            vision_model=config_obj.model.vision_model,
+            language_model=config_obj.model.language_model,
+            base_cache_dir=cache_config.cache_directory,
             max_memory_items=cache_config.max_memory_items,
-            cache_dir=cache_config.cache_directory,
             use_disk=cache_config.use_disk
         )
         simple_cache_instance.print_stats()
@@ -179,7 +185,6 @@ def main():
         print("Feature caching is disabled")
 
     # Create dataset with simplified cache parameters using new config structure
-    cache_config = config_obj.data.cache_config
     dataset_for_encoders = MultimodalDataset(
         interactions_df=interactions_df_for_dataset_init,
         item_info_df=item_info_df,
@@ -187,10 +192,10 @@ def main():
         vision_model_name=config_obj.model.vision_model,
         language_model_name=config_obj.model.language_model,
         create_negative_samples=False,
-        # Simplified cache parameters using new config structure
+        # Pass cache parameters to dataset
         cache_features=cache_config.enabled,
         cache_max_items=cache_config.max_memory_items,
-        cache_dir=cache_config.cache_directory,
+        cache_dir=cache_config.cache_directory, # Dataset handles 'cache_dir' correctly
         cache_to_disk=cache_config.use_disk,
         # Keep some existing parameters for compatibility
         numerical_feat_cols=config_obj.data.numerical_features_cols,

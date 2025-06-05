@@ -31,7 +31,7 @@ class Recommender:
 
         # Item info for quick lookup
         # Assuming item_info_df index is already string or will be treated as such
-        self.item_info_dict = self.dataset.item_info_df.set_index('item_id').to_dict('index')
+        self.item_info_dict = self.dataset.item_info_df_original.set_index('item_id').to_dict('index')
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
