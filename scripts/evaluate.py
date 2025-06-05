@@ -12,6 +12,7 @@ import json
 import pickle
 from tqdm import tqdm
 from typing import Optional, Any, Union # Added Any for ProcessedFeatureCache if import fails
+import random
 
 # Add parent directory
 import sys
@@ -149,6 +150,32 @@ def main():
         type=int,
         default=5000,
         help='Chunk size for parallel processing'
+    )
+
+    parser.add_argument(
+    '--use_sampling',
+    action='store_true',
+    default=True,  # Enable by default
+    help='Use negative sampling for evaluation (much faster)'
+    )
+    parser.add_argument(
+        '--no_sampling',
+        dest='use_sampling',
+        action='store_false',
+        help='Disable negative sampling (use full evaluation)'
+    )
+    parser.add_argument(
+        '--num_negatives',
+        type=int,
+        default=100,
+        help='Number of negative samples per positive item (default: 100)'
+    )
+    parser.add_argument(
+        '--sampling_strategy',
+        type=str,
+        default='random',
+        choices=['random', 'popularity', 'popularity_inverse'],
+        help='Strategy for negative sampling'
     )
 
 
@@ -412,14 +439,21 @@ def main():
         raise ValueError(f"Unknown eval_task: {args.eval_task}")
     
     print(f"Creating evaluator for task: {eval_task_enum_val.value}")
+
+    if args.eval_task == 'retrieval' and args.use_sampling:
+        print(f"Using negative sampling: {args.num_negatives} negatives per positive, strategy: {args.sampling_strategy}")
+
     evaluator = create_evaluator(
         task=eval_task_enum_val,
         recommender=recommender_instance,
         test_data=test_df,
-        config=config_obj, 
-        train_data=train_df 
+        config=config_obj,
+        train_data=train_df,
+        use_sampling=args.use_sampling if args.eval_task == 'retrieval' else False,
+        num_negatives=args.num_negatives,
+        sampling_strategy=args.sampling_strategy
     )
-    
+        
     print(f"Task: {evaluator.task_name}")
     print(f"Filter seen items (evaluator's perspective for ground truth): {evaluator.filter_seen}")
     

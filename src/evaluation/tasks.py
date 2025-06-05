@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
+import random
 
 from .metrics import (
     calculate_precision_at_k,
@@ -299,6 +300,288 @@ class TopKRetrievalEvaluator(BaseEvaluator):
             'avg_novel_items_per_user': total_novel_items / len(unique_users),
             'novel_items_ratio': total_novel_items / total_test_items if total_test_items > 0 else 0
         }
+
+
+class SampledTopKRetrievalEvaluator(BaseEvaluator):
+    """
+    Evaluator for top-k retrieval using negative sampling.
+    Much faster than full evaluation while maintaining reasonable accuracy.
+    """
+    
+    def __init__(
+        self,
+        recommender: Any,
+        test_data: pd.DataFrame,
+        config: Any,
+        train_data: Optional[pd.DataFrame] = None,
+        val_data: Optional[pd.DataFrame] = None,
+        num_negatives: int = 100,
+        sampling_strategy: str = 'random',
+        random_seed: int = 42
+    ):
+        super().__init__(recommender, test_data, config, train_data, val_data)
+        self.num_negatives = num_negatives
+        self.sampling_strategy = sampling_strategy
+        self.random_seed = random_seed
+        np.random.seed(random_seed)
+        # Add this import at the top of the file if not already there
+        import random
+        random.seed(random_seed)
+        
+        # Pre-compute item popularity for sampling strategies
+        self._compute_item_popularity()
+        
+        # Get all items from the recommender's dataset
+        self.all_items = set()
+        if hasattr(self.recommender, 'dataset') and hasattr(self.recommender.dataset, 'item_encoder'):
+            if hasattr(self.recommender.dataset.item_encoder, 'classes_'):
+                self.all_items = set(self.recommender.dataset.item_encoder.classes_)
+    
+    @property
+    def filter_seen(self) -> bool:
+        return True  # We want to retrieve new items
+    
+    @property
+    def task_name(self) -> str:
+        return f"Sampled Top-K Retrieval (Novel Items, {self.num_negatives} negatives)"
+    
+    def _compute_item_popularity(self):
+        """Compute item popularity from training data"""
+        if self.train_data is not None:
+            self.item_popularity = self.train_data['item_id'].value_counts().to_dict()
+        else:
+            # Fallback to test data if no training data
+            self.item_popularity = self.test_data['item_id'].value_counts().to_dict()
+        
+        # Normalize popularity scores
+        max_pop = max(self.item_popularity.values()) if self.item_popularity else 1
+        self.item_popularity_normalized = {
+            item: pop / max_pop 
+            for item, pop in self.item_popularity.items()
+        }
+    
+    def _sample_negatives(
+        self, 
+        user_id: str, 
+        positive_items: Set[str],
+        all_items: Optional[Set[str]] = None
+    ) -> List[str]:
+        """Sample negative items based on the specified strategy"""
+        # Use provided all_items or fall back to self.all_items
+        if all_items is None:
+            all_items = self.all_items
+            
+        # Get user history
+        user_history = self.user_train_items.get(user_id, set())
+        
+        # Create negative pool (items user hasn't interacted with)
+        negative_pool = list(all_items - user_history - positive_items)
+        
+        if not negative_pool:
+            return []
+        
+        # Sample based on strategy
+        if self.sampling_strategy == 'random':
+            # Uniform random sampling
+            num_to_sample = min(self.num_negatives, len(negative_pool))
+            import random
+            negatives = random.sample(negative_pool, num_to_sample)
+            
+        elif self.sampling_strategy == 'popularity':
+            # Sample proportional to popularity
+            num_to_sample = min(self.num_negatives, len(negative_pool))
+            
+            # Get popularity scores for negative items
+            popularities = []
+            valid_negatives = []
+            for item in negative_pool:
+                if item in self.item_popularity_normalized:
+                    popularities.append(self.item_popularity_normalized[item])
+                    valid_negatives.append(item)
+                else:
+                    # Items not in training get minimum popularity
+                    popularities.append(0.01)
+                    valid_negatives.append(item)
+            
+            # Convert to probabilities
+            popularities = np.array(popularities)
+            if popularities.sum() > 0:
+                probs = popularities / popularities.sum()
+            else:
+                probs = np.ones(len(popularities)) / len(popularities)
+            
+            # Sample without replacement
+            indices = np.random.choice(
+                len(valid_negatives),
+                size=num_to_sample,
+                replace=False,
+                p=probs
+            )
+            negatives = [valid_negatives[i] for i in indices]
+            
+        elif self.sampling_strategy == 'popularity_inverse':
+            # Sample inverse to popularity (more unpopular items)
+            num_to_sample = min(self.num_negatives, len(negative_pool))
+            
+            popularities = []
+            valid_negatives = []
+            for item in negative_pool:
+                if item in self.item_popularity_normalized:
+                    # Inverse popularity
+                    popularities.append(1.0 - self.item_popularity_normalized[item] + 0.01)
+                    valid_negatives.append(item)
+                else:
+                    # Unknown items get high sampling probability
+                    popularities.append(1.0)
+                    valid_negatives.append(item)
+            
+            # Convert to probabilities
+            popularities = np.array(popularities)
+            probs = popularities / popularities.sum()
+            
+            # Sample without replacement
+            indices = np.random.choice(
+                len(valid_negatives),
+                size=num_to_sample,
+                replace=False,
+                p=probs
+            )
+            negatives = [valid_negatives[i] for i in indices]
+            
+        else:
+            raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
+        
+        return negatives
+    
+    def evaluate(self) -> Dict[str, float]:
+        """
+        Evaluate using negative sampling for efficiency.
+        For each positive test item, we sample N negative items and evaluate ranking.
+        """
+        # Metrics storage
+        hit_rates = []
+        mrr_scores = []
+        ndcg_scores = []
+        precision_scores = []
+        recall_scores = []
+        
+        # Get all unique items from the recommender's dataset
+        if not self.all_items:
+            print("Warning: Could not get item list from recommender. Using items from test data.")
+            self.all_items = set(self.test_data['item_id'].unique())
+            if self.train_data is not None:
+                self.all_items.update(self.train_data['item_id'].unique())
+        
+        # Get unique users in test set
+        test_users = self.test_data['user_id'].unique()
+        
+        # Track statistics
+        total_evaluations = 0
+        users_with_no_test_items = 0
+        
+        print(f"Evaluating {len(test_users)} users with {self.num_negatives} negative samples per positive item...")
+        print(f"Total items in catalog: {len(self.all_items)}")
+        
+        for user_id in tqdm(test_users, desc="Evaluating users"):
+            # Get test items for this user
+            user_test_items = set(
+                self.test_data[self.test_data['user_id'] == user_id]['item_id']
+            )
+            
+            if not user_test_items:
+                users_with_no_test_items += 1
+                continue
+            
+            # For each positive test item
+            for positive_item in user_test_items:
+                # Sample negative items
+                negatives = self._sample_negatives(
+                    user_id, 
+                    {positive_item},
+                    self.all_items
+                )
+                
+                if not negatives:
+                    continue
+                
+                # Create candidate set (1 positive + N negatives)
+                candidates = [positive_item] + negatives
+                
+                # Get recommendations from this subset
+                recommendations = self.get_recommendations(
+                    user_id,
+                    candidates=candidates,
+                    top_k=min(self.top_k, len(candidates))
+                )
+                
+                if not recommendations:
+                    continue
+                
+                # Extract recommended items
+                rec_items = [item for item, _ in recommendations]
+                
+                # Calculate metrics
+                # Hit@K: Did we rank the positive item in top-k?
+                if positive_item in rec_items[:self.top_k]:
+                    hit_rates.append(1.0)
+                else:
+                    hit_rates.append(0.0)
+                
+                # MRR: Reciprocal rank of the positive item
+                if positive_item in rec_items:
+                    rank = rec_items.index(positive_item) + 1
+                    mrr_scores.append(1.0 / rank)
+                else:
+                    mrr_scores.append(0.0)
+                
+                # NDCG@K (binary relevance: only positive item is relevant)
+                relevance_scores = [1.0 if item == positive_item else 0.0 for item in rec_items]
+                ideal_relevance = sorted(relevance_scores, reverse=True)
+                
+                dcg = sum(rel / np.log2(i + 2) for i, rel in enumerate(relevance_scores[:self.top_k]))
+                idcg = sum(rel / np.log2(i + 2) for i, rel in enumerate(ideal_relevance[:self.top_k]))
+                
+                if idcg > 0:
+                    ndcg_scores.append(dcg / idcg)
+                else:
+                    ndcg_scores.append(0.0)
+                
+                # Precision@K (only one relevant item)
+                if positive_item in rec_items[:self.top_k]:
+                    precision_scores.append(1.0 / self.top_k)
+                else:
+                    precision_scores.append(0.0)
+                
+                # Recall@K (only one relevant item)
+                if positive_item in rec_items[:self.top_k]:
+                    recall_scores.append(1.0)
+                else:
+                    recall_scores.append(0.0)
+                
+                total_evaluations += 1
+        
+        # Calculate final metrics
+        if not hit_rates:
+            return {
+                'error': 'No valid evaluations completed',
+                'users_with_no_test_items': users_with_no_test_items
+            }
+        
+        results = {
+            f'hit_rate@{self.top_k}': np.mean(hit_rates),
+            'mrr': np.mean(mrr_scores),
+            f'ndcg@{self.top_k}': np.mean(ndcg_scores),
+            f'precision@{self.top_k}': np.mean(precision_scores),
+            f'recall@{self.top_k}': np.mean(recall_scores),
+            'num_evaluations': total_evaluations,
+            'num_users_evaluated': len(test_users) - users_with_no_test_items,
+            'num_negatives': self.num_negatives,
+            'sampling_strategy': self.sampling_strategy,
+            'total_test_interactions': len(self.test_data),
+            'avg_test_items_per_user': len(self.test_data) / len(test_users)
+        }
+        
+        return results
 
 
 class TopKRankingEvaluator(BaseEvaluator):
@@ -588,6 +871,9 @@ def create_evaluator(
     test_data: pd.DataFrame,
     config: Any,
     train_data: Optional[pd.DataFrame] = None,
+    use_sampling: bool = True,  # New parameter
+    num_negatives: int = 100,   # New parameter
+    sampling_strategy: str = 'random',  # New parameter
     **kwargs
 ) -> BaseEvaluator:
     """
@@ -599,11 +885,27 @@ def create_evaluator(
         test_data: Test dataset
         config: Configuration object
         train_data: Training dataset (optional)
+        use_sampling: Whether to use negative sampling for retrieval tasks
+        num_negatives: Number of negative samples per positive
+        sampling_strategy: Strategy for negative sampling
         **kwargs: Additional arguments for specific evaluators
     
     Returns:
         An evaluator instance
     """
+    # For retrieval task, use sampled version by default
+    if task == EvaluationTask.TOP_K_RETRIEVAL and use_sampling:
+        return SampledTopKRetrievalEvaluator(
+            recommender=recommender,
+            test_data=test_data,
+            config=config,
+            train_data=train_data,
+            num_negatives=num_negatives,
+            sampling_strategy=sampling_strategy,
+            **kwargs
+        )
+    
+    # Original evaluator mapping
     evaluator_classes = {
         EvaluationTask.NEXT_ITEM_PREDICTION: NextItemEvaluator,
         EvaluationTask.TOP_K_RETRIEVAL: TopKRetrievalEvaluator,
