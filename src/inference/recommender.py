@@ -117,111 +117,111 @@ class Recommender:
             
         except Exception as e:
             self.logger.error(f"Error getting score for user {user_id}, item {item_id}: {e}")
-           return 0.0
+            return 0.0
    
-   def _score_items_batch(self, user_tensor: torch.Tensor, item_ids: List[int]) -> List[float]:
-       """Score a batch of items for a given user"""
-       try:
-           batch_size = len(item_ids)
-           user_batch = user_tensor.repeat(batch_size, 1).squeeze()
-           
-           # Prepare item data
-           item_tensors = []
-           images = []
-           text_input_ids = []
-           text_attention_masks = []
-           numerical_features = []
-           
-           for item_id in item_ids:
-               # Get or compute item features
-               item_features = self._get_item_features(item_id)
-               if item_features is None:
-                   # Return 0 score for items we can't process
-                   return [0.0] * batch_size
+    def _score_items_batch(self, user_tensor: torch.Tensor, item_ids: List[int]) -> List[float]:
+        """Score a batch of items for a given user"""
+        try:
+            batch_size = len(item_ids)
+            user_batch = user_tensor.repeat(batch_size, 1).squeeze()
+            
+            # Prepare item data
+            item_tensors = []
+            images = []
+            text_input_ids = []
+            text_attention_masks = []
+            numerical_features = []
+            
+            for item_id in item_ids:
+                # Get or compute item features
+                item_features = self._get_item_features(item_id)
+                if item_features is None:
+                    # Return 0 score for items we can't process
+                    return [0.0] * batch_size
+                
+                item_encoded = self.dataset.item_encoder.transform([item_id])[0]
+                item_tensors.append(item_encoded)
+                images.append(item_features['image'])
+                text_input_ids.append(item_features['text_input_ids'])
+                text_attention_masks.append(item_features['text_attention_mask'])
+                numerical_features.append(item_features['numerical_features'])
+            
+            # Convert to tensors
+            item_batch = torch.tensor(item_tensors, dtype=torch.long, device=self.device)
+            image_batch = torch.stack(images).to(self.device)
+            text_ids_batch = torch.stack(text_input_ids).to(self.device)
+            text_masks_batch = torch.stack(text_attention_masks).to(self.device)
+            numerical_batch = torch.stack(numerical_features).to(self.device)
+            
+            # Get scores from model
+            with torch.no_grad():
+                scores = self.model(
+                    user_idx=user_batch,
+                    item_idx=item_batch,
+                    image=image_batch,
+                    text_input_ids=text_ids_batch,
+                    text_attention_mask=text_masks_batch,
+                    numerical_features=numerical_batch,
+                    return_embeddings=False
+                )
+                return scores.squeeze().cpu().tolist()
                
-               item_encoded = self.dataset.item_encoder.transform([item_id])[0]
-               item_tensors.append(item_encoded)
-               images.append(item_features['image'])
-               text_input_ids.append(item_features['text_input_ids'])
-               text_attention_masks.append(item_features['text_attention_mask'])
-               numerical_features.append(item_features['numerical_features'])
-           
-           # Convert to tensors
-           item_batch = torch.tensor(item_tensors, dtype=torch.long, device=self.device)
-           image_batch = torch.stack(images).to(self.device)
-           text_ids_batch = torch.stack(text_input_ids).to(self.device)
-           text_masks_batch = torch.stack(text_attention_masks).to(self.device)
-           numerical_batch = torch.stack(numerical_features).to(self.device)
-           
-           # Get scores from model
-           with torch.no_grad():
-               scores = self.model(
-                   user_idx=user_batch,
-                   item_idx=item_batch,
-                   image=image_batch,
-                   text_input_ids=text_ids_batch,
-                   text_attention_mask=text_masks_batch,
-                   numerical_features=numerical_batch,
-                   return_embeddings=False
-               )
-               return scores.squeeze().cpu().tolist()
-               
-       except Exception as e:
-           self.logger.error(f"Error scoring batch: {e}")
-           return [0.0] * len(item_ids)
+        except Exception as e:
+            self.logger.error(f"Error scoring batch: {e}")
+            return [0.0] * len(item_ids)
    
-   def _get_item_features(self, item_id: int) -> Optional[Dict[str, torch.Tensor]]:
-       """Get or compute features for an item with simple caching"""
-       # Check cache first
-       if item_id in self.feature_cache:
-           return self.feature_cache[item_id]
-       
-       try:
-           # Get item info
-           if item_id not in self.item_info_dict:
-               return None
-           
-           item_info = self.item_info_dict[item_id]
-           
-           # Get features from dataset
-           try:
-               # Use dataset's feature extraction
-               features = self.dataset._process_item_features(str(item_id))
-               
-               # Cache the features if we have room
-               if len(self.feature_cache) < self.cache_max_items:
-                   self.feature_cache[item_id] = features
-               
-               return features
-               
-           except Exception as e:
-               self.logger.error(f"Error extracting features for item {item_id}: {e}")
-               return None
-               
-       except Exception as e:
-           self.logger.error(f"Error getting item features for {item_id}: {e}")
-           return None
-   
-   def _get_user_interactions(self, user_id: int) -> set:
-       """Get set of items the user has interacted with"""
-       try:
-           # Look in the dataset's interactions
-           if hasattr(self.dataset, 'interactions'):
-               user_interactions = self.dataset.interactions[
-                   self.dataset.interactions['user_id'] == user_id
-               ]['item_id'].tolist()
-               return set(user_interactions)
-           return set()
-       except Exception as e:
-           self.logger.error(f"Error getting user interactions for {user_id}: {e}")
-           return set()
-   
-   def print_cache_stats(self):
-       """Print cache statistics"""
-       print(f"Feature cache: {len(self.feature_cache)} items cached")
-       print(f"Cache capacity: {self.cache_max_items}")
-       
-   def clear_cache(self):
-       """Clear the feature cache"""
-       self.feature_cache.clear()
-       print("Feature cache cleared")
+    def _get_item_features(self, item_id: int) -> Optional[Dict[str, torch.Tensor]]:
+        """Get or compute features for an item with simple caching"""
+        # Check cache first
+        if item_id in self.feature_cache:
+            return self.feature_cache[item_id]
+        
+        try:
+            # Get item info
+            if item_id not in self.item_info_dict:
+                return None
+            
+            item_info = self.item_info_dict[item_id]
+            
+            # Get features from dataset
+            try:
+                # Use dataset's feature extraction
+                features = self.dataset._process_item_features(str(item_id))
+                
+                # Cache the features if we have room
+                if len(self.feature_cache) < self.cache_max_items:
+                    self.feature_cache[item_id] = features
+                
+                return features
+                
+            except Exception as e:
+                self.logger.error(f"Error extracting features for item {item_id}: {e}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error getting item features for {item_id}: {e}")
+            return None
+    
+    def _get_user_interactions(self, user_id: int) -> set:
+        """Get set of items the user has interacted with"""
+        try:
+            # Look in the dataset's interactions
+            if hasattr(self.dataset, 'interactions'):
+                user_interactions = self.dataset.interactions[
+                    self.dataset.interactions['user_id'] == user_id
+                ]['item_id'].tolist()
+                return set(user_interactions)
+            return set()
+        except Exception as e:
+            self.logger.error(f"Error getting user interactions for {user_id}: {e}")
+            return set()
+    
+    def print_cache_stats(self):
+        """Print cache statistics"""
+        print(f"Feature cache: {len(self.feature_cache)} items cached")
+        print(f"Cache capacity: {self.cache_max_items}")
+        
+    def clear_cache(self):
+        """Clear the feature cache"""
+        self.feature_cache.clear()
+        print("Feature cache cleared")

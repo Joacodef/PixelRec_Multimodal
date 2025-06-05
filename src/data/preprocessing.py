@@ -1,3 +1,4 @@
+# src/data/preprocessing.py
 import numpy as np
 import random
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -118,6 +119,7 @@ def is_image_corrupted(image_path: str) -> bool:
         return False
     except Exception:
         return True
+
 
 def check_image_dimensions(image_path: str, min_width: int, min_height: int) -> bool:
     """Checks if an image meets minimum dimension requirements."""

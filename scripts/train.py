@@ -12,7 +12,7 @@ import pandas as pd
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from src.data.processors import NumericalProcessor
 from typing import List
 import dataclasses
 import wandb
@@ -44,39 +44,16 @@ except ImportError:
         def print_stats(self):
             print(f"Simple cache: {len(self.cache)} items")
 
+def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
+    processor = NumericalProcessor()
+    processor.fit_scaler(df, numerical_cols, method)
+    processor.save_scaler(scaler_path)
+    return processor.scaler
 
-def fit_numerical_scaler(df: pd.DataFrame, numerical_cols: List[str], method: str, scaler_path: Path):
-    """Fits a numerical scaler to the specified columns of a DataFrame."""
-    if not numerical_cols or method in ['none', 'log1p']:
-        print(f"Scaler fitting skipped for method: {method} or no numerical columns.")
-        return None
-    
-    data_to_scale = df[numerical_cols].fillna(0).values
-    if method == 'standardization':
-        scaler = StandardScaler()
-    elif method == 'min_max':
-        scaler = MinMaxScaler()
-    else:
-        print(f"Unknown scaling method for fitting: {method}. No scaler fitted.")
-        return None
-    
-    print(f"Fitting {method} scaler on {len(data_to_scale)} samples...")
-    scaler.fit(data_to_scale)
-    scaler_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
-    print(f"Scaler saved to {scaler_path}")
-    return scaler
-
-def load_numerical_scaler(scaler_path: Path):
-    """Loads a numerical scaler from a pickle file."""
-    if scaler_path.exists():
-        with open(scaler_path, 'rb') as f:
-            scaler = pickle.load(f)
-        print(f"Scaler loaded from {scaler_path}")
-        return scaler
-    print(f"Warning: Scaler not found at {scaler_path}. Proceeding without pre-loaded scaler.")
-    return None
+def load_numerical_scaler(scaler_path):
+    processor = NumericalProcessor()
+    processor.load_scaler(scaler_path)
+    return processor.scaler
 
 def main():
     """Main function for training the multimodal recommender system."""

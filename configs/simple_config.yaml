@@ -30,10 +30,10 @@ data:
   
   # Simple cache configuration
   cache_config:
-    enabled: true                   # Enable feature caching for speed
-    max_memory_items: 1000          # Items to keep in memory
+    enabled: true
+    max_memory_items: 1000
     cache_directory: 'data/cache/features'
-    use_disk: false                 # Keep in memory only
+    use_disk: false            
 
   # Numerical features
   numerical_features_cols:
