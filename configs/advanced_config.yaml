@@ -2,33 +2,33 @@
 
 model:
   # Basic model selection
-  model_class: pretrained           # Options: 'pretrained'
+  model_class: pretrained           # Options: 'pretrained' (only option for now)
   vision_model: resnet              # Options: clip, resnet, dino, convnext
   language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
   embedding_dim: 64
   
   # Pre-trained model freezing
-  freeze_vision: true               # Freeze vision model weights
-  freeze_language: true             # Freeze language model weights
+  freeze_vision: false               # Freeze vision model weights
+  freeze_language: false              # Freeze language model weights
   
   # Contrastive learning (advanced)
   use_contrastive: true
   contrastive_temperature: 0.07     # Temperature for contrastive loss
   
   # Regularization
-  dropout_rate: 0.3                 # Dropout rate for regularization
+  dropout_rate: 0.5                 # Dropout rate for regularization
   
   # Attention mechanism (advanced)
-  num_attention_heads: 4            # Number of attention heads
+  num_attention_heads: 8            # Number of attention heads
   attention_dropout: 0.1            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [1024, 512, 256, 128]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
   # Projection layers (advanced)
-  projection_hidden_dim: null       # Hidden dim in projections (null = direct projection)
+  projection_hidden_dim: 1024       # Hidden dim in projections (null = direct projection)
   
   # Advanced architectural choices
   final_activation: sigmoid         # Options: sigmoid, tanh, none
@@ -36,11 +36,11 @@ model:
 
 training:
   # Basic training parameters
-  batch_size: 128
-  epochs: 30
-  learning_rate: 0.001
+  batch_size: 32
+  epochs: 100
+  learning_rate: 0.000001
   weight_decay: 0.01               # L2 regularization
-  patience: 10                     # Early stopping patience
+  patience: 10                    # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
   num_workers: 8                   # DataLoader workers
   
@@ -85,7 +85,7 @@ data:
     use_disk: true
   
   # Data preprocessing (advanced)
-  negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
+  negative_sampling_ratio: 4.0     # Ratio of negative samples to positive
   
   # Numerical features (advanced)
   numerical_features_cols:
@@ -129,11 +129,11 @@ data:
   # Data splitting configuration (advanced)
   splitting:
     random_state: 42
-    train_final_ratio: 0.7
-    val_final_ratio: 0.15
-    test_final_ratio: 0.15
-    min_interactions_per_user: 10
-    min_interactions_per_item: 10
+    train_final_ratio: 0.8
+    val_final_ratio: 0.1
+    test_final_ratio: 0.1
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
     validate_no_leakage: true
 
 recommendation:
