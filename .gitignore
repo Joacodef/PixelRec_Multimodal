@@ -47,3 +47,5 @@ models/cache/
 cache
 cache/*
 cache/*/*
+
+*_predictions.json
