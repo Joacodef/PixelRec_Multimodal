@@ -1,6 +1,6 @@
-# src/inference/recommender.py - Simplified without complex caching
+# src/inference/recommender.py
 """
-Simplified multimodal recommender for inference with streamlined caching
+Fixed multimodal recommender for inference with consistent string ID handling
 """
 import torch
 import pandas as pd
@@ -14,8 +14,7 @@ from ..data.dataset import MultimodalDataset
 
 class Recommender:
     """
-    Simplified multimodal recommender for inference
-    Removed complex caching in favor of simple in-memory cache
+    Fixed multimodal recommender for inference with consistent string ID handling
     """
 
     def __init__(self, model: torch.nn.Module, dataset: MultimodalDataset, device: torch.device,
@@ -29,9 +28,13 @@ class Recommender:
         self.feature_cache: Dict[str, Dict[str, torch.Tensor]] = {} # Item IDs (strings) as keys
         self.cache_max_items = cache_max_items
 
-        # Item info for quick lookup
-        # Assuming item_info_df index is already string or will be treated as such
-        self.item_info_dict = self.dataset.item_info_df_original.set_index('item_id').to_dict('index')
+        # Item info for quick lookup - ensure string keys
+        self.item_info_dict = {}
+        if hasattr(self.dataset, 'item_info_df_original') and not self.dataset.item_info_df_original.empty:
+            # Convert index to string and create dictionary
+            item_df = self.dataset.item_info_df_original.copy()
+            item_df['item_id'] = item_df['item_id'].astype(str)
+            self.item_info_dict = item_df.set_index('item_id').to_dict('index')
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -51,21 +54,34 @@ class Recommender:
             List of (item_id_str, score) tuples sorted by score descending
         """
         try:
-            # Encode user ID
-            if user_id not in self.dataset.user_encoder.classes_:
+            # Ensure user_id is string
+            user_id = str(user_id)
+            
+            # Check if user exists in encoder
+            if not hasattr(self.dataset.user_encoder, 'classes_') or self.dataset.user_encoder.classes_ is None:
+                self.logger.warning(f"User encoder not properly initialized")
+                return []
+                
+            user_classes = [str(cls) for cls in self.dataset.user_encoder.classes_]
+            if user_id not in user_classes:
                 self.logger.warning(f"User {user_id} not found in training data")
                 return []
 
             user_encoded = self.dataset.user_encoder.transform([user_id])[0]
             user_tensor = torch.tensor([user_encoded], dtype=torch.long, device=self.device)
 
-            # Get candidate items
-            current_candidate_items: List[str]
+            # Get candidate items - ensure all are strings
+            current_candidate_items: List[str] = []
             if candidates is None:
-                current_candidate_items = self.dataset.item_encoder.classes_.tolist()
+                if (hasattr(self.dataset.item_encoder, 'classes_') and 
+                    self.dataset.item_encoder.classes_ is not None):
+                    current_candidate_items = [str(item) for item in self.dataset.item_encoder.classes_]
+                else:
+                    return []
             else:
-                current_candidate_items = [item for item in candidates
-                                 if item in self.dataset.item_encoder.classes_]
+                # Ensure candidates are strings and exist in encoder
+                item_classes = [str(cls) for cls in self.dataset.item_encoder.classes_] if hasattr(self.dataset.item_encoder, 'classes_') else []
+                current_candidate_items = [str(item) for item in candidates if str(item) in item_classes]
 
             if not current_candidate_items:
                 return []
@@ -107,11 +123,26 @@ class Recommender:
         Required by ranking evaluator.
         """
         try:
-            # Encode user and item IDs
-            if user_id not in self.dataset.user_encoder.classes_:
+            # Ensure string types
+            user_id = str(user_id)
+            item_id = str(item_id)
+            
+            # Check if user and item exist in encoders
+            if not hasattr(self.dataset.user_encoder, 'classes_') or self.dataset.user_encoder.classes_ is None:
+                self.logger.warning(f"User encoder not properly initialized for get_item_score.")
+                return 0.0
+                
+            if not hasattr(self.dataset.item_encoder, 'classes_') or self.dataset.item_encoder.classes_ is None:
+                self.logger.warning(f"Item encoder not properly initialized for get_item_score.")
+                return 0.0
+            
+            user_classes = [str(cls) for cls in self.dataset.user_encoder.classes_]
+            item_classes = [str(cls) for cls in self.dataset.item_encoder.classes_]
+            
+            if user_id not in user_classes:
                 self.logger.warning(f"User {user_id} not in encoder for get_item_score.")
                 return 0.0
-            if item_id not in self.dataset.item_encoder.classes_:
+            if item_id not in item_classes:
                 self.logger.warning(f"Item {item_id} not in encoder for get_item_score.")
                 return 0.0
 
@@ -119,7 +150,6 @@ class Recommender:
             user_tensor = torch.tensor([user_encoded], dtype=torch.long, device=self.device)
 
             # Get item features and score
-            # _score_items_batch expects a list of item IDs
             scores_list: List[float] = self._score_items_batch(user_tensor, [item_id])
             if scores_list:
                 return scores_list[0]
@@ -140,7 +170,6 @@ class Recommender:
             if user_batch.dim() == 0: # If batch_size was 1, repeat might not add a dim
                  user_batch = user_tensor 
 
-
             # Prepare item data
             item_idx_tensors_list = [] # Stores integer indices for model
             images_list = []
@@ -154,16 +183,23 @@ class Recommender:
             
             valid_item_ids_for_batch = []
 
-
             for item_id_str in item_ids_str:
-                # Get or compute item features (item_id_str is a string)
+                # Ensure item_id_str is string
+                item_id_str = str(item_id_str)
+                
+                # Get or compute item features
                 item_features = self._get_item_features(item_id_str)
                 if item_features is None:
                     self.logger.warning(f"Could not get features for item {item_id_str}, it will be skipped in batch.")
                     continue # Skip this item if features can't be loaded/processed
 
-                # item_id_str is already a string, transform expects a list of strings
-                item_encoded_idx = self.dataset.item_encoder.transform([item_id_str])[0]
+                # Transform item ID to index
+                try:
+                    item_encoded_idx = self.dataset.item_encoder.transform([item_id_str])[0]
+                except ValueError:
+                    self.logger.warning(f"Item {item_id_str} not found in item encoder, skipping.")
+                    continue
+                    
                 item_idx_tensors_list.append(item_encoded_idx)
                 
                 images_list.append(item_features['image'])
@@ -223,7 +259,10 @@ class Recommender:
 
     def _get_item_features(self, item_id_str: str) -> Optional[Dict[str, torch.Tensor]]:
         """Get or compute features for an item (string ID) with simple caching"""
-        # Check cache first (item_id_str is a string)
+        # Ensure item_id_str is string
+        item_id_str = str(item_id_str)
+        
+        # Check cache first
         if item_id_str in self.feature_cache:
             return self.feature_cache[item_id_str]
 
@@ -234,8 +273,7 @@ class Recommender:
                 return None
 
             # Process features using dataset's method which expects string item_id
-            # Ensure _process_item_features is called with string ID
-            features = self.dataset._process_item_features(item_id_str) # dataset._process_item_features expects str
+            features = self.dataset._process_item_features(item_id_str)
 
             # Cache the features if we have room
             if len(self.feature_cache) < self.cache_max_items:
@@ -250,6 +288,9 @@ class Recommender:
     def _get_user_interactions(self, user_id_str: str) -> set[str]:
         """Get set of items (strings) the user (string ID) has interacted with"""
         try:
+            # Ensure user_id_str is string
+            user_id_str = str(user_id_str)
+            
             # Ensure dataset's get_user_history is called with string ID
             return self.dataset.get_user_history(user_id_str) # dataset.get_user_history expects str
         except Exception as e:

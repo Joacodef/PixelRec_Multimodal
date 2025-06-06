@@ -1,7 +1,4 @@
-# src/evaluation/tasks.py - Simplified evaluation framework
-"""
-Simplified evaluation framework with only essential tasks
-"""
+# src/evaluation/tasks.py 
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional, Union
@@ -27,6 +24,11 @@ class BaseEvaluator(ABC):
         self.task_name = task_name
         self.top_k = getattr(config.recommendation, 'top_k', 50)
         self.filter_seen = kwargs.get('filter_seen', True)
+        
+        # Ensure consistent string type for test data
+        self.test_data = self.test_data.copy()
+        self.test_data['user_id'] = self.test_data['user_id'].astype(str)
+        self.test_data['item_id'] = self.test_data['item_id'].astype(str)
         
     @abstractmethod
     def evaluate(self) -> Dict[str, Any]:
@@ -58,36 +60,125 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         self.num_negatives = num_negatives
         self.sampling_strategy = sampling_strategy
         
-    def _sample_negatives(self, user_id: int, positive_items: List[int]) -> List[int]:
-        """Sample negative items for evaluation"""
-        if not hasattr(self.recommender, 'dataset') or not hasattr(self.recommender.dataset, 'item_encoder'):
-            # Fallback: use item IDs from test data
-            all_items = self.test_data['item_id'].unique().tolist()
-        else:
-            all_items = self.recommender.dataset.item_encoder.classes_.tolist()
+    def _get_all_item_ids(self) -> List[str]:
+        """Get all available item IDs as strings"""
+        # Try to get from dataset first (most reliable)
+        if (hasattr(self.recommender, 'dataset') and 
+            hasattr(self.recommender.dataset, 'item_encoder') and
+            hasattr(self.recommender.dataset.item_encoder, 'classes_') and
+            self.recommender.dataset.item_encoder.classes_ is not None):
+            return [str(item_id) for item_id in self.recommender.dataset.item_encoder.classes_]
+        
+        # Fallback to test data items
+        return list(self.test_data['item_id'].unique())
+        
+    def _sample_negatives(self, user_id: str, positive_items: List[str]) -> List[str]:
+        """Sample negative items for evaluation - Fixed negative sampling logic"""
+        all_items = self._get_all_item_ids()
+        positive_items_set = set(str(item) for item in positive_items)
         
         # Remove positive items
-        negative_candidates = [item for item in all_items if item not in positive_items]
+        negative_candidates = [item for item in all_items if item not in positive_items_set]
         
         if len(negative_candidates) < self.num_negatives:
             return negative_candidates
         
-        np.random.seed(42) 
+        if not negative_candidates:
+            return []
+        
+        # Create deterministic but user-specific seed for consistent evaluation
+        # Use hash of user_id to ensure different users get different but reproducible samples
+        user_seed = hash(str(user_id)) % (2**31)  # Ensure positive 32-bit integer
+        np.random.seed(user_seed)
+        random.seed(user_seed)
 
         if self.sampling_strategy == 'random':
-            return random.sample(negative_candidates, self.num_negatives)
+            # Use random.sample for better random distribution
+            num_to_sample = min(self.num_negatives, len(negative_candidates))
+            return random.sample(negative_candidates, num_to_sample)
+            
         elif self.sampling_strategy == 'popularity':
             # Sample based on item popularity (more popular items more likely)
-            item_counts = self.test_data['item_id'].value_counts()
-            weights = [item_counts.get(item, 1) for item in negative_candidates]
-            return np.random.choice(negative_candidates, size=self.num_negatives, 
-                                  replace=False, p=np.array(weights)/sum(weights)).tolist()
+            # Ensure consistent string types for item_counts lookup
+            item_counts = self.test_data['item_id'].astype(str).value_counts()
+            
+            # Calculate weights for each negative candidate
+            weights = []
+            valid_candidates = []
+            
+            for item in negative_candidates:
+                item_str = str(item)
+                count = item_counts.get(item_str, 1)  # Default count of 1 for unseen items
+                if count > 0:  # Only include items with positive counts
+                    weights.append(float(count))
+                    valid_candidates.append(item_str)
+            
+            if not valid_candidates:
+                return []
+            
+            # Normalize weights to probabilities
+            weights = np.array(weights, dtype=np.float64)
+            if weights.sum() == 0:
+                # All weights are zero, fall back to uniform sampling
+                weights = np.ones(len(weights))
+            weights = weights / weights.sum()
+            
+            # Sample with replacement=False
+            num_to_sample = min(self.num_negatives, len(valid_candidates))
+            try:
+                sampled_indices = np.random.choice(
+                    len(valid_candidates), 
+                    size=num_to_sample, 
+                    replace=False, 
+                    p=weights
+                )
+                return [valid_candidates[i] for i in sampled_indices]
+            except ValueError as e:
+                # If sampling fails, fall back to random sampling
+                print(f"Warning: Popularity sampling failed for user {user_id}: {e}. Using random sampling.")
+                return random.sample(valid_candidates, num_to_sample)
+                
         else:  # popularity_inverse
-            # Sample less popular items more often
-            item_counts = self.test_data['item_id'].value_counts()
-            weights = [1.0/item_counts.get(item, 1) for item in negative_candidates]
-            return np.random.choice(negative_candidates, size=self.num_negatives, 
-                                  replace=False, p=np.array(weights)/sum(weights)).tolist()
+            # Sample less popular items more often (inverse popularity)
+            item_counts = self.test_data['item_id'].astype(str).value_counts()
+            
+            # Calculate inverse weights for each negative candidate
+            weights = []
+            valid_candidates = []
+            
+            for item in negative_candidates:
+                item_str = str(item)
+                count = item_counts.get(item_str, 1)  # Default count of 1 for unseen items
+                if count > 0:  # Only include items with positive counts
+                    # Inverse weight: less popular items get higher weight
+                    inv_weight = 1.0 / float(count)
+                    weights.append(inv_weight)
+                    valid_candidates.append(item_str)
+            
+            if not valid_candidates:
+                return []
+            
+            # Normalize weights to probabilities
+            weights = np.array(weights, dtype=np.float64)
+            if weights.sum() == 0:
+                # All weights are zero, fall back to uniform sampling
+                weights = np.ones(len(weights))
+            weights = weights / weights.sum()
+            
+            # Sample with replacement=False
+            num_to_sample = min(self.num_negatives, len(valid_candidates))
+            try:
+                sampled_indices = np.random.choice(
+                    len(valid_candidates), 
+                    size=num_to_sample, 
+                    replace=False, 
+                    p=weights
+                )
+                return [valid_candidates[i] for i in sampled_indices]
+            except ValueError as e:
+                # If sampling fails, fall back to random sampling
+                print(f"Warning: Inverse popularity sampling failed for user {user_id}: {e}. Using random sampling.")
+                return random.sample(valid_candidates, num_to_sample)
     
     def evaluate(self) -> Dict[str, Any]:
         """Evaluate top-K retrieval performance"""
@@ -107,26 +198,41 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         
         user_groups = self.test_data.groupby('user_id')
         
+        # Set global seed for reproducible evaluation order
+        np.random.seed(42)
+        random.seed(42)
+        
         for user_id, user_interactions in tqdm(user_groups, desc="Evaluating users"):
-            positive_items = user_interactions['item_id'].tolist()
+            # Ensure user_id is string
+            user_id = str(user_id)
+            positive_items = [str(item) for item in user_interactions['item_id'].tolist()]
             
             if self.use_sampling:
                 # Create evaluation set with positives + sampled negatives
                 negative_items = self._sample_negatives(user_id, positive_items)
                 candidate_items = positive_items + negative_items
-                random.shuffle(candidate_items)  # Shuffle to avoid bias
+                
+                # Create deterministic shuffle based on user_id for reproducibility
+                user_shuffle_seed = hash(str(user_id) + "shuffle") % (2**31)
+                local_random = random.Random(user_shuffle_seed)
+                local_random.shuffle(candidate_items)  # Shuffle to avoid bias
             else:
                 # Use all items as candidates (much slower but complete)
                 candidate_items = None
             
             try:
-                # Get recommendations
+                # Get recommendations - ensure we pass string user_id and get string item_ids back
                 recommendations = self.recommender.get_recommendations(
                     user_id=user_id,
                     top_k=self.top_k,
                     filter_seen=self.filter_seen,
                     candidates=candidate_items
                 )
+                
+                # Ensure recommendations contain string item IDs
+                if recommendations:
+                    # Convert any non-string item IDs to strings
+                    recommendations = [(str(item_id), score) for item_id, score in recommendations]
                 
                 # Store predictions
                 all_predictions[user_id] = recommendations
@@ -141,7 +247,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
                     metrics['mrr'].append(0.0)
                     continue
                 
-                recommended_items = [item_id for item_id, _ in recommendations]
+                recommended_items = [str(item_id) for item_id, _ in recommendations]
                 
                 # Calculate metrics
                 relevant_items = set(positive_items)
@@ -198,7 +304,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         
         return results
     
-    def _calculate_ndcg(self, recommended_items: List[int], relevant_items: set, k: int) -> float:
+    def _calculate_ndcg(self, recommended_items: List[str], relevant_items: set, k: int) -> float:
         """Calculate Normalized Discounted Cumulative Gain at K"""
         if not relevant_items:
             return 0.0
@@ -241,19 +347,21 @@ class TopKRankingEvaluator(BaseEvaluator):
         user_groups = self.test_data.groupby('user_id')
         
         for user_id, user_interactions in tqdm(user_groups, desc="Evaluating ranking"):
-            test_items = user_interactions['item_id'].tolist()
+            # Ensure user_id is string
+            user_id = str(user_id)
+            test_items = [str(item) for item in user_interactions['item_id'].tolist()]
             
             try:
                 # Get scores for test items specifically
                 item_scores = []
                 for item_id in test_items:
                     try:
-                        # Get score for this specific item
-                        score = self.recommender.get_item_score(user_id, item_id)
-                        item_scores.append((item_id, score))
+                        # Get score for this specific item - ensure both IDs are strings
+                        score = self.recommender.get_item_score(str(user_id), str(item_id))
+                        item_scores.append((str(item_id), score))
                     except Exception as e:
                         print(f"Error getting score for user {user_id}, item {item_id}: {e}")
-                        item_scores.append((item_id, 0.0))
+                        item_scores.append((str(item_id), 0.0))
                 
                 if not item_scores:
                     # No scores available
@@ -266,7 +374,7 @@ class TopKRankingEvaluator(BaseEvaluator):
                 
                 # Sort by score (descending)
                 item_scores.sort(key=lambda x: x[1], reverse=True)
-                ranked_items = [item_id for item_id, _ in item_scores]
+                ranked_items = [str(item_id) for item_id, _ in item_scores]
                 
                 # Calculate ranking metrics
                 ranks = []
@@ -328,7 +436,7 @@ class TopKRankingEvaluator(BaseEvaluator):
         
         return results
     
-    def _calculate_ndcg(self, ranked_items: List[int], relevant_items: set, k: int) -> float:
+    def _calculate_ndcg(self, ranked_items: List[str], relevant_items: set, k: int) -> float:
         """Calculate Normalized Discounted Cumulative Gain at K"""
         if not relevant_items:
             return 0.0
