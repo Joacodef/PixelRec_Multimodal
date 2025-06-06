@@ -1,0 +1,23 @@
+{
+  "avg_precision_at_k": 0.0,
+  "avg_recall_at_k": 0.0,
+  "avg_f1_at_k": 0.0,
+  "avg_hit_rate_at_k": 0.0,
+  "avg_ndcg_at_k": 0.0,
+  "avg_mrr": 0.0,
+  "num_users_evaluated": 2023,
+  "evaluation_method": "negative_sampling",
+  "evaluation_metadata": {
+    "task": "Top-K Retrieval",
+    "filter_seen_evaluator_perspective": true,
+    "recommender_type": "multimodal",
+    "top_k": 50,
+    "test_file": "data/splits/split_tiny/test.csv",
+    "train_file_used_for_history": "data/splits/split_tiny/train.csv",
+    "cache_warmup_enabled": false,
+    "parallel_evaluation": false,
+    "num_workers": 0,
+    "parallel_chunk_size": 0,
+    "simplified_architecture": true
+  }
+}

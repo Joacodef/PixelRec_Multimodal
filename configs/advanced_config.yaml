@@ -85,7 +85,7 @@ data:
     use_disk: true
   
   # Data preprocessing (advanced)
-  negative_sampling_ratio: 4.0     # Ratio of negative samples to positive
+  negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
   
   # Numerical features (advanced)
   numerical_features_cols:
