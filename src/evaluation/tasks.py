@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import random
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 class EvaluationTask(Enum):
@@ -59,6 +61,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         self.use_sampling = use_sampling
         self.num_negatives = num_negatives
         self.sampling_strategy = sampling_strategy
+        self.num_workers = kwargs.get('num_workers', 1)
         
     def _get_all_item_ids(self) -> List[str]:
         """Get all available item IDs as strings"""
@@ -179,128 +182,142 @@ class TopKRetrievalEvaluator(BaseEvaluator):
                 # If sampling fails, fall back to random sampling
                 print(f"Warning: Inverse popularity sampling failed for user {user_id}: {e}. Using random sampling.")
                 return random.sample(valid_candidates, num_to_sample)
-    
+
+    def _process_user(self, user_id_and_interactions):
+        """
+        Processes a single user to get recommendations.
+        This method is designed to be called in parallel.
+        """
+        user_id, user_interactions = user_id_and_interactions
+        user_id = str(user_id)
+        positive_items = [str(item) for item in user_interactions['item_id'].tolist()]
+        
+        candidate_items = None
+        if self.use_sampling:
+            negative_items = self._sample_negatives(user_id, positive_items)
+            candidate_items = positive_items + negative_items
+            
+            # Create deterministic shuffle based on user_id for reproducibility
+            user_shuffle_seed = hash(str(user_id) + "shuffle") % (2**31)
+            local_random = random.Random(user_shuffle_seed)
+            local_random.shuffle(candidate_items)
+        
+        try:
+            # Get recommendations - ensure we pass string user_id and get string item_ids back
+            recommendations = self.recommender.get_recommendations(
+                user_id=user_id,
+                top_k=self.top_k,
+                filter_seen=self.filter_seen,
+                candidates=candidate_items
+            )
+            
+            # Ensure recommendations contain string item IDs
+            if recommendations:
+                recommendations = [(str(item_id), score) for item_id, score in recommendations]
+            
+            recommended_items_only = [item_id for item_id, _ in recommendations]
+            return user_id, recommendations, positive_items, recommended_items_only
+
+        except Exception as e:
+            print(f"Error evaluating user {user_id}: {e}")
+            return user_id, [], positive_items, []
+
     def evaluate(self) -> Dict[str, Any]:
-        """Evaluate top-K retrieval performance"""
+        """
+        Evaluate top-K retrieval performance with parallel user processing and vectorized metrics.
+        """
         print(f"Evaluating Top-K Retrieval (K={self.top_k})")
         if self.use_sampling:
             print(f"Using negative sampling: {self.num_negatives} negatives per user, strategy: {self.sampling_strategy}")
-        
-        metrics = {
-            'precision_at_k': [],
-            'recall_at_k': [],
-            'f1_at_k': [],
-            'hit_rate_at_k': [],
-            'ndcg_at_k': [],
-            'mrr': []
-        }
-        all_predictions = {} # Collect predictions here
-        
-        user_groups = self.test_data.groupby('user_id')
-        
+
+        user_groups = list(self.test_data.groupby('user_id'))
+        num_users = len(user_groups)
+
         # Set global seed for reproducible evaluation order
         np.random.seed(42)
         random.seed(42)
-        
-        for user_id, user_interactions in tqdm(user_groups, desc="Evaluating users"):
-            # Ensure user_id is string
-            user_id = str(user_id)
-            positive_items = [str(item) for item in user_interactions['item_id'].tolist()]
-            
-            if self.use_sampling:
-                # Create evaluation set with positives + sampled negatives
-                negative_items = self._sample_negatives(user_id, positive_items)
-                candidate_items = positive_items + negative_items
-                
-                # Create deterministic shuffle based on user_id for reproducibility
-                user_shuffle_seed = hash(str(user_id) + "shuffle") % (2**31)
-                local_random = random.Random(user_shuffle_seed)
-                local_random.shuffle(candidate_items)  # Shuffle to avoid bias
-            else:
-                # Use all items as candidates (much slower but complete)
-                candidate_items = None
-            
+
+        raw_results = []
+        if self.num_workers > 1 and num_users > 1:
+            # Use 'fork' to avoid pickling issues with torch models on Linux/macOS.
+            # This is critical for performance as it avoids re-initializing the model in each process.
+            # On Windows, 'spawn' will be used, which may be slow or fail if the recommender is not picklable.
             try:
-                # Get recommendations - ensure we pass string user_id and get string item_ids back
-                recommendations = self.recommender.get_recommendations(
-                    user_id=user_id,
-                    top_k=self.top_k,
-                    filter_seen=self.filter_seen,
-                    candidates=candidate_items
-                )
-                
-                # Ensure recommendations contain string item IDs
-                if recommendations:
-                    # Convert any non-string item IDs to strings
-                    recommendations = [(str(item_id), score) for item_id, score in recommendations]
-                
-                # Store predictions
-                all_predictions[user_id] = recommendations
-                
-                if not recommendations:
-                    # No recommendations - assign worst scores
-                    metrics['precision_at_k'].append(0.0)
-                    metrics['recall_at_k'].append(0.0)
-                    metrics['f1_at_k'].append(0.0)
-                    metrics['hit_rate_at_k'].append(0.0)
-                    metrics['ndcg_at_k'].append(0.0)
-                    metrics['mrr'].append(0.0)
-                    continue
-                
-                recommended_items = [str(item_id) for item_id, _ in recommendations]
-                
-                # Calculate metrics
-                relevant_items = set(positive_items)
-                recommended_set = set(recommended_items)
-                
-                # Precision@K
-                precision = len(relevant_items & recommended_set) / len(recommended_set) if recommended_set else 0.0
-                
-                # Recall@K
-                recall = len(relevant_items & recommended_set) / len(relevant_items) if relevant_items else 0.0
-                
-                # F1@K
-                f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-                
-                # Hit Rate@K (binary: did we hit at least one relevant item?)
-                hit_rate = 1.0 if len(relevant_items & recommended_set) > 0 else 0.0
-                
-                # NDCG@K
-                ndcg = self._calculate_ndcg(recommended_items, relevant_items, self.top_k)
-                
-                # MRR (Mean Reciprocal Rank)
-                mrr = 0.0
-                for i, item in enumerate(recommended_items, 1):
-                    if item in relevant_items:
-                        mrr = 1.0 / i
-                        break
-                
-                metrics['precision_at_k'].append(precision)
-                metrics['recall_at_k'].append(recall)
-                metrics['f1_at_k'].append(f1)
-                metrics['hit_rate_at_k'].append(hit_rate)
-                metrics['ndcg_at_k'].append(ndcg)
-                metrics['mrr'].append(mrr)
-                
-            except Exception as e:
-                print(f"Error evaluating user {user_id}: {e}")
-                # Assign worst scores for failed cases
-                for metric_list in metrics.values():
-                    metric_list.append(0.0)
+                mp_context = mp.get_context('fork')
+                print(f"Using 'fork' context for parallel processing with {self.num_workers} workers.")
+            except (ValueError, RuntimeError):
+                mp_context = mp.get_context('spawn')
+                print(f"Warning: 'fork' context not available. Falling back to 'spawn'. Parallel evaluation may be slow.")
+
+            with ProcessPoolExecutor(max_workers=self.num_workers, mp_context=mp_context) as executor:
+                futures = [executor.submit(self._process_user, user_group) for user_group in user_groups]
+                for future in tqdm(as_completed(futures), total=num_users, desc="Evaluating users (parallel)"):
+                    raw_results.append(future.result())
+        else:
+            print("Evaluating users (sequential)...")
+            raw_results = [self._process_user(user_group) for user_group in tqdm(user_groups)]
+
+        # --- Vectorized Metric Calculation ---
+        # Unpack results for vectorized processing
+        user_ids = [res[0] for res in raw_results]
+        all_predictions = {res[0]: res[1] for res in raw_results}
+        all_pos_items = [res[2] for res in raw_results]
+        all_rec_items = [res[3] for res in raw_results]
+        
+        # Prepare numpy arrays for calculations
+        hits_at_k = np.zeros(num_users)
+        precision_denominators = np.array([len(r) for r in all_rec_items], dtype=np.float32)
+        recall_denominators = np.array([len(p) for p in all_pos_items], dtype=np.float32)
+        mrr = np.zeros(num_users)
+        ndcg_at_k = np.zeros(num_users)
+
+        for i in range(num_users):
+            rec_set = set(all_rec_items[i])
+            pos_set = set(all_pos_items[i])
+            
+            if not pos_set:
+                continue
+
+            # Hits
+            num_hits = len(rec_set.intersection(pos_set))
+            hits_at_k[i] = num_hits
+            
+            # MRR
+            for j, item in enumerate(all_rec_items[i], 1):
+                if item in pos_set:
+                    mrr[i] = 1.0 / j
+                    break
+            
+            # NDCG
+            ndcg_at_k[i] = self._calculate_ndcg(all_rec_items[i], pos_set, self.top_k)
+        
+        # Calculate final metrics using vectorized operations
+        with np.errstate(divide='ignore', invalid='ignore'):
+            precision = hits_at_k / precision_denominators
+            recall = hits_at_k / recall_denominators
+        
+        precision[np.isnan(precision)] = 0.0
+        recall[np.isnan(recall)] = 0.0
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            f1 = 2 * precision * recall / (precision + recall)
+        f1[np.isnan(f1)] = 0.0
+        
+        hit_rate = (hits_at_k > 0).astype(float)
         
         # Aggregate results
-        results = {}
-        for metric_name, values in metrics.items():
-            if values:
-                results[f"avg_{metric_name}"] = np.mean(values)
-                results[f"std_{metric_name}"] = np.std(values)
-            else:
-                results[f"avg_{metric_name}"] = 0.0
-                results[f"std_{metric_name}"] = 0.0
+        results = {
+            "avg_precision_at_k": np.mean(precision),
+            "avg_recall_at_k": np.mean(recall),
+            "avg_f1_at_k": np.mean(f1),
+            "avg_hit_rate_at_k": np.mean(hit_rate),
+            "avg_ndcg_at_k": np.mean(ndcg_at_k),
+            "avg_mrr": np.mean(mrr)
+        }
         
-        results['num_users_evaluated'] = len(user_groups)
+        results['num_users_evaluated'] = num_users
         results['evaluation_method'] = 'negative_sampling' if self.use_sampling else 'full_evaluation'
-        results['predictions'] = all_predictions # Add predictions to results
+        results['predictions'] = all_predictions
         
         return results
     

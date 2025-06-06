@@ -353,7 +353,8 @@ def main():
         train_data=train_df,
         use_sampling=args.use_sampling if args.eval_task == 'retrieval' else False,
         num_negatives=args.num_negatives,
-        sampling_strategy=args.sampling_strategy
+        sampling_strategy=args.sampling_strategy,
+        num_workers=args.num_workers
     )
         
     print(f"Task: {evaluator.task_name}")
