@@ -1,5 +1,3 @@
-Basándome en el código del repositorio, aquí está el nuevo README propuesto:
-
 # Multimodal Recommender System
 
 A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
@@ -138,7 +136,7 @@ The system supports extensive configuration through YAML files:
 - **Data processing**: Feature normalization, text augmentation, image compression
 - **Evaluation options**: Metrics, negative sampling strategies, baseline comparisons
 
-See `configs/advanced_config.yaml` for all available options.
+See `configs/advanced_config.yaml` for all available options. Also, check the manual in docs/configuration.md for an extensive explanation on how to use the differetnt options.
 
 ## Performance Considerations
 
