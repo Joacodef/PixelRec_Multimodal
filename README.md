@@ -1,245 +1,161 @@
+Basándome en el código del repositorio, aquí está el nuevo README propuesto:
+
 # Multimodal Recommender System
 
-This repository contains a framework for building and experimenting with multimodal recommender systems. It uses visual, textual, and numerical data to generate recommendations. The system is designed with a focus on configurability for model architecture, data processing, and evaluation.
+A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
 
----
+## Overview
 
-## Features
+This system implements a neural recommender that combines multiple data modalities:
+- **Visual features**: Extracted from item images using pre-trained vision models (ResNet, CLIP, DINO, ConvNeXT)
+- **Textual features**: Processed from item descriptions using language models (BERT, RoBERTa, Sentence-BERT, MPNet)
+- **Numerical features**: Item metadata and interaction statistics
 
-* **Multimodal Data Integration**: Processes items with images, text, and numerical features.
-* **Flexible Model Architecture**:
-    * Core model: `MultimodalRecommender` (formerly `PretrainedMultimodalRecommender`).
-    * Supports various pre-trained vision (e.g., CLIP, ResNet, DINO, ConvNeXT) and language models (e.g., Sentence-BERT, MPNet, BERT, RoBERTa).
-    * Configurable fusion methods, including multi-head self-attention.
-    * Optional contrastive learning for vision-text alignment (primarily designed for CLIP).
-* **Modular Data Processing Pipeline**:
-    * `scripts/preprocess_data.py`: Uses modular processors (`ImageProcessor`, `TextProcessor`, `NumericalProcessor`, `DataFilter`) for text cleaning, image validation/compression, and numerical feature scaling.
-    * `scripts/create_splits.py`: Generates train/validation/test splits, typically using a stratified strategy with activity filtering and optional dataset sampling.
-    * **Feature Caching**:
-        * `SimpleFeatureCache` (`src/data/simple_cache.py`): Centralized item feature caching (image, text, numerical) for training and inference. Cache is stored in model-specific subdirectories (e.g., `cache/resnet_sentence-bert/`). Supports memory LRU and optional disk persistence.
-        * `scripts/precompute_cache.py`: Allows precomputing and saving all item features to disk for a given model configuration, significantly speeding up initial training runs.
-        * `scripts/cache.py`: CLI tool for managing feature caches (list, clear, stats).
-    * `MultimodalDataset` (`src/data/dataset.py`): Manages data loading, negative sampling, numerical normalization, and optional text augmentation. Integrates with `SimpleFeatureCache`.
-* **Training Framework**:
-    * Configurable optimizers (AdamW, Adam, SGD) and learning rate schedulers (ReduceLROnPlateau, Cosine, Step).
-    * Includes gradient clipping, early stopping, and checkpoint management.
-    * Optional Weights & Biases integration for experiment tracking.
-    * Detailed progress monitoring and logging during training.
-* **Evaluation Framework**:
-    * Task-based evaluation for `Top-K Retrieval` and `Top-K Ranking`.
-    * Standard metrics: Precision@k, Recall@k, F1@k, HitRate@k, NDCG@k, MRR.
-    * Includes baseline recommenders (Random, Popularity, ItemKNN, UserKNN).
-    * Support for negative sampling during retrieval evaluation for efficiency.
-* **Inference**:
-    * `scripts/generate_recommendations.py`: Generates recommendations for specified users.
-    * Utilizes item feature caching for faster inference.
-* **Utility Scripts**:
-    * `scripts/extract_encoders.py`: Saves fitted user and item label encoders from the training data.
-* **Modular Design**:
-    * Separation of concerns for configuration, data, models, training, evaluation, and inference.
-    * YAML-based configuration (`configs/simple_config.yaml` for essential settings, `configs/advanced_config.yaml` for detailed control).
-* **Error Logging**: Training errors are logged to `results/error_log.json`.
+The architecture uses attention mechanisms to fuse multimodal representations and supports contrastive learning for vision-text alignment.
 
----
+## Key Features
 
-## Directory Structure
+### Architecture
+- Configurable fusion of user embeddings, item embeddings, and multimodal features
+- Multi-head self-attention for feature integration
+- Support for various pre-trained backbone models
+- Optional CLIP-style contrastive learning
 
-```
-PixelRec_Multimodal/
-├── configs/                    # Configuration files (simple_config.yaml, advanced_config.yaml)
-├── data/                       # Data directories (paths defined in config)
-│   ├── raw/                    # Raw item_info, interactions, images
-│   ├── processed/              # Processed item_info, interactions, images, scaler
-│   ├── splits/                 # Train/validation/test splits
-│   └── cache/                  # Root directory for SimpleFeatureCache (e.g., cache/resnet_sentence-bert/)
-├── models/                     # Model checkpoints and saved encoders
-│   └── checkpoints/
-├── results/                    # Evaluation outputs, training metadata, figures, error logs
-│   ├── figures/                # Training curve plots
-│   └── results/                # JSON files for evaluation metrics of different recommenders
-├── scripts/                    # Execution scripts (preprocess_data.py, train.py, etc.)
-├── src/                        # Source code
-│   ├── config.py               # Configuration dataclasses
-│   ├── data/                   # Data handling (Dataset, Cache, Splitting, Processors)
-│   │   └── processors/         # Modular data processors
-│   ├── evaluation/             # Evaluation (Tasks, Metrics, Novelty)
-│   ├── inference/              # Inference (Recommender, Baselines)
-│   ├── models/                 # Model architectures (MultimodalRecommender, Layers, Losses)
-│   └── training/               # Training (Trainer)
-├── docs/                       # Documentation files
-│   └── configuration.md
-├── requirements.txt            # Python dependencies
-├── setup.py                    # Package setup
-└── README.md                   # This file
+### Data Processing
+- Modular preprocessing pipeline with dedicated processors for each data type
+- Automatic image validation and compression
+- Text cleaning and augmentation capabilities
+- Flexible data splitting strategies (stratified, temporal, user-based, item-based)
+
+### Training
+- Configurable optimizers (AdamW, Adam, SGD) and learning rate schedulers
+- Early stopping with model checkpointing
+- Gradient clipping and dropout regularization
+- Optional Weights & Biases integration for experiment tracking
+
+### Evaluation
+- Standard recommendation metrics: Precision@K, Recall@K, NDCG@K, MRR, Hit Rate
+- Multiple evaluation tasks: Top-K retrieval and ranking
+- Baseline comparisons: Random, Popularity, ItemKNN, UserKNN
+- Efficient negative sampling for large-scale evaluation
+
+### Performance Optimization
+- Feature caching system with LRU memory management
+- Support for pre-computing all item features before training
+- Batch processing for efficient inference
+- Model-specific cache directories for different configurations
+
+## Installation
+
+1. Clone the repository
+2. Create a Python virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
----
-
-## Setup
-
-1.  **Clone the repository.**
-2.  **Create and activate a Python virtual environment.**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    You might also install the package in editable mode if you plan to modify the source:
-    ```bash
-    pip install -e .
-    ```
-
----
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
-The system is operated via command-line scripts. All scripts accept a `--config` parameter to specify the configuration file (defaults to `configs/simple_config.yaml`).
+### 1. Data Preparation
 
-### 1. Configuration
+Prepare your data in the following format:
+- `item_info.csv`: Item metadata with columns for item_id, title, description, and numerical features
+- `interactions.csv`: User-item interactions with user_id and item_id columns
+- `images/`: Directory containing item images named as `{item_id}.jpg`
 
-Modify `configs/simple_config.yaml` (recommended for most uses) or `configs/advanced_config.yaml` (for more detailed control). Refer to `docs/configuration.md` for details. Key sections:
-* `model`: Architecture choices, embedding dimensions, pre-trained model names.
-* `training`: Batch size, learning rate, optimizer details, epochs, patience.
-* `data`: File paths, `cache_config` (for `SimpleFeatureCache`), numerical feature handling, augmentation, splitting parameters.
-* `recommendation`: Top-k values for output.
+### 2. Configuration
 
-### 2. Data Preprocessing
+Edit `configs/simple_config.yaml` to specify:
+- Model architecture choices
+- Data paths and preprocessing options
+- Training hyperparameters
+- Evaluation settings
 
-Process raw data (text cleaning, image validation/compression, numerical scaling):
+### 3. Preprocessing
+
 ```bash
-python scripts/preprocess_data.py --config configs/advanced_config.yaml
+python scripts/preprocess_data.py --config configs/simple_config.yaml
 ```
 
-### 3. Data Splitting
+### 4. Data Splitting
 
-Create train/validation/test splits. Optionally, sample the dataset first:
 ```bash
-python scripts/create_splits.py --config configs/advanced_config.yaml
-# To sample 100,000 interactions before splitting:
-python scripts/create_splits.py --config configs/advanced_config.yaml --sample_n 100000
+python scripts/create_splits.py --config configs/simple_config.yaml
 ```
 
-### 4. (Optional) Precompute Features
+### 5. Training
 
-Precompute and cache all item features to disk. This significantly speeds up the first training epoch and subsequent runs with the same model configuration. The cache is stored based on vision and language model names (e.g., `cache/resnet_sentence-bert/`).
 ```bash
-python scripts/precompute_cache.py --config configs/advanced_config.yaml
-# For a quick test with fewer items:
-python scripts/precompute_cache.py --config configs/advanced_config.yaml --max_items 1000
+python scripts/train.py --config configs/simple_config.yaml --device cuda
 ```
 
-### 5. Model Training
+### 6. Evaluation
 
-Train the multimodal recommender model:
 ```bash
-python scripts/train.py --config configs/advanced_config.yaml --device cuda
-```
-Additional options:
-```bash
-# With Weights & Biases tracking
-python scripts/train.py --config configs/advanced_config.yaml --use_wandb --wandb_project YourProject --wandb_entity YourUsername
-
-# Resume training from a checkpoint
-python scripts/train.py --config configs/advanced_config.yaml --resume models/checkpoints/best_model.pth
-```
-The training script saves model checkpoints, encoders, training curves, and metadata to the `results_dir` and `checkpoint_dir` specified in the config.
-
-### 6. Model Evaluation
-
-Evaluate the trained model or baselines.
-```bash
-# Evaluate multimodal model for retrieval
-python scripts/evaluate.py --config configs/advanced_config.yaml \
-    --test_data data/splits/split_tiny/test.csv \
-    --train_data data/splits/split_tiny/train.csv \
-    --eval_task retrieval \
-    --recommender_type multimodal \
-    --output multimodal_advanced_retrieval_metrics.json # Output saved in config.results_dir
-
-# Evaluate popularity baseline for retrieval
 python scripts/evaluate.py --config configs/simple_config.yaml \
-    --test_data data/splits/split_tiny/test.csv \
-    --train_data data/splits/split_tiny/train.csv \
+    --test_data data/splits/test.csv \
     --eval_task retrieval \
-    --recommender_type popularity \
-    --output popularity_simple_retrieval_metrics.json
+    --recommender_type multimodal
 ```
-Available `eval_task` options: `retrieval`, `ranking`.
-Available `recommender_type` options: `multimodal`, `random`, `popularity`, `item_knn`, `user_knn`.
 
-### 7. Recommendation Generation
+### 7. Generate Recommendations
 
-Generate top-K recommendations for specified users:
 ```bash
-python scripts/generate_recommendations.py --config configs/advanced_config.yaml \
-    --users user_A user_B \
-    --output user_recommendations.json # Output saved in config.results_dir
-```
-Specify users via `--users <id1> <id2>`, `--user_file <path_to_file>`, or `--sample_users <N>`.
-
-### 8. Cache Management
-
-Manage `SimpleFeatureCache` directories:
-```bash
-# List all detected model-specific caches
-python scripts/cache.py list
-
-# Show stats for a specific cache
-python scripts/cache.py stats resnet_sentence-bert
-
-# Clear a specific cache
-python scripts/cache.py clear resnet_sentence-bert
-
-# Clear all caches (use with caution)
-python scripts/cache.py clear --all
+python scripts/generate_recommendations.py --config configs/simple_config.yaml \
+    --users user_123 user_456 \
+    --output recommendations.json
 ```
 
-### 9. Extract Encoders (Utility)
+## Project Structure
 
-If encoders were not saved during training or you need to re-extract them from the processed data:
-```bash
-python scripts/extract_encoders.py --config configs/advanced_config.yaml
 ```
-This saves `user_encoder.pkl` and `item_encoder.pkl` to the `models/checkpoints/encoders/` directory (or as configured).
+multimodal-recommender/
+├── configs/              # Configuration files
+├── scripts/              # Executable scripts for training, evaluation, etc.
+├── src/                  # Source code
+│   ├── config.py        # Configuration management
+│   ├── data/            # Dataset and preprocessing modules
+│   ├── models/          # Model architectures
+│   ├── training/        # Training logic
+│   ├── evaluation/      # Evaluation framework
+│   └── inference/       # Recommendation generation
+├── data/                # Data directories (created during setup)
+├── models/              # Model checkpoints
+└── results/             # Evaluation results and figures
+```
 
----
+## Configuration Options
 
-## Configuration Details
+The system supports extensive configuration through YAML files:
 
-Refer to `docs/configuration.md`, `configs/simple_config.yaml`, and `configs/advanced_config.yaml` for detailed parameter descriptions. The system uses defaults defined in `src/config.py` for parameters not explicitly set in the chosen YAML file.
+- **Model parameters**: Architecture choices, embedding dimensions, fusion strategies
+- **Training settings**: Batch size, learning rate, optimizer configuration
+- **Data processing**: Feature normalization, text augmentation, image compression
+- **Evaluation options**: Metrics, negative sampling strategies, baseline comparisons
 
-### Key Configuration Sections:
+See `configs/advanced_config.yaml` for all available options.
 
-* **`model`**:
-    * `vision_model`, `language_model`: Select pre-trained backbones (e.g., `resnet`, `sentence-bert`).
-    * `embedding_dim`: Size of latent embeddings.
-    * `use_contrastive`: Enable/disable contrastive learning (works best with CLIP vision model).
-    * Advanced architectural parameters like `freeze_vision`, `freeze_language`, `fusion_hidden_dims`, `num_attention_heads`, etc.
-* **`data`**:
-    * Paths: `item_info_path`, `interactions_path`, `image_folder`, `processed_item_info_path`, `split_data_path`, etc.
-    * `cache_config`: Controls the `SimpleFeatureCache`.
-        * `enabled`: Boolean to turn caching on/off.
-        * `max_memory_items`: Maximum items for in-memory LRU.
-        * `cache_directory`: **Base directory for model-specific caches** (e.g., `cache/`). The actual cache will be in a subfolder like `cache/visionX_langY/`.
-        * `use_disk`: Boolean to enable disk persistence for the cache.
-    * `numerical_features_cols`: List of columns for numerical features.
-    * `numerical_normalization_method`: Method for scaling numerical features.
-    * Advanced settings for text augmentation, image compression/validation, text cleaning, and data splitting.
-* **`training`**: Learning parameters (learning rate, epochs, batch size), optimizer type and its parameters, scheduler settings, loss component weights (`bce_weight`, `contrastive_weight`).
-* **`recommendation`**: `top_k` for recommendation lists, and advanced settings for diversity/novelty.
-* **Root Level**: `checkpoint_dir`, `results_dir`.
+## Performance Considerations
 
----
+- Use `scripts/precompute_cache.py` to pre-compute features before training
+- Enable feature caching to speed up data loading
+- Adjust batch size based on GPU memory
+- Use negative sampling for efficient evaluation on large datasets
 
-## Extensibility
+## Requirements
 
-The system's modularity allows for extensions:
+- Python 3.7+
+- PyTorch 2.2.1+
+- Transformers 4.47.1+
+- CUDA-capable GPU (recommended)
 
-* **New Models**: Modify `src/models/multimodal.py` or add new model classes. Update configurations in `src/config.py` (e.g., `MODEL_CONFIGS`) and script instantiations as needed.
-* **New Data Processors**: Add new processor classes in `src/data/processors/` and integrate them into `scripts/preprocess_data.py`.
-* **New Evaluation Metrics/Tasks**: Add metrics to `src/evaluation/metrics.py` or `src/evaluation/advanced_metrics.py`. New tasks can be created by extending `BaseEvaluator` in `src/evaluation/tasks.py`.
+See `requirements.txt` for complete dependencies.
 
----
+## License
+
+This project is provided as-is for research and educational purposes.
