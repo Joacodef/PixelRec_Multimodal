@@ -37,7 +37,7 @@ class BaseEvaluator(ABC):
         """Print evaluation summary"""
         print(f"\n=== {self.task_name} Results ===")
         for metric, value in results.items():
-            if metric != 'evaluation_metadata':
+            if metric not in ['evaluation_metadata', 'predictions']:
                 if isinstance(value, float):
                     print(f"{metric}: {value:.4f}")
                 else:
@@ -103,6 +103,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
             'ndcg_at_k': [],
             'mrr': []
         }
+        all_predictions = {} # Collect predictions here
         
         user_groups = self.test_data.groupby('user_id')
         
@@ -126,6 +127,9 @@ class TopKRetrievalEvaluator(BaseEvaluator):
                     filter_seen=self.filter_seen,
                     candidates=candidate_items
                 )
+                
+                # Store predictions
+                all_predictions[user_id] = recommendations
                 
                 if not recommendations:
                     # No recommendations - assign worst scores
@@ -190,6 +194,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         
         results['num_users_evaluated'] = len(user_groups)
         results['evaluation_method'] = 'negative_sampling' if self.use_sampling else 'full_evaluation'
+        results['predictions'] = all_predictions # Add predictions to results
         
         return results
     
@@ -231,6 +236,7 @@ class TopKRankingEvaluator(BaseEvaluator):
             'hit_rate_at_k': [],
             'ndcg_at_k': []
         }
+        all_predictions = {} # Collect predictions here
         
         user_groups = self.test_data.groupby('user_id')
         
@@ -254,6 +260,9 @@ class TopKRankingEvaluator(BaseEvaluator):
                     for metric_list in metrics.values():
                         metric_list.append(0.0)
                     continue
+                
+                # Store predictions before sorting for ranking metrics
+                all_predictions[user_id] = item_scores
                 
                 # Sort by score (descending)
                 item_scores.sort(key=lambda x: x[1], reverse=True)
@@ -315,6 +324,7 @@ class TopKRankingEvaluator(BaseEvaluator):
                 results[f"std_{metric_name}"] = 0.0
         
         results['num_users_evaluated'] = len(user_groups)
+        results['predictions'] = all_predictions # Add predictions to results
         
         return results
     

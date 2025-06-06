@@ -112,6 +112,7 @@ def main():
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for evaluation')
     parser.add_argument('--recommender_type', type=str, default='multimodal', choices=['multimodal', 'random', 'popularity', 'item_knn', 'user_knn'], help='Type of recommender to evaluate')
     parser.add_argument('--eval_task', type=str, default='retrieval', choices=['retrieval', 'ranking'], help='Evaluation task to perform')
+    parser.add_argument('--save_predictions', type=str, default=None, help='Path to save user-level predictions JSON file (relative to results_dir)')
     parser.add_argument('--warmup_recommender_cache', action='store_true', help="Enable warm-up of the Recommender's cache")
     parser.add_argument('--num_workers', type=int, default=4, help='Number of parallel workers for evaluation')
     parser.add_argument('--use_parallel', action='store_true', help='Use parallel processing for multimodal evaluation')
@@ -166,13 +167,9 @@ def main():
     if cache_config.enabled:
         print(f"Initializing SimpleFeatureCache:")
         print(f"  Max memory items: {cache_config.max_memory_items}")
-        # The cache_directory from config is the base directory.
-        print(f"  Base Cache directory: {cache_config.cache_directory}")
+        print(f"  Cache directory: {cache_config.cache_directory}")
         print(f"  Use disk: {cache_config.use_disk}")
-        print(f"  Vision Model: {config_obj.model.vision_model}")
-        print(f"  Language Model: {config_obj.model.language_model}")
-
-        # CORRECTED INITIALIZATION
+        
         simple_cache_instance = SimpleFeatureCache(
             vision_model=config_obj.model.vision_model,
             language_model=config_obj.model.language_model,
@@ -185,6 +182,7 @@ def main():
         print("Feature caching is disabled")
 
     # Create dataset with simplified cache parameters using new config structure
+    cache_config = config_obj.data.cache_config
     dataset_for_encoders = MultimodalDataset(
         interactions_df=interactions_df_for_dataset_init,
         item_info_df=item_info_df,
@@ -192,10 +190,10 @@ def main():
         vision_model_name=config_obj.model.vision_model,
         language_model_name=config_obj.model.language_model,
         create_negative_samples=False,
-        # Pass cache parameters to dataset
+        # Simplified cache parameters using new config structure
         cache_features=cache_config.enabled,
         cache_max_items=cache_config.max_memory_items,
-        cache_dir=cache_config.cache_directory, # Dataset handles 'cache_dir' correctly
+        cache_dir=cache_config.cache_directory,
         cache_to_disk=cache_config.use_disk,
         # Keep some existing parameters for compatibility
         numerical_feat_cols=config_obj.data.numerical_features_cols,
@@ -362,6 +360,30 @@ def main():
     print(f"Filter seen items: {evaluator.filter_seen}")
     
     results = evaluator.evaluate()
+
+    # Save predictions if requested
+    if args.save_predictions:
+        if 'predictions' in results:
+            predictions_data = results.pop('predictions')
+            
+            # Ensure path is relative to results_dir
+            save_path = Path(config_obj.results_dir) / args.save_predictions
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Convert to a serializable format (list of dicts)
+            serializable_predictions = {}
+            for user, recs in predictions_data.items():
+                if isinstance(recs, list) and all(isinstance(rec, tuple) for rec in recs):
+                    serializable_predictions[str(user)] = [{'item_id': str(item), 'score': float(score)} for item, score in recs]
+                else:
+                    serializable_predictions[str(user)] = recs
+
+            with open(save_path, 'w') as f:
+                json.dump(serializable_predictions, f, indent=2)
+            print(f"\n✓ User-level predictions saved to {save_path}")
+        else:
+            print("\n⚠️  Warning: --save_predictions was specified, but the evaluator did not return predictions.")
+
     results['evaluation_metadata'] = {
         'task': evaluator.task_name,
         'filter_seen_evaluator_perspective': evaluator.filter_seen,

@@ -1,8 +1,5 @@
 # src/models/multimodal.py
-"""
-Simplified multimodal recommender model architecture using pre-trained vision and language models.
-Removed cross-modal attention complexity for better maintainability.
-"""
+
 import torch
 import torch.nn as nn
 from transformers import (
@@ -403,8 +400,6 @@ class MultimodalRecommender(nn.Module):
                         print(f"  Finite min: {finite_vals.min().item()}, max: {finite_vals.max().item()}, mean: {finite_vals.mean().item()}")
                     else:
                         print(f"  No finite values in '{name}'.")
-                    # To stop execution immediately when a NaN is found for the first time:
-                    # raise ValueError(f"NaN found in {name}") 
                 else:
                     print(f"DEBUG: '{name}' is clean. Shape: {tensor.shape}, Min: {tensor.min().item()}, Max: {tensor.max().item()}, Mean: {tensor.mean().item()}")
 
@@ -412,84 +407,53 @@ class MultimodalRecommender(nn.Module):
         batch_size = user_idx.size(0)
 
         user_emb = self.user_embedding(user_idx)
-        check_tensor(user_emb, "user_emb")
         item_emb = self.item_embedding(item_idx)
-        check_tensor(item_emb, "item_emb")
 
         raw_vision_output = self._get_vision_features(image)
-        check_tensor(raw_vision_output, "raw_vision_output")
         
         projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
-        check_tensor(projected_vision_emb_main_task, "projected_vision_emb_main_task")
 
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
-        check_tensor(raw_language_feat_main_task, "raw_language_feat_main_task")
         projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
-        check_tensor(projected_language_emb_main_task, "projected_language_emb_main_task")
 
-        # CHECK INPUT TO NUMERICAL PROJECTION
-        check_tensor(numerical_features, "numerical_features (INPUT to projection)") # Use your existing helper
         projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
 
         # Features for Contrastive Loss (only if return_embeddings is True)
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
 
-        if return_embeddings and self.use_contrastive: # Simplified condition based on your model structure
+        if return_embeddings and self.use_contrastive: 
             if hasattr(self, 'vision_contrastive_projection'):
                 vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
-                if vision_features_for_contrastive_loss is not None: # Check if it's None before calling check_tensor
-                    check_tensor(vision_features_for_contrastive_loss, "vision_features_for_contrastive_loss")
             
             if hasattr(self, 'clip_text_model') and clip_text_input_ids is not None and clip_text_attention_mask is not None:
                 raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
-                if raw_clip_text_output is not None and hasattr(self, 'text_contrastive_projection'): # Check if raw_clip_text_output is not None
+                if raw_clip_text_output is not None and hasattr(self, 'text_contrastive_projection'): 
                     text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
-                    if text_features_for_contrastive_loss is not None: # Check if it's None before calling check_tensor
-                        check_tensor(text_features_for_contrastive_loss, "text_features_for_contrastive_loss")
-        
-        # Fusion and Prediction for Main Task
-        # Stack features for attention
-        # Ensure all components are not None and have valid values before stacking
-        # For simplicity, assuming they are valid if no NaN detected so far by check_tensor
         
         features_stacked = torch.stack([
             user_emb, item_emb, 
             projected_vision_emb_main_task,
             projected_language_emb_main_task, 
             projected_numerical_emb_main_task
-        ], dim=0) # Stacking along a new dimension (dim=0)
-        check_tensor(features_stacked, "features_stacked (input to attention)")
+        ], dim=0) 
         
-        # Pass through attention layer
-        # MultiheadAttention expects query, key, value: (SeqLen, Batch, Dim) or (Batch, SeqLen, Dim) if batch_first=True
-        # Current stacking: (5, Batch, Dim)
-        # Model's attention layer: batch_first=False is the default for nn.MultiheadAttention if not specified or from config
-        # If your self.attention is configured with batch_first=True, you need .permute(1,0,2) before attention.
-        # Assuming self.attention expects (SeqLen=5, Batch, EmbeddingDim)
         attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
-        check_tensor(attended_features, "attended_features (output of self.attention)")
 
-        # Reshape for fusion layers
-        # attended_features shape: (5, Batch, EmbeddingDim)
-        # permute to (Batch, 5, EmbeddingDim) then view as (Batch, 5 * EmbeddingDim)
         combined_features = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
-        check_tensor(combined_features, "combined_features (input to self.fusion MLP)")
 
-        # Pass through the fusion MLP
-        x = combined_features
-        if debug_this_batch: print(f"DEBUG: Input to fusion MLP: shape={x.shape}, any_nan={torch.isnan(x).any().item()}")
-        for i, layer_module in enumerate(self.fusion): # self.fusion is an nn.Sequential
-            x_before_layer = x
-            x = layer_module(x)
-            is_nan_after = torch.isnan(x).any().item()
-        output = x
-        check_tensor(output, "final_output (from self.fusion MLP)")
+        output = self.fusion(combined_features)
+        
+        # Sanitize the output to prevent NaN/Inf values from crashing downstream processes.
+        if torch.isnan(output).any() or torch.isinf(output).any():
+            output = torch.nan_to_num(output, nan=0.0, posinf=10.0, neginf=-10.0)
+        
 
         if return_embeddings:
             return output, vision_features_for_contrastive_loss, text_features_for_contrastive_loss, projected_vision_emb_main_task
         
         return output
+
     def get_item_embedding(
         self, item_idx: torch.Tensor, image: torch.Tensor, text_input_ids: torch.Tensor,
         text_attention_mask: torch.Tensor, numerical_features: torch.Tensor
