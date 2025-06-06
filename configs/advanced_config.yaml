@@ -23,7 +23,7 @@ model:
   attention_dropout: 0.1            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [1024, 512, 256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
@@ -38,9 +38,9 @@ training:
   # Basic training parameters
   batch_size: 32
   epochs: 100
-  learning_rate: 0.000001
+  learning_rate: 0.00001
   weight_decay: 0.01               # L2 regularization
-  patience: 10                    # Early stopping patience
+  patience: 10                     # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
   num_workers: 8                   # DataLoader workers
   
@@ -72,15 +72,15 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_tiny
-  train_data_path: data/splits/split_tiny/train.csv
-  val_data_path: data/splits/split_tiny/val.csv
-  test_data_path: data/splits/split_tiny/test.csv
+  split_data_path: data/splits/split_small
+  train_data_path: data/splits/split_small/train.csv
+  val_data_path: data/splits/split_small/val.csv
+  test_data_path: data/splits/split_small/test.csv
   
   # Cache configuration
   cache_config:
     enabled: true
-    max_memory_items: 1000
+    max_memory_items: 1500
     cache_directory: 'cache'
     use_disk: true
   
@@ -129,9 +129,9 @@ data:
   # Data splitting configuration (advanced)
   splitting:
     random_state: 42
-    train_final_ratio: 0.8
+    train_final_ratio: 0.75
     val_final_ratio: 0.1
-    test_final_ratio: 0.1
+    test_final_ratio: 0.15
     min_interactions_per_user: 5
     min_interactions_per_item: 5
     validate_no_leakage: true
