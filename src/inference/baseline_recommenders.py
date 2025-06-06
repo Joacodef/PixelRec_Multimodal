@@ -368,6 +368,10 @@ class ItemKNNRecommender(BaselineRecommender):
                         continue
                     recommendations.append((item_id_cand_str, float(scores[item_idx_cand])))
         
+        # FIXED: Added missing return statement and sorting
+        recommendations.sort(key=lambda x: x[1], reverse=True)
+        return recommendations[:top_k]
+        
     def get_item_score(self, user_id: str, item_id: str) -> float:
         """Get item-based collaborative filtering score for a specific user-item pair"""
         user_id_str = str(user_id)
