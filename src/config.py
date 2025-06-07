@@ -1,6 +1,6 @@
-# src/config.py - Simplified without cross-modal attention complexity
+# src/config.py - Enhanced with model-specific checkpoint paths
 """
-Configuration module with simplified model architecture
+Configuration module with model-specific checkpoint directory support
 """
 from dataclasses import dataclass, field, asdict, is_dataclass, fields
 from typing import Optional, Dict, Any, List, Union
@@ -177,13 +177,32 @@ class RecommendationConfig:
 
 @dataclass
 class Config:
-    """Main configuration class with smart defaults"""
+    """Main configuration class with model-specific checkpoint paths"""
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: DataConfig = field(default_factory=DataConfig)
     recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
     checkpoint_dir: str = 'models/checkpoints'
     results_dir: str = 'results'
+
+    @property
+    def model_specific_checkpoint_dir(self) -> str:
+        """Get model-specific checkpoint directory for .pth files"""
+        model_combo = f"{self.model.vision_model}_{self.model.language_model}"
+        return f"{self.checkpoint_dir}/{model_combo}"
+    
+    @property
+    def shared_encoders_dir(self) -> str:
+        """Get shared encoders directory (remains in base checkpoint_dir)"""
+        return f"{self.checkpoint_dir}/encoders"
+    
+    def get_model_checkpoint_path(self, filename: str) -> str:
+        """Get full path for a model checkpoint file"""
+        return f"{self.model_specific_checkpoint_dir}/{filename}"
+    
+    def get_encoder_path(self, encoder_name: str) -> str:
+        """Get full path for an encoder file"""
+        return f"{self.shared_encoders_dir}/{encoder_name}"
 
     @classmethod
     def from_yaml(cls, path: str) -> 'Config':

@@ -24,12 +24,35 @@ class Trainer:
         model: nn.Module,
         device: torch.device,
         checkpoint_dir: str = 'models/checkpoints',
-        use_contrastive: bool = True
+        use_contrastive: bool = True,
+        model_config: Optional[object] = None  # NEW: Add model_config parameter
     ):
         self.model = model
         self.device = device
-        self.checkpoint_dir = Path(checkpoint_dir)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.base_checkpoint_dir = Path(checkpoint_dir)
+        self.model_config = model_config
+        
+        # Create model-specific checkpoint directory for .pth files
+        if model_config and hasattr(model_config, 'vision_model') and hasattr(model_config, 'language_model'):
+            model_combo = f"{model_config.vision_model}_{model_config.language_model}"
+            self.model_checkpoint_dir = self.base_checkpoint_dir / model_combo
+        else:
+            # Fallback to base directory if no model config provided
+            self.model_checkpoint_dir = self.base_checkpoint_dir
+            if model_config is None:
+                print("Warning: No model config provided to Trainer. Using base checkpoint directory.")
+        
+        # Shared encoders directory (remains in base checkpoint_dir)
+        self.encoders_dir = self.base_checkpoint_dir / 'encoders'
+        
+        # Create directories
+        self.model_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.encoders_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"Trainer initialized:")
+        print(f"  → Model checkpoints (.pth): {self.model_checkpoint_dir}")
+        print(f"  → Shared encoders: {self.encoders_dir}")
+        
         self.criterion = MultimodalRecommenderLoss(use_contrastive=use_contrastive)
         self.epoch = 0
         self.best_val_loss = float('inf')
@@ -439,3 +462,11 @@ class Trainer:
         if self.optimizer is None: return 0.0
         for param_group in self.optimizer.param_groups: return param_group['lr']
         return 0.0
+
+    def get_model_checkpoint_dir(self) -> Path:
+        """Get the model-specific checkpoint directory"""
+        return self.model_checkpoint_dir
+
+    def get_encoders_dir(self) -> Path:
+        """Get the shared encoders directory"""
+        return self.encoders_dir

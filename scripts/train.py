@@ -1,7 +1,7 @@
-# scripts/train.py - Complete training script with comprehensive progress monitoring
+# scripts/train.py - Fixed version with dynamic numerical feature handling
 #!/usr/bin/env python
 """
-Training script for the simplified multimodal recommender system with detailed progress monitoring
+Training script for the simplified multimodal recommender system with dynamic numerical features
 """
 import argparse
 import sys
@@ -48,7 +48,7 @@ except ImportError:
             print(f"Simple cache: {len(self.cache)} items")
 
 
-def print_progress_header(step_num: int, title: str, total_steps: int = 12):
+def print_progress_header(step_num: int, title: str, total_steps: int = 13):
     """Print a standardized progress header"""
     print(f"\n{'='*60}")
     print(f"STEP {step_num}/{total_steps}: {title.upper()}")
@@ -76,6 +76,43 @@ def print_system_info():
         print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
         print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     print(f"CPU count: {os.cpu_count()}")
+
+
+def validate_numerical_features(item_info_df: pd.DataFrame, config_numerical_cols: List[str]) -> List[str]:
+    """
+    Validate and filter numerical feature columns to ensure they exist in the data
+    
+    Args:
+        item_info_df: DataFrame containing item information
+        config_numerical_cols: List of numerical columns from config
+        
+    Returns:
+        List of valid numerical columns that exist in the DataFrame
+    """
+    available_cols = list(item_info_df.columns)
+    valid_cols = []
+    missing_cols = []
+    
+    for col in config_numerical_cols:
+        if col in available_cols:
+            valid_cols.append(col)
+        else:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        print(f"⚠️  Warning: The following numerical columns from config are missing in data:")
+        for col in missing_cols:
+            print(f"    - {col}")
+        print(f"📊 Available columns in data: {available_cols}")
+        print(f"✅ Using valid columns: {valid_cols}")
+    
+    if not valid_cols:
+        print(f"❌ Error: No valid numerical columns found!")
+        print(f"   Configured columns: {config_numerical_cols}")
+        print(f"   Available columns: {available_cols}")
+        raise ValueError("No valid numerical feature columns found in the data")
+    
+    return valid_cols
 
 
 def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
@@ -177,10 +214,10 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
 
 
 def main():
-    """Main function for training the multimodal recommender system with comprehensive progress monitoring."""
+    """Main function for training the multimodal recommender system with dynamic numerical features."""
     
     # Parse arguments
-    parser = argparse.ArgumentParser(description='Train multimodal recommender with progress monitoring')
+    parser = argparse.ArgumentParser(description='Train multimodal recommender with dynamic numerical features')
     parser.add_argument('--config', type=str, default='configs/simple_config.yaml', help='Path to configuration file')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training')
@@ -192,7 +229,7 @@ def main():
     args = parser.parse_args()
 
     # Print header
-    print("🚀 MULTIMODAL RECOMMENDER TRAINING")
+    print("🚀 MULTIMODAL RECOMMENDER TRAINING (DYNAMIC NUMERICAL FEATURES)")
     print("=" * 80)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Config file: {args.config}")
@@ -219,6 +256,7 @@ def main():
         print(f"  → Batch size: {training_config.batch_size}")
         print(f"  → Learning rate: {training_config.learning_rate}")
         print(f"  → Epochs: {training_config.epochs}")
+        print(f"  → Configured numerical features: {data_config.numerical_features_cols}")
         
         print_progress_footer(step_start)
 
@@ -266,8 +304,8 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 4: Load processed data
-        print_progress_header(4, "Loading Processed Data")
+        # STEP 4: Load processed data and validate numerical features
+        print_progress_header(4, "Loading and Validating Data")
         step_start = time.time()
         
         print(f"Loading data files:")
@@ -276,6 +314,21 @@ def main():
         
         item_info_df_full = pd.read_csv(data_config.processed_item_info_path)
         interactions_df_full = pd.read_csv(data_config.processed_interactions_path)
+        
+        # CRITICAL FIX: Validate and update numerical features based on actual data
+        print(f"\n📊 VALIDATING NUMERICAL FEATURES:")
+        print(f"   Original config numerical features: {data_config.numerical_features_cols}")
+        
+        # Validate numerical features against actual data columns
+        valid_numerical_features = validate_numerical_features(
+            item_info_df_full, 
+            data_config.numerical_features_cols
+        )
+        
+        # Update the config with valid numerical features
+        data_config.numerical_features_cols = valid_numerical_features
+        print(f"   ✅ Final numerical features to use: {valid_numerical_features}")
+        print(f"   📏 Number of numerical features: {len(valid_numerical_features)}")
         
         data_stats = validate_data_integrity(interactions_df_full, item_info_df_full)
         
@@ -334,26 +387,39 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 6: Handle numerical scaler
+        # STEP 6: Handle numerical scaler with dynamic features
         print_progress_header(6, "Processing Numerical Scaler")
         step_start = time.time()
         
         numerical_scaler = None
         scaler_path_obj = Path(data_config.scaler_path)
         
-        print(f"Numerical features: {data_config.numerical_features_cols}")
+        print(f"Numerical features (final): {valid_numerical_features}")
+        print(f"Number of numerical features: {len(valid_numerical_features)}")
         print(f"Normalization method: {data_config.numerical_normalization_method}")
         
         if data_config.numerical_normalization_method in ['standardization', 'min_max']:
             if scaler_path_obj.exists():
                 print("Loading existing scaler...")
-                numerical_scaler = load_numerical_scaler(scaler_path_obj)
+                try:
+                    numerical_scaler = load_numerical_scaler(scaler_path_obj)
+                    print(f"  → Scaler loaded successfully")
+                except Exception as e:
+                    print(f"  → Error loading scaler: {e}")
+                    print(f"  → Will fit new scaler...")
+                    scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    numerical_scaler = fit_numerical_scaler(
+                        item_info_df_full, 
+                        valid_numerical_features,  # Use validated features
+                        data_config.numerical_normalization_method, 
+                        scaler_path_obj
+                    )
             else:
                 print("Fitting new scaler...")
                 scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
                 numerical_scaler = fit_numerical_scaler(
                     item_info_df_full, 
-                    data_config.numerical_features_cols, 
+                    valid_numerical_features,  # Use validated features
                     data_config.numerical_normalization_method, 
                     scaler_path_obj
                 )
@@ -386,12 +452,13 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 8: Create dataset for encoder fitting
+        # STEP 8: Create dataset for encoder fitting with validated numerical features
         print_progress_header(8, "Creating Dataset for Encoder Fitting")
         step_start = time.time()
         
         print("Initializing full dataset for encoder fitting...")
         print("This step may take time as it initializes the vision and language models")
+        print(f"Using {len(valid_numerical_features)} validated numerical features")
         
         full_dataset_for_encoders = MultimodalDataset(
             interactions_df=interactions_df_full,
@@ -401,13 +468,13 @@ def main():
             language_model_name=model_config.language_model,
             create_negative_samples=False,
             negative_sampling_ratio=0,
-            # Simplified cache parameters with model-specific directory
+            # Use validated numerical features
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
             cache_dir=effective_cache_dir,  # Use the effective cache directory
             cache_to_disk=cache_config.use_disk,
-            # Other parameters
-            numerical_feat_cols=data_config.numerical_features_cols,
+            # Other parameters with validated numerical features
+            numerical_feat_cols=valid_numerical_features,  # Use validated features
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False
@@ -416,6 +483,7 @@ def main():
         print("Encoder fitting results:")
         print(f"  → Users: {full_dataset_for_encoders.n_users:,}")
         print(f"  → Items: {full_dataset_for_encoders.n_items:,}")
+        print(f"  → Numerical features used: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -448,11 +516,13 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 10: Create training datasets
+        # STEP 10: Create training datasets with validated numerical features
         print_progress_header(10, "Creating Training Datasets")
         step_start = time.time()
         
         print("Creating training dataset with negative sampling...")
+        print(f"Using {len(valid_numerical_features)} validated numerical features")
+        
         train_dataset = MultimodalDataset(
             interactions_df=train_interactions_df,
             item_info_df=item_info_df_for_datasets,
@@ -462,14 +532,14 @@ def main():
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
             text_augmentation_config=data_config.text_augmentation,
-            numerical_feat_cols=data_config.numerical_features_cols,
+            numerical_feat_cols=valid_numerical_features,  # Use validated features
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=True,
             # Simplified cache parameters with model-specific directory
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,  # Use the effective cache directory
+            cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk
         )
         
@@ -489,14 +559,14 @@ def main():
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
             text_augmentation_config=TextAugmentationConfig(enabled=False),  # No augmentation for validation
-            numerical_feat_cols=data_config.numerical_features_cols,
+            numerical_feat_cols=valid_numerical_features,  # Use validated features
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False,
             # Simplified cache parameters with model-specific directory
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,  # Use the effective cache directory
+            cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk
         )
         
@@ -510,6 +580,7 @@ def main():
         print(f"  → Training samples: {len(train_dataset):,}")
         print(f"  → Validation samples: {len(val_dataset):,}")
         print(f"  → Negative sampling ratio: {data_config.negative_sampling_ratio}")
+        print(f"  → Numerical features: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -534,26 +605,38 @@ def main():
             pickle.dump(full_dataset_for_encoders.item_encoder, f)
         print(f"  → Encoders saved to {encoders_dir}")
 
-        # STEP 12: Initialize model
+        # STEP 12: Initialize model with correct number of numerical features
         print_progress_header(12, "Initializing Model", total_steps=13)
         step_start = time.time()
+        
+        num_numerical_features = len(valid_numerical_features)
         
         print("Model configuration:")
         print(f"  → Architecture: MultimodalRecommender")
         print(f"  → Users: {full_dataset_for_encoders.n_users:,}")
         print(f"  → Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"  → Numerical features: {len(data_config.numerical_features_cols)}")
+        print(f"  → Numerical features: {num_numerical_features} (validated)")
+        print(f"  → Feature names: {valid_numerical_features}")
         print(f"  → Embedding dim: {model_config.embedding_dim}")
         print(f"  → Vision model: {model_config.vision_model}")
         print(f"  → Language model: {model_config.language_model}")
         print(f"  → Use contrastive: {model_config.use_contrastive}")
+        
+        # Display checkpoint organization
+        model_combo = f"{model_config.vision_model}_{model_config.language_model}"
+        model_checkpoint_dir = Path(config.checkpoint_dir) / model_combo
+        shared_encoders_dir = Path(config.checkpoint_dir) / 'encoders'
+        
+        print(f"\n📁 Checkpoint Organization:")
+        print(f"  → Model checkpoints (.pth): {model_checkpoint_dir}")
+        print(f"  → Shared encoders: {shared_encoders_dir}")
         
         print("\nInitializing model (this may take several minutes for model downloads)...")
         
         model_params = {
             'n_users': full_dataset_for_encoders.n_users,
             'n_items': full_dataset_for_encoders.n_items,
-            'num_numerical_features': len(data_config.numerical_features_cols),
+            'num_numerical_features': num_numerical_features,  # Use validated count
             'embedding_dim': model_config.embedding_dim,
             'vision_model_name': model_config.vision_model,
             'language_model_name': model_config.language_model,
@@ -590,12 +673,13 @@ def main():
         print_progress_header(13, "Starting Training", total_steps=13)
         step_start = time.time()
         
-        # Initialize trainer
+        # Initialize trainer with model config for checkpoint organization
         trainer = Trainer(
             model=model, 
             device=device, 
             checkpoint_dir=config.checkpoint_dir, 
-            use_contrastive=model_config.use_contrastive
+            use_contrastive=model_config.use_contrastive,
+            model_config=model_config  # Pass model config for checkpoint paths
         )
         trainer.criterion.contrastive_weight = training_config.contrastive_weight
         trainer.criterion.bce_weight = training_config.bce_weight
@@ -616,9 +700,25 @@ def main():
             print(f"\nResuming from checkpoint: {args.resume}")
             trainer.load_checkpoint(args.resume)
 
+        # Save encoders before training (in shared directory)
+        print("Saving encoders to shared directory...")
+        encoders_dir = trainer.get_encoders_dir()
+        
+        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
+            pickle.dump(full_dataset_for_encoders.user_encoder, f)
+        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
+            pickle.dump(full_dataset_for_encoders.item_encoder, f)
+        print(f"  → Encoders saved to {encoders_dir}")
+
         print(f"\n🚀 Starting training...")
         print("=" * 60)
-        
+
+        # Save updated configuration with validated numerical features
+        print("Saving updated configuration with validated numerical features...")
+        updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
+        config.to_yaml(str(updated_config_path))
+        print(f"✓ Updated configuration saved to {updated_config_path}")
+
         # Prepare training parameters
         training_params = {
             'train_loader': train_loader,
@@ -641,24 +741,6 @@ def main():
         
         # Start training
         train_losses, val_losses = trainer.train(**training_params)
-
-        training_time = time.time() - step_start
-        print(f"\n✅ Training completed in {training_time/3600:.2f} hours")
-
-        # Save final results
-        print("\nSAVING RESULTS")
-        print("-" * 30)
-        
-        # Save final model
-        trainer.save_checkpoint('final_model.pth')
-        print(f"✓ Final model saved to {config.checkpoint_dir}/final_model.pth")
-        
-        # Save encoders again
-        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.user_encoder, f)
-        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.item_encoder, f)
-        print(f"✓ Encoders saved to {encoders_dir}")
 
         # Plot and save training curves
         if train_losses and val_losses:
@@ -711,7 +793,7 @@ def main():
             final_val_loss = val_losses[-1]
             
             stats_text = f"""Training Summary
-            
+
 Epochs Completed: {len(train_losses)}
 Training Time: {training_time/3600:.2f} hours
 
@@ -734,7 +816,8 @@ Data Stats:
   Users: {full_dataset_for_encoders.n_users:,}
   Items: {full_dataset_for_encoders.n_items:,}
   Train Samples: {len(train_dataset):,}
-  Val Samples: {len(val_dataset):,}"""
+  Val Samples: {len(val_dataset):,}
+  Numerical Features: {num_numerical_features}"""
             
             plt.text(0.05, 0.95, stats_text, transform=plt.gca().transAxes,
                     verticalalignment='top', fontfamily='monospace', fontsize=8)
@@ -755,7 +838,7 @@ Data Stats:
         else:
             print("⚠️  No training curves to plot (training may have been skipped)")
 
-        # Save training metadata
+        # Save training metadata with validated numerical features
         training_metadata = {
             'training_completed': True,
             'completion_time': datetime.now().isoformat(),
@@ -777,6 +860,12 @@ Data Stats:
                 'device': str(device),
                 'cuda_available': torch.cuda.is_available(),
                 'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+            },
+            'numerical_features_validation': {
+                'original_config_features': config.data.numerical_features_cols,
+                'validated_features': valid_numerical_features,
+                'num_features_used': num_numerical_features,
+                'missing_features': [col for col in config.data.numerical_features_cols if col not in valid_numerical_features]
             }
         }
         
@@ -788,7 +877,7 @@ Data Stats:
             json.dump(training_metadata, f, indent=2, default=str)
         print(f"✓ Training metadata saved to {metadata_path}")
 
-        # Save the effective configuration
+        # Save the effective configuration with validated numerical features
         config_save_path = Path(config.results_dir) / 'training_run_config.yaml'
         config.to_yaml(str(config_save_path))
         print(f"✓ Configuration saved to {config_save_path}")
@@ -797,6 +886,7 @@ Data Stats:
             try:
                 wandb.save(str(config_save_path))
                 wandb.save(str(metadata_path))
+                wandb.save(str(updated_config_path))
                 if 'plot_path' in locals():
                     wandb.save(str(plot_path))
                 print("✓ Files saved to wandb")
@@ -813,8 +903,11 @@ Data Stats:
         print(f"   → Final train loss: {train_losses[-1]:.6f}" if train_losses else "   → No training loss recorded")
         print(f"   → Final val loss: {val_losses[-1]:.6f}" if val_losses else "   → No validation loss recorded")
         print(f"   → Best val loss: {min(val_losses):.6f}" if val_losses else "   → No validation loss recorded")
+        print(f"📏 Numerical Features:")
+        print(f"   → Features used: {num_numerical_features}")
+        print(f"   → Feature names: {valid_numerical_features}")
         print(f"📁 Outputs saved to: {config.results_dir}")
-        print(f"🤖 Model checkpoint: {config.checkpoint_dir}/best_model.pth")
+        print(f"🤖 Model checkpoint: {model_checkpoint_dir}/best_model.pth")
         print(f"🔄 Encoders: {encoders_dir}")
         
         # Performance recommendations
@@ -857,7 +950,8 @@ Data Stats:
                     'interruption_time': datetime.now().isoformat(),
                     'epochs_completed': len(train_losses),
                     'train_losses': train_losses,
-                    'val_losses': val_losses if 'val_losses' in locals() else []
+                    'val_losses': val_losses if 'val_losses' in locals() else [],
+                    'validated_numerical_features': valid_numerical_features if 'valid_numerical_features' in locals() else []
                 }
                 
                 interrupted_path = Path(config.results_dir) / 'interrupted_training.json'
@@ -869,6 +963,8 @@ Data Stats:
                 print(f"✓ Partial results saved to {interrupted_path}")
             except Exception as e:
                 print(f"❌ Failed to save partial results: {e}")
+        else:
+            print("No training progress to save (training may not have started)")
         
         raise
         
@@ -884,7 +980,8 @@ Data Stats:
                 'error_time': datetime.now().isoformat(),
                 'error_type': type(e).__name__,
                 'error_message': str(e),
-                'traceback': traceback.format_exc()
+                'traceback': traceback.format_exc(),
+                'validated_numerical_features': valid_numerical_features if 'valid_numerical_features' in locals() else 'Not computed yet'
             }
             
             if 'config' in locals():

@@ -1,7 +1,7 @@
-# scripts/evaluate.py - Simplified without cross-modal attention
+# scripts/evaluate.py - Updated with model-specific checkpoint loading
 #!/usr/bin/env python
 """
-Evaluate model performance with simplified architecture
+Evaluate model performance with model-specific checkpoint organization
 """
 import argparse
 import torch
@@ -50,6 +50,113 @@ except ImportError:
             print(f"Simple cache: {len(self.cache)} items")
 
 
+def find_model_checkpoint(config: Config, checkpoint_name: str = 'best_model.pth') -> Path:
+    """
+    Find model checkpoint using new organization with fallback to old structure
+    
+    Args:
+        config: Configuration object
+        checkpoint_name: Name of checkpoint file to find
+        
+    Returns:
+        Path to the checkpoint file
+        
+    Raises:
+        FileNotFoundError: If checkpoint is not found in any location
+    """
+    # Try new model-specific directory first
+    model_combo = f"{config.model.vision_model}_{config.model.language_model}"
+    model_specific_path = Path(config.checkpoint_dir) / model_combo / checkpoint_name
+    
+    if model_specific_path.exists():
+        print(f"✓ Found checkpoint in model-specific directory: {model_specific_path}")
+        return model_specific_path
+    
+    # Fallback to base checkpoint directory (backward compatibility)
+    base_path = Path(config.checkpoint_dir) / checkpoint_name
+    if base_path.exists():
+        print(f"✓ Found checkpoint in base directory (backward compatibility): {base_path}")
+        return base_path
+    
+    # Try alternative checkpoint names
+    alternative_names = ['final_model.pth', 'model.pth', 'checkpoint.pth']
+    for alt_name in alternative_names:
+        # Try model-specific directory
+        alt_model_path = Path(config.checkpoint_dir) / model_combo / alt_name
+        if alt_model_path.exists():
+            print(f"✓ Found alternative checkpoint in model-specific directory: {alt_model_path}")
+            return alt_model_path
+        
+        # Try base directory
+        alt_base_path = Path(config.checkpoint_dir) / alt_name
+        if alt_base_path.exists():
+            print(f"✓ Found alternative checkpoint in base directory: {alt_base_path}")
+            return alt_base_path
+    
+    # If not found, raise error with helpful message
+    raise FileNotFoundError(
+        f"Model checkpoint not found. Searched locations:\n"
+        f"  → Model-specific: {model_specific_path}\n"
+        f"  → Base directory: {base_path}\n"
+        f"  → Alternative names in both locations: {alternative_names}\n"
+        f"  Model combination: {model_combo}\n"
+        f"  Available files in {config.checkpoint_dir}:\n"
+        f"    {list(Path(config.checkpoint_dir).glob('**/*.pth')) if Path(config.checkpoint_dir).exists() else 'Directory does not exist'}"
+    )
+
+
+def find_encoders(config: Config) -> Path:
+    """
+    Find encoders directory with fallback options
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        Path to the encoders directory
+        
+    Raises:
+        FileNotFoundError: If encoders are not found
+    """
+    # Try shared encoders directory first (new structure)
+    shared_encoders_path = Path(config.checkpoint_dir) / 'encoders'
+    
+    if shared_encoders_path.exists():
+        user_encoder_path = shared_encoders_path / 'user_encoder.pkl'
+        item_encoder_path = shared_encoders_path / 'item_encoder.pkl'
+        
+        if user_encoder_path.exists() and item_encoder_path.exists():
+            print(f"✓ Found encoders in shared directory: {shared_encoders_path}")
+            return shared_encoders_path
+    
+    # Fallback to base checkpoint directory
+    base_encoders_path = Path(config.checkpoint_dir)
+    user_encoder_path = base_encoders_path / 'user_encoder.pkl'
+    item_encoder_path = base_encoders_path / 'item_encoder.pkl'
+    
+    if user_encoder_path.exists() and item_encoder_path.exists():
+        print(f"✓ Found encoders in base directory (backward compatibility): {base_encoders_path}")
+        return base_encoders_path
+    
+    # Try model-specific directory as last resort
+    model_combo = f"{config.model.vision_model}_{config.model.language_model}"
+    model_encoders_path = Path(config.checkpoint_dir) / model_combo
+    user_encoder_path = model_encoders_path / 'user_encoder.pkl'
+    item_encoder_path = model_encoders_path / 'item_encoder.pkl'
+    
+    if user_encoder_path.exists() and item_encoder_path.exists():
+        print(f"✓ Found encoders in model-specific directory: {model_encoders_path}")
+        return model_encoders_path
+    
+    raise FileNotFoundError(
+        f"Encoders not found. Searched locations:\n"
+        f"  → Shared directory: {shared_encoders_path}\n"
+        f"  → Base directory: {base_encoders_path}\n"
+        f"  → Model-specific directory: {model_encoders_path}\n"
+        f"  Run training or extract_encoders.py first."
+    )
+
+
 def create_recommender(
     recommender_type: str, 
     dataset: MultimodalDataset, 
@@ -71,12 +178,7 @@ def create_recommender(
         if config_obj is None:
             raise ValueError("Config object required for multimodal recommender to determine num_numerical_features")
         
-        # Pass config_obj to the Recommender which will instantiate the MultimodalRecommender
-        # The Recommender itself will need to be modified or it needs to pass num_numerical_features
-        # For now, assuming the Recommender class itself might handle passing this to the model it instantiates.
-        # If Recommender directly takes a pre-initialized model (as it seems to do),
-        # then the model must be initialized with num_numerical_features *before* calling create_recommender.
-        return MultimodalModelRecommender( # This is src.inference.recommender.Recommender
+        return MultimodalModelRecommender(
             model, 
             dataset, 
             device,
@@ -104,7 +206,7 @@ def create_recommender(
 def main():
     warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.clip.modeling_clip")
     
-    parser = argparse.ArgumentParser(description="Evaluate model performance")
+    parser = argparse.ArgumentParser(description="Evaluate model performance with model-specific checkpoints")
     parser.add_argument('--config', type=str, default='configs/simple_config.yaml', help='Path to configuration file')
     parser.add_argument('--test_data', type=str, required=True, help='Path to test data CSV file')
     parser.add_argument('--train_data', type=str, help='Path to training data CSV file')
@@ -121,6 +223,7 @@ def main():
     parser.add_argument('--no_sampling', dest='use_sampling', action='store_false', help='Disable negative sampling (use full evaluation)')
     parser.add_argument('--num_negatives', type=int, default=100, help='Number of negative samples per positive item (default: 100)')
     parser.add_argument('--sampling_strategy', type=str, default='random', choices=['random', 'popularity', 'popularity_inverse'], help='Strategy for negative sampling')
+    parser.add_argument('--checkpoint_name', type=str, default='best_model.pth', help='Name of checkpoint file to load (default: best_model.pth)')
 
     args = parser.parse_args()
 
@@ -131,7 +234,6 @@ def main():
     print(f"Loading test data from {args.test_data}...")
     test_df = pd.read_csv(args.test_data)
     
-    # Remove complex task validation
     train_df = None
     if args.train_data:
         print(f"Loading training data from {args.train_data}...")
@@ -201,31 +303,33 @@ def main():
         numerical_scaler=numerical_scaler
     )
     
-    encoders_dir = Path(config_obj.checkpoint_dir) / 'encoders'
-    print(f"Loading encoders from {encoders_dir}...")
+    # Load encoders using new organization
+    print(f"Loading encoders...")
     try:
+        encoders_dir = find_encoders(config_obj)
+        
         with open(encoders_dir / 'user_encoder.pkl', 'rb') as f:
             dataset_for_encoders.user_encoder = pickle.load(f)
         with open(encoders_dir / 'item_encoder.pkl', 'rb') as f:
             dataset_for_encoders.item_encoder = pickle.load(f)
         dataset_for_encoders.n_users = len(dataset_for_encoders.user_encoder.classes_)
         dataset_for_encoders.n_items = len(dataset_for_encoders.item_encoder.classes_)
-    except FileNotFoundError:
-        print(f"Error: Encoders not found in {encoders_dir}. Run training or extract_encoders.py.")
+        
+        print(f"Loaded encoders: {dataset_for_encoders.n_users} users, {dataset_for_encoders.n_items} items.")
+        
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
         sys.exit(1)
-    print(f"Loaded encoders: {dataset_for_encoders.n_users} users, {dataset_for_encoders.n_items} items.")
 
     model_instance_multimodal = None
     if args.recommender_type == 'multimodal':
         print("Initializing multimodal model...")
-        
-        # Simplified model initialization - no more complex model class selection
         print("Using MultimodalRecommender")
         
         model_params = {
             'n_users': dataset_for_encoders.n_users,
             'n_items': dataset_for_encoders.n_items,
-            'num_numerical_features': len(config_obj.data.numerical_features_cols), # Pass the correct number of features
+            'num_numerical_features': len(config_obj.data.numerical_features_cols),
             'embedding_dim': config_obj.model.embedding_dim,
             'vision_model_name': config_obj.model.vision_model,
             'language_model_name': config_obj.model.language_model,
@@ -246,26 +350,31 @@ def main():
 
         model_instance_multimodal = MultimodalRecommender(**model_params).to(device)
         
-        checkpoint_path_str = 'best_model.pth' 
-        if hasattr(config_obj, 'eval_checkpoint_name'): 
-            checkpoint_path_str = config_obj.eval_checkpoint_name
+        # Load model checkpoint using new organization
+        try:
+            checkpoint_path = find_model_checkpoint(config_obj, args.checkpoint_name)
+            print(f"Loading multimodal model checkpoint from {checkpoint_path}...")
             
-        checkpoint_path = Path(config_obj.checkpoint_dir) / checkpoint_path_str
-        if not checkpoint_path.exists():
-             checkpoint_path = Path(config_obj.checkpoint_dir) / 'final_model.pth' 
-        if not checkpoint_path.exists():
-            print(f"Error: Multimodal model checkpoint not found.")
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            model_instance_multimodal.load_state_dict(checkpoint['model_state_dict'])
+            model_instance_multimodal.eval()
+            
+            # Display checkpoint info
+            model_combo = f"{config_obj.model.vision_model}_{config_obj.model.language_model}"
+            print(f"✓ Loaded model for combination: {model_combo}")
+            if 'epoch' in checkpoint:
+                print(f"✓ Checkpoint from epoch: {checkpoint['epoch']}")
+            if 'best_val_loss' in checkpoint:
+                print(f"✓ Best validation loss: {checkpoint['best_val_loss']:.6f}")
+                
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
             sys.exit(1)
-        
-        print(f"Loading multimodal model checkpoint from {checkpoint_path}...")
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model_instance_multimodal.load_state_dict(checkpoint['model_state_dict'])
-        model_instance_multimodal.eval()
 
     recommender_instance = create_recommender(
         args.recommender_type,
         dataset=dataset_for_encoders, 
-        model=model_instance_multimodal, # Pass the already initialized model
+        model=model_instance_multimodal,
         device=device,
         history_interactions_df=train_df, 
         config_obj=config_obj,
@@ -385,6 +494,8 @@ def main():
         else:
             print("\n⚠️  Warning: --save_predictions was specified, but the evaluator did not return predictions.")
 
+    # Add checkpoint info to metadata
+    model_combo = f"{config_obj.model.vision_model}_{config_obj.model.language_model}"
     results['evaluation_metadata'] = {
         'task': evaluator.task_name,
         'filter_seen_evaluator_perspective': evaluator.filter_seen,
@@ -396,7 +507,9 @@ def main():
         'parallel_evaluation': args.use_parallel,
         'num_workers': args.num_workers if args.use_parallel else 0,
         'parallel_chunk_size': args.parallel_chunk_size if args.use_parallel else 0,
-        'simplified_architecture': True  # New metadata field
+        'model_combination': model_combo,
+        'checkpoint_used': args.checkpoint_name,
+        'checkpoint_organization': 'model_specific_directories'
     }
     evaluator.print_summary(results)
 
@@ -415,6 +528,9 @@ def main():
         json.dump(results, f, indent=2, cls=NpEncoder)
 
     print(f"\nEvaluation results saved to {output_path}")
+    print(f"📁 Model checkpoint organization:")
+    print(f"   → Model combination: {model_combo}")
+    print(f"   → Checkpoint used: {args.checkpoint_name}")
 
 if __name__ == '__main__':
     main()

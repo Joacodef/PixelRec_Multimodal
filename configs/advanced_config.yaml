@@ -37,7 +37,7 @@ model:
 training:
   # Basic training parameters
   batch_size: 32
-  epochs: 100
+  epochs: 5
   learning_rate: 0.00001
   weight_decay: 0.01               # L2 regularization
   patience: 10                     # Early stopping patience
@@ -72,10 +72,10 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_small
-  train_data_path: data/splits/split_small/train.csv
-  val_data_path: data/splits/split_small/val.csv
-  test_data_path: data/splits/split_small/test.csv
+  split_data_path: data/splits/split_tiny
+  train_data_path: data/splits/split_tiny/train.csv
+  val_data_path: data/splits/split_tiny/val.csv
+  test_data_path: data/splits/split_tiny/test.csv
   
   # Cache configuration
   cache_config:
@@ -87,15 +87,15 @@ data:
   # Data preprocessing (advanced)
   negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
   
-  # Numerical features (advanced)
+  # Numerical features (advanced) - at least one must be present
   numerical_features_cols:
-    - view_number
-    - comment_number
-    - thumbup_number
-    - share_number
-    - coin_number
+    #- view_number
+    #- comment_number
+    #- thumbup_number
+    #- share_number
+    #- coin_number
     - favorite_number
-    - barrage_number
+    #- barrage_number
   numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
   
   # Text augmentation (experimental)
