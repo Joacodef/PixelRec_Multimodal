@@ -20,11 +20,14 @@ class AdvancedMetrics:
             else:
                 reciprocal_ranks.append(0.0)
                 
-        return np.mean(reciprocal_ranks)
+        # Corrected: Handle empty list case to prevent returning NaN.
+        return np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
     
     @staticmethod
     def calculate_hit_rate(recommendations: List[List[str]], relevant_items: List[Set[str]]) -> float:
         """Calculate hit rate (percentage of users with at least one hit)"""
+        if not recommendations:
+            return 0.0
         hits = 0
         for recs, relevant in zip(recommendations, relevant_items):
             if any(item in relevant for item in recs):
@@ -66,7 +69,8 @@ class AdvancedMetrics:
                                     if item in relevant and item not in expected)
             serendipity_scores.append(unexpected_relevant / len(recs) if recs else 0)
             
-        return np.mean(serendipity_scores)
+        # Corrected: Handle empty list case to prevent returning NaN.
+        return np.mean(serendipity_scores) if serendipity_scores else 0.0
     
     @staticmethod
     def calculate_temporal_diversity(
@@ -84,7 +88,7 @@ class AdvancedMetrics:
             timestamps = [item_timestamps.get(item, 0) for item in recs]
             diversity_scores.append(np.std(timestamps))
             
-        return np.mean(diversity_scores)
+        return np.mean(diversity_scores) if diversity_scores else 0.0
     
     @staticmethod
     def calculate_user_satisfaction_proxy(
@@ -168,7 +172,10 @@ class FairnessMetrics:
                 provider = item_providers.get(item, 'unknown')
                 provider_counts[provider] += 1
                 total_recommendations += 1
-                
+        
+        if total_recommendations == 0:
+            return {'provider_exposure': {}, 'provider_gini': 0.0}
+
         # Calculate exposure rate for each provider
         provider_rates = {
             provider: count / total_recommendations 
