@@ -5,5 +5,5 @@ scikit-learn>=1.6.1
 pillow>=10.2.0
 tqdm>=4.67.1
 pyyaml>=6.0
-matplotlib>=3.10.3
+matplotlib>=3.9.4
 wandb>=0.19.11
