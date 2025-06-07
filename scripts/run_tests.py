@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import pytest
 
 # Add parent directory to path to import src modules
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -186,6 +187,10 @@ class TestDataFilter(unittest.TestCase):
         self.assertEqual(len(aligned), 0)
 
 
-if __name__ == '__main__':
-    # Run tests with verbose output
-    unittest.main(verbosity=2)
+# This script runs all tests in the 'tests/' directory using pytest.
+if __name__ == "__main__":
+    # You can add more pytest arguments here if needed
+    args = ['tests/']
+    
+    # Exit with the same code as pytest
+    sys.exit(pytest.main(args))
