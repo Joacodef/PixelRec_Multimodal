@@ -1,4 +1,4 @@
-# scripts/train.py - Fixed version with dynamic numerical feature handling
+# scripts/train.py - Fixed version with dynamic numerical feature handling and timing
 #!/usr/bin/env python
 """
 Training script for the simplified multimodal recommender system with dynamic numerical features
@@ -740,7 +740,9 @@ def main():
         }
         
         # Start training
+        training_start_time = time.time()
         train_losses, val_losses = trainer.train(**training_params)
+        training_time = time.time() - training_start_time
 
         # Plot and save training curves
         if train_losses and val_losses:

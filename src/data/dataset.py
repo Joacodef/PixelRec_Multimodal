@@ -13,6 +13,7 @@ from sklearn.preprocessing import LabelEncoder
 from transformers import AutoTokenizer, AutoImageProcessor, CLIPProcessor
 from tqdm import tqdm
 from typing import Dict, Optional, Any, List
+import traceback
 
 from .simple_cache import SimpleFeatureCache
 from ..config import MODEL_CONFIGS, TextAugmentationConfig
@@ -146,7 +147,12 @@ class MultimodalDataset(Dataset):
             text_content = f"{item_row.get('title', '')} {item_row.get('tag', '')} {item_row.get('description', '')}".strip()
             
             if self.is_train_mode and self.text_augmentation_config.enabled:
-                text_content = augment_text(text_content, **self.text_augmentation_config.__dict__)
+                # Create a dictionary of arguments for augment_text, excluding the 'enabled' key.
+                aug_args = {
+                    key: value for key, value in self.text_augmentation_config.__dict__.items()
+                    if key != 'enabled'
+                }
+                text_content = augment_text(text_content, **aug_args)
 
             text_tokens = self.tokenizer(text_content, padding='max_length', truncation=True, max_length=128, return_tensors='pt')
             
@@ -154,6 +160,20 @@ class MultimodalDataset(Dataset):
             numerical_features_np = np.nan_to_num(np.array(numerical_values, dtype=np.float32)).reshape(1, -1)
             
             if self.numerical_scaler and self.numerical_normalization_method not in ['none', 'log1p']:
+                # Defensive check for feature dimension mismatch
+                n_features_expected = self.numerical_scaler.n_features_in_
+                n_features_provided = numerical_features_np.shape[1]
+
+                if n_features_provided != n_features_expected:
+                    print(
+                        f"\nWARNING for item '{item_id}': Shape mismatch for numerical features. "
+                        f"Scaler expects {n_features_expected} features, but current config provided {n_features_provided}. "
+                        f"This is likely due to a config mismatch between training and evaluation. "
+                        f"Using a zero vector as a fallback to prevent crash."
+                    )
+                    # Use a zero vector of the correct shape as a fallback
+                    numerical_features_np = np.zeros((1, n_features_expected), dtype=np.float32)
+
                 numerical_features_np = self.numerical_scaler.transform(numerical_features_np)
             
             features = {
@@ -169,7 +189,15 @@ class MultimodalDataset(Dataset):
                 features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
             
             return features
-        except (KeyError, Exception):
+        except KeyError:
+            print(f"ERROR in _process_item_features: Item ID '{item_id}' not found in item_info DataFrame index.")
+            return None
+        except Exception as e:
+            print(f"\n--- ERROR in _process_item_features for item ID '{item_id}' ---")
+            print(f"Exception Type: {type(e).__name__}")
+            print(f"Exception Message: {e}")
+            traceback.print_exc()
+            print("--- End of Error Trace ---")
             return None
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:

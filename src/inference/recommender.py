@@ -190,6 +190,7 @@ class Recommender:
                 # Get or compute item features
                 item_features = self._get_item_features(item_id_str)
                 if item_features is None:
+                    # The warning is now more descriptive inside _get_item_features
                     self.logger.warning(f"Could not get features for item {item_id_str}, it will be skipped in batch.")
                     continue # Skip this item if features can't be loaded/processed
 
@@ -258,31 +259,36 @@ class Recommender:
             return [0.0] * len(item_ids_str)
 
     def _get_item_features(self, item_id_str: str) -> Optional[Dict[str, torch.Tensor]]:
-        """Get or compute features for an item (string ID) with simple caching"""
-        # Ensure item_id_str is string
+        """Get or compute features for an item (string ID) with simple caching and improved logging."""
         item_id_str = str(item_id_str)
         
-        # Check cache first
         if item_id_str in self.feature_cache:
             return self.feature_cache[item_id_str]
 
         try:
-            # Get item info using string item ID
             if item_id_str not in self.item_info_dict:
-                self.logger.warning(f"Item {item_id_str} not found in item_info_dict.")
+                self.logger.warning(
+                    f"Item '{item_id_str}' not found in the recommender's item metadata dictionary. "
+                    f"This suggests a mismatch between the interaction data and item metadata files."
+                )
                 return None
 
-            # Process features using dataset's method which expects string item_id
             features = self.dataset._process_item_features(item_id_str)
 
-            # Cache the features if we have room
+            if features is None:
+                 self.logger.warning(
+                    f"Feature processing for item '{item_id_str}' returned None. "
+                    f"This could be due to a missing image or other data issue for this specific item."
+                 )
+                 return None
+
             if len(self.feature_cache) < self.cache_max_items:
                 self.feature_cache[item_id_str] = features
 
             return features
 
         except Exception as e:
-            self.logger.error(f"Error getting item features for {item_id_str}: {e}")
+            self.logger.error(f"An unexpected error occurred while getting features for item '{item_id_str}': {e}", exc_info=True)
             return None
 
     def _get_user_interactions(self, user_id_str: str) -> set[str]:

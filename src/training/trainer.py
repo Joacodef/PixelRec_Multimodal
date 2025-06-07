@@ -96,7 +96,7 @@ class Trainer:
             return optim.lr_scheduler.StepLR(optimizer, step_size=patience, gamma=factor)
         else:
             print(f"Unknown scheduler type: {scheduler_type}. Using ReduceLROnPlateau.")
-            return optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=patience, factor=factor, min_lr=min_lr, verbose=True)
+            return optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=patience, factor=factor, min_lr=min_lr)
 
     def train(
         self,
@@ -166,7 +166,13 @@ class Trainer:
             if validation_performed_this_epoch and not np.isnan(val_metrics['total_loss']):
                 if self._check_early_stopping(val_metrics['total_loss'], patience):
                     print(f"Early stopping at epoch {self.epoch+1}")
+                    # Save the latest state before stopping
+                    self.save_checkpoint('last_model.pth')
                     break 
+            
+            # Save the latest checkpoint at the end of every epoch.
+            # This overwrites the file each time, ensuring 'last_model.pth' is always the most recent.
+            self.save_checkpoint('last_model.pth')
             
             self._print_epoch_summary(self.epoch, epochs, train_metrics, val_metrics)
 
@@ -423,57 +429,44 @@ class Trainer:
         print("-" * 50)
 
     def save_checkpoint(self, filename: str, is_best: bool = False):
-        checkpoint = {
-            'epoch': self.epoch,
-            'model_state_dict': self.model.state_dict(),
-            'best_val_loss': self.best_val_loss,
-            'model_config': {
-                'vision_model': self.model_config.vision_model,
-                'language_model': self.model_config.language_model
-            } if self.model_config else {}
-        }
-        if self.optimizer:
-            checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
-        if self.scheduler:
-            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
-        
+        checkpoint = {'epoch': self.epoch, 'model_state_dict': self.model.state_dict(), 'best_val_loss': self.best_val_loss}
+        if self.optimizer: checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
+        if self.scheduler: checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        # BUG FIX: Use the correct model-specific checkpoint directory
         path = self.model_checkpoint_dir / filename
         torch.save(checkpoint, path)
         if is_best:
             print(f"Saved best model checkpoint to {path}")
             try:
-                if wandb.run is not None:
-                    wandb.save(str(path))
-            except Exception as e:
-                print(f"Warning: Failed to save checkpoint to wandb: {e}")
-
+                # We only save the 'best_model.pth' as a special artifact to W&B to avoid clutter
+                if wandb.run is not None: wandb.save(str(path))
+            except Exception as e: print(f"Warning: Failed to save checkpoint to wandb: {e}")
 
     def load_checkpoint(self, filename: str):
+        # Correctly load from the model-specific directory
         path = self.model_checkpoint_dir / filename
-        if not path.exists():
-            print(f"Warning: Checkpoint file not found at {path}")
-            return
-        
+        if not path.exists(): 
+            print(f"Warning: Checkpoint file not found at {path}"); return
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.epoch = checkpoint.get('epoch', 0)
+        self.epoch = checkpoint.get('epoch', 0) # Get epoch for resuming
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        
         if self.optimizer and 'optimizer_state_dict' in checkpoint:
-            try:
+            try: # Add try-except for optimizer loading
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                print("Loaded optimizer state from checkpoint.")
+                print(f"Loaded optimizer state from checkpoint.")
             except Exception as e:
                 print(f"Warning: Could not load optimizer state: {e}. Optimizer will be reinitialized.")
+        elif 'optimizer_state_dict' in checkpoint and not self.optimizer:
+            print(f"Warning: Optimizer state found in checkpoint, but trainer's optimizer is not initialized.")
         
         if self.scheduler and 'scheduler_state_dict' in checkpoint:
-            try:
+            try: # Add try-except for scheduler loading
                 self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                print("Loaded scheduler state from checkpoint.")
+                print(f"Loaded scheduler state from checkpoint.")
             except Exception as e:
                 print(f"Warning: Could not load scheduler state: {e}. Scheduler may not resume correctly.")
-        
-        print(f"Loaded checkpoint from {path} (epoch {self.epoch})")
+        print(f"Loaded checkpoint from {path} (epoch {self.epoch})") # Resuming from self.epoch, so next epoch will be self.epoch + 1
 
     def get_learning_rate(self) -> float:
         if self.optimizer is None: return 0.0

@@ -114,7 +114,7 @@ class NumericalProcessor:
     
     def save_scaler(self, scaler_path: Path) -> bool:
         """
-        Save fitted scaler to disk.
+        Save fitted scaler and its column names to disk.
         
         Args:
             scaler_path: Path to save the scaler
@@ -129,8 +129,9 @@ class NumericalProcessor:
         try:
             scaler_path.parent.mkdir(parents=True, exist_ok=True)
             with open(scaler_path, 'wb') as f:
-                pickle.dump(self.scaler, f)
-            print(f"Scaler saved to {scaler_path}")
+                # Save both the scaler and the columns it was fitted on
+                pickle.dump({'scaler': self.scaler, 'columns': self.fitted_columns}, f)
+            print(f"Scaler and column info saved to {scaler_path}")
             return True
         except Exception as e:
             print(f"Error saving scaler: {e}")
@@ -138,7 +139,7 @@ class NumericalProcessor:
     
     def load_scaler(self, scaler_path: Path) -> bool:
         """
-        Load scaler from disk.
+        Load scaler and its column names from disk.
         
         Args:
             scaler_path: Path to load the scaler from
@@ -152,7 +153,14 @@ class NumericalProcessor:
         
         try:
             with open(scaler_path, 'rb') as f:
-                self.scaler = pickle.load(f)
+                scaler_data = pickle.load(f)
+                # Handle both new (dict) and old (direct scaler) formats
+                if isinstance(scaler_data, dict):
+                    self.scaler = scaler_data.get('scaler')
+                    self.fitted_columns = scaler_data.get('columns')
+                else:
+                    self.scaler = scaler_data
+                    self.fitted_columns = None # Old format, columns are unknown
             print(f"Scaler loaded from {scaler_path}")
             return True
         except Exception as e:
@@ -168,5 +176,5 @@ class NumericalProcessor:
         return {
             "scaler_type": scaler_type,
             "fitted_columns": self.fitted_columns,
-            "n_features": len(self.fitted_columns) if self.fitted_columns else 0
+            "n_features": len(self.fitted_columns) if self.fitted_columns else 'Unknown'
         }

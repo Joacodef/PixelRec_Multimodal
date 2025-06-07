@@ -290,7 +290,7 @@ class PreprocessingPipeline:
             item_info_df = item_info_df[~all_nan_mask]
             print(f"Removed invalid items. Remaining items: {len(item_info_df)}")
     
-    return item_info_df
+        return item_info_df
     
     def _print_summary(self, item_info_df, interactions_df):
         """Print preprocessing summary"""
