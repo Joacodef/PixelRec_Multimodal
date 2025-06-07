@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # Specifies the Python version to use for the environment.
+          python-version: '3.11.8' # Specifies the Python version to use for the environment.
           cache: 'pip' # Enables caching for pip dependencies to speed up subsequent runs.
 
       - name: Install dependencies
