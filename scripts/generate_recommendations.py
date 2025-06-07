@@ -20,6 +20,46 @@ from src.models.multimodal import PretrainedMultimodalRecommender # Alias for Mu
 from src.inference.recommender import Recommender
 
 
+def find_model_checkpoint(config: Config) -> Path:
+    """
+    Finds the model checkpoint, searching in the model-specific directory first.
+    
+    Args:
+        config: The configuration object.
+        
+    Returns:
+        The path to the found checkpoint file.
+        
+    Raises:
+        FileNotFoundError: If no suitable checkpoint is found.
+    """
+    model_combo = f"{config.model.vision_model}_{config.model.language_model}"
+    model_specific_dir = Path(config.checkpoint_dir) / model_combo
+    
+    # List of checkpoint names to try in order of preference
+    checkpoint_names = ['best_model.pth', 'final_model.pth', 'last_model.pth']
+    
+    # Search in model-specific directory first
+    for name in checkpoint_names:
+        path = model_specific_dir / name
+        if path.exists():
+            print(f"✓ Found checkpoint in model-specific directory: {path}")
+            return path
+            
+    # Fallback search in base directory for backward compatibility
+    for name in checkpoint_names:
+        path = Path(config.checkpoint_dir) / name
+        if path.exists():
+            print(f"✓ Found checkpoint in base directory (fallback): {path}")
+            return path
+            
+    raise FileNotFoundError(
+        f"Model checkpoint not found. Searched for {checkpoint_names} in:\n"
+        f"  → Model-specific dir: {model_specific_dir}\n"
+        f"  → Base dir: {config.checkpoint_dir}"
+    )
+
+
 def load_model_and_data(config: Config, device: torch.device):
     """Load trained model and dataset"""
     # Load data
@@ -79,13 +119,8 @@ def load_model_and_data(config: Config, device: torch.device):
         contrastive_temperature=config.model.contrastive_temperature
     ).to(device)
     
-    # Load checkpoint
-    checkpoint_path = Path(config.checkpoint_dir) / 'best_model.pth'
-    if not checkpoint_path.exists():
-        checkpoint_path = Path(config.checkpoint_dir) / 'final_model.pth'
-    
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Model checkpoint not found at {config.checkpoint_dir}/best_model.pth or final_model.pth")
+    # FIX: Use the new robust find_model_checkpoint function
+    checkpoint_path = find_model_checkpoint(config)
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
