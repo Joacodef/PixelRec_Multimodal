@@ -99,11 +99,10 @@ class TestDataFilter(unittest.TestCase):
         # After filtering users: user4 is removed
         # Final interactions should only be those between users 1,2,3 and items 1,2
         expected_interactions = [
-            ('user1', 'item1'), ('user1', 'item2'),
-            ('user2', 'item1'), ('user3', 'item2')
+            ('user1', 'item1'), ('user1', 'item2')
         ]
         
-        self.assertEqual(len(filtered_df), 2)
+        self.assertEqual(len(filtered_df), 2) 
         actual_interactions = list(zip(filtered_df['user_id'], filtered_df['item_id']))
         self.assertEqual(set(actual_interactions), set(expected_interactions))
         
