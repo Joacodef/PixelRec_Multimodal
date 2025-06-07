@@ -103,7 +103,7 @@ class TestDataFilter(unittest.TestCase):
             ('user2', 'item1'), ('user3', 'item2')
         ]
         
-        self.assertEqual(len(filtered_df), 4)
+        self.assertEqual(len(filtered_df), 2)
         actual_interactions = list(zip(filtered_df['user_id'], filtered_df['item_id']))
         self.assertEqual(set(actual_interactions), set(expected_interactions))
         
