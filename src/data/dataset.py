@@ -195,8 +195,13 @@ class MultimodalDataset(Dataset):
         except FileNotFoundError:
             image = Image.new("RGB", (224, 224), color="grey")
         
-        # FIX: Always pass the image in a list to the processor for robust batching.
-        return self.image_processor(images=[image], return_tensors="pt")['pixel_values'].squeeze(0)
+        # FIX: Bypass potential bug in transformers tensor conversion by asking for a numpy array first
+        # and then converting to a tensor manually.
+        processed_np = self.image_processor(images=[image], return_tensors="np")['pixel_values']
+        
+        # The output is a numpy array with a batch dimension, e.g., (1, 3, 224, 224).
+        # Convert to a tensor and squeeze the batch dimension.
+        return torch.from_numpy(processed_np).squeeze(0)
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
         if self.interactions.empty or not hasattr(self.item_encoder, 'classes_') or len(self.item_encoder.classes_) == 0:
