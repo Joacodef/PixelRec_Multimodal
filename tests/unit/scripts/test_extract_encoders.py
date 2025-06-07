@@ -11,7 +11,7 @@ import pickle
 from sklearn.preprocessing import LabelEncoder
 
 # Add parent directory to path to import the script and src modules
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from scripts.extract_encoders import extract_encoders
 

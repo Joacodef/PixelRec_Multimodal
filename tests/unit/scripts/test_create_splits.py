@@ -12,7 +12,7 @@ import json
 import os
 
 # Add parent directory to path to import src modules and the script itself
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from scripts.create_splits import create_splits
 from src.config import Config # To verify config loading

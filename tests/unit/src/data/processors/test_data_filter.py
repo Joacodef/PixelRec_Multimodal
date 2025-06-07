@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 # Add parent directory to path to import src modules
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent.parent.parent))
 
 from src.data.processors.data_filter import DataFilter
 

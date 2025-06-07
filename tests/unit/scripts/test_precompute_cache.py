@@ -15,7 +15,7 @@ from PIL import Image
 from sklearn.preprocessing import StandardScaler
 
 # Add parent directory to path to import the script and src modules
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from scripts.precompute_cache import precompute_features_cache
 
