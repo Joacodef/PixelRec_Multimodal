@@ -3,6 +3,8 @@ data/processed/
 data/splits/
 data/cache/
 
+results/*
+
 *.csv
 *.jpg
 *.png
