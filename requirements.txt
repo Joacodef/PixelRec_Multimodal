@@ -1,4 +1,3 @@
-torch>=2.2.1
 transformers>=4.47.1
 pandas>=2.2.2
 numpy>=1.26.4
