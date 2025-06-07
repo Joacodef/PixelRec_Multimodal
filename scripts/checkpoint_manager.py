@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import torch
+import pandas as pd # FIX: Added the missing import
 
 
 def scan_checkpoints(checkpoint_dir: str) -> Dict[str, List[Path]]:
@@ -459,5 +460,4 @@ def main():
 
 
 if __name__ == '__main__':
-    import pandas as pd  # Only imported when needed
     main()
