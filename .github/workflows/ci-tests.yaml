@@ -37,4 +37,10 @@ jobs:
           # The --cov=src argument tells pytest-cov to collect coverage data for the 'src' directory.
           # The --cov-report=xml argument generates a Cobertura-format XML report for integration with other tools (e.g., Codecov).
           # The --cov-report=term-missing argument displays missing lines in the terminal output.
-          pytest tests/ --cov=src --cov-report=xml --cov-report=term-missing
+          # The --cov-append flag is used to merge coverage from multiple test runs.
+          
+          echo "--- Running Unit Tests ---"
+          pytest tests/unit/ --cov=src --cov-report=xml --cov-report=term-missing
+          
+          echo "--- Running Integration Tests ---"
+          pytest tests/integration/ --cov=src --cov-append --cov-report=xml --cov-report=term-missing
