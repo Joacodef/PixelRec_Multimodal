@@ -195,13 +195,11 @@ class MultimodalDataset(Dataset):
         except FileNotFoundError:
             image = Image.new("RGB", (224, 224), color="grey")
         
-        # FIX 2: Use torch.tensor() instead of torch.from_numpy() as a more robust
-        # workaround for the CI environment issue.
+        # FIX 3: Explicitly specify the dtype to torch.tensor() to prevent inference errors in the CI environment.
         processed_np = self.image_processor(images=[image], return_tensors="np")['pixel_values']
         
-        # The output is a numpy array with a batch dimension, e.g., (1, 3, 224, 224).
-        # Convert to a tensor and squeeze the batch dimension.
-        return torch.tensor(processed_np).squeeze(0)
+        # The image processor returns float32 data. We create a torch.float32 tensor.
+        return torch.tensor(processed_np, dtype=torch.float32).squeeze(0)
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
         if self.interactions.empty or not hasattr(self.item_encoder, 'classes_') or len(self.item_encoder.classes_) == 0:
