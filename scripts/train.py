@@ -1,4 +1,4 @@
-# scripts/train.py - Fixed version with dynamic numerical feature handling and timing
+# scripts/train.py - Final corrected version
 #!/usr/bin/env python
 """
 Training script for the simplified multimodal recommender system with dynamic numerical features
@@ -11,13 +11,12 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import pickle
 import numpy as np
-import matplotlib.pyplot as plt
-from typing import List
 import dataclasses
 import wandb
 import os
 import time
 from datetime import datetime
+from typing import List, Optional
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -182,27 +181,35 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
     print(f"  → Batch size: {training_config.batch_size}")
     print(f"  → Workers: {optimal_workers}")
     print(f"  → Pin memory: True")
-    print(f"  → Persistent workers: {optimal_workers > 0}")
     
+    loader_args = {
+        'batch_size': training_config.batch_size,
+        'num_workers': optimal_workers,
+        'pin_memory': True,
+    }
+
+    if optimal_workers > 0:
+        loader_args['persistent_workers'] = True
+        loader_args['prefetch_factor'] = 2
+        print(f"  → Persistent workers: True")
+        print(f"  → Prefetch factor: 2")
+    else:
+        print(f"  → Persistent workers: False")
+        print(f"  → Prefetch factor: None")
+
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=training_config.batch_size, 
-        shuffle=True, 
-        num_workers=optimal_workers, 
-        pin_memory=True,
-        persistent_workers=True if optimal_workers > 0 else False,  
-        prefetch_factor=2  
+        train_dataset,
+        shuffle=True,
+        **loader_args
     )
-    
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=training_config.batch_size, 
-        shuffle=False,
-        num_workers=optimal_workers, 
-        pin_memory=True,
-        persistent_workers=True if optimal_workers > 0 else False,
-        prefetch_factor=2
-    ) if len(val_dataset) > 0 else None
+
+    val_loader = None
+    if val_dataset and len(val_dataset) > 0:
+        val_loader = DataLoader(
+            val_dataset,
+            shuffle=False,
+            **loader_args
+        )
     
     print(f"  → Training batches: {len(train_loader)}")
     if val_loader:
@@ -248,6 +255,9 @@ def main():
         data_config = config.data
         model_config = config.model
         training_config = config.training
+
+        # FIX: Store the original list of numerical features before validation
+        original_numerical_features_from_config = data_config.numerical_features_cols.copy()
         
         print(f"Configuration loaded successfully:")
         print(f"  → Vision model: {model_config.vision_model}")
@@ -340,6 +350,7 @@ def main():
         
         simple_cache_instance = None
         cache_config = data_config.cache_config
+        effective_cache_dir = None
         
         if cache_config.enabled:
             # Auto-generate model-specific cache directory
@@ -744,102 +755,6 @@ def main():
         train_losses, val_losses = trainer.train(**training_params)
         training_time = time.time() - training_start_time
 
-        # Plot and save training curves
-        if train_losses and val_losses:
-            plt.figure(figsize=(12, 8))
-            
-            # Main plot
-            plt.subplot(2, 2, 1)
-            plt.plot(train_losses, label='Train Loss', linewidth=2)
-            plt.plot(val_losses, label='Validation Loss', linewidth=2)
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss')
-            plt.title('Training and Validation Loss')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            
-            # Smoothed plot (if enough epochs)
-            if len(train_losses) > 5:
-                plt.subplot(2, 2, 2)
-                # Simple moving average
-                window = min(5, len(train_losses) // 3)
-                train_smooth = pd.Series(train_losses).rolling(window=window).mean()
-                val_smooth = pd.Series(val_losses).rolling(window=window).mean()
-                
-                plt.plot(train_smooth, label=f'Train Loss (MA-{window})', linewidth=2)
-                plt.plot(val_smooth, label=f'Val Loss (MA-{window})', linewidth=2)
-                plt.xlabel('Epoch')
-                plt.ylabel('Loss')
-                plt.title('Smoothed Training Curves')
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-            
-            # Loss distribution
-            plt.subplot(2, 2, 3)
-            plt.hist(train_losses, bins=20, alpha=0.7, label='Train Loss', density=True)
-            plt.hist(val_losses, bins=20, alpha=0.7, label='Val Loss', density=True)
-            plt.xlabel('Loss Value')
-            plt.ylabel('Density')
-            plt.title('Loss Distribution')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            
-            # Training summary stats
-            plt.subplot(2, 2, 4)
-            plt.axis('off')
-            
-            # Calculate statistics
-            min_train_loss = min(train_losses)
-            min_val_loss = min(val_losses)
-            final_train_loss = train_losses[-1]
-            final_val_loss = val_losses[-1]
-            
-            stats_text = f"""Training Summary
-
-Epochs Completed: {len(train_losses)}
-Training Time: {training_time/3600:.2f} hours
-
-Final Losses:
-  Train: {final_train_loss:.6f}
-  Validation: {final_val_loss:.6f}
-
-Best Losses:
-  Train: {min_train_loss:.6f}
-  Validation: {min_val_loss:.6f}
-
-Model Config:
-  Vision: {model_config.vision_model}
-  Language: {model_config.language_model}
-  Embedding Dim: {model_config.embedding_dim}
-  Batch Size: {training_config.batch_size}
-  Learning Rate: {training_config.learning_rate}
-
-Data Stats:
-  Users: {full_dataset_for_encoders.n_users:,}
-  Items: {full_dataset_for_encoders.n_items:,}
-  Train Samples: {len(train_dataset):,}
-  Val Samples: {len(val_dataset):,}
-  Numerical Features: {num_numerical_features}"""
-            
-            plt.text(0.05, 0.95, stats_text, transform=plt.gca().transAxes,
-                    verticalalignment='top', fontfamily='monospace', fontsize=8)
-            
-            plt.tight_layout()
-            results_fig_dir = Path(config.results_dir) / 'figures'
-            results_fig_dir.mkdir(parents=True, exist_ok=True)
-            plot_path = results_fig_dir / 'training_curves.png'
-            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-            print(f"✓ Training curves saved to {plot_path}")
-            
-            if args.use_wandb and wandb.run is not None:
-                try:
-                    wandb.log({"training_validation_loss_curves": wandb.Image(str(plot_path))})
-                    print("✓ Training curves logged to wandb")
-                except Exception as e:
-                    print(f"⚠️  Failed to log training curves to wandb: {e}")
-        else:
-            print("⚠️  No training curves to plot (training may have been skipped)")
-
         # Save training metadata with validated numerical features
         training_metadata = {
             'training_completed': True,
@@ -864,10 +779,10 @@ Data Stats:
                 'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
             },
             'numerical_features_validation': {
-                'original_config_features': config.data.numerical_features_cols,
+                'original_config_features': original_numerical_features_from_config,
                 'validated_features': valid_numerical_features,
                 'num_features_used': num_numerical_features,
-                'missing_features': [col for col in config.data.numerical_features_cols if col not in valid_numerical_features]
+                'missing_features': [col for col in original_numerical_features_from_config if col not in valid_numerical_features]
             }
         }
         
@@ -889,8 +804,6 @@ Data Stats:
                 wandb.save(str(config_save_path))
                 wandb.save(str(metadata_path))
                 wandb.save(str(updated_config_path))
-                if 'plot_path' in locals():
-                    wandb.save(str(plot_path))
                 print("✓ Files saved to wandb")
             except Exception as e:
                 print(f"⚠️  Failed to save files to wandb: {e}")
