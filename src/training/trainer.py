@@ -85,7 +85,7 @@ class Trainer:
         total_epochs: int = 10
     ):
         if scheduler_type.lower() == 'reduce_on_plateau':
-            return optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=patience, factor=factor, min_lr=min_lr, verbose=True)
+            return optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=patience, factor=factor, min_lr=min_lr)
         elif scheduler_type.lower() == 'cosine':
             return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=min_lr)
         elif scheduler_type.lower() == 'step':
