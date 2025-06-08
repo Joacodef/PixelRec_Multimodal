@@ -8,7 +8,7 @@
 
 A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
 
-Please, check the docs folder if you need more information.
+
 
 ---
 
@@ -30,6 +30,8 @@ Please, check the docs folder if you need more information.
   - [Cache Management](#cache-management)
   - [Checkpoint Management](#checkpoint-management)
 - [Project Structure](#project-structure)
+
+*Please, check the docs folder if you need more information.*
 
 ## Overview
 
