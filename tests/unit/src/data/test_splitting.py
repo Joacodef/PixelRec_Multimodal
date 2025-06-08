@@ -155,6 +155,45 @@ class TestDataSplitter(unittest.TestCase):
         self.assertAlmostEqual(stats['user_overlap_ratio'], 0.5)
         self.assertAlmostEqual(stats['item_overlap_ratio'], 0.5)
 
+    def test_mixed_split(self):
+        """Tests the mixed split for creating warm and cold start evaluation sets."""
+        users = [f'u{i}' for i in range(1, 21)]  # 20 users
+        items = [f'i{i}' for i in range(1, 51)]  # 50 items
+        data = []
+        for user in users:
+            # Give users varying numbers of interactions
+            # Make first 5 users "cold" (few interactions)
+            num_interactions = np.random.randint(1, 4) if int(user[1:]) <= 5 else np.random.randint(5, 15)
+            user_items = np.random.choice(items, num_interactions, replace=False)
+            for item in user_items:
+                data.append({'user_id': user, 'item_id': item})
+        
+        complex_df = pd.DataFrame(data)
+
+        # Perform the mixed split
+        splits = self.splitter.mixed_split(
+            complex_df, 
+            cold_user_ratio=0.25, # Cold users are the bottom 25% by activity
+            cold_item_ratio=0.25,
+            train_ratio=0.8
+        )
+
+        # Verify that all expected keys are in the output dictionary
+        self.assertIn('train', splits)
+        self.assertIn('val_warm', splits)
+        self.assertIn('val_cold_user', splits)
+        self.assertIn('val_cold_item', splits)
+        self.assertIn('val_cold_both', splits)
+        
+        # Verify that the core train and validation sets are not empty
+        self.assertFalse(splits['train'].empty)
+        self.assertFalse(splits['val_warm'].empty)
+        
+        # Verify no overlap between the main train and warm validation interactions
+        train_interactions = set(map(tuple, splits['train'][['user_id', 'item_id']].values))
+        val_warm_interactions = set(map(tuple, splits['val_warm'][['user_id', 'item_id']].values))
+        self.assertTrue(train_interactions.isdisjoint(val_warm_interactions), "Train and warm validation sets should not have overlapping interactions.")
+
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

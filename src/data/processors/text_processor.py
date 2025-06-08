@@ -5,6 +5,7 @@ Modular text processing for cleaning and normalization
 import pandas as pd
 from typing import List
 from tqdm import tqdm
+import re  # Import the regular expression module
 
 from ..preprocessing import remove_html_tags, normalize_unicode_text
 from ...config import OfflineTextCleaningConfig
@@ -41,7 +42,9 @@ class TextProcessor:
         if self.config.to_lowercase:
             text = text.lower()
         
-        # Strip whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Strip leading/trailing whitespace
         text = text.strip()
         
         return text

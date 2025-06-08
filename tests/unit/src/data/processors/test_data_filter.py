@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 # Add parent directory to path to import src modules
+# This path adjustment is specific to the test execution environment.
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent.parent.parent))
 
 from src.data.processors.data_filter import DataFilter
@@ -88,16 +89,22 @@ class TestDataFilter(unittest.TestCase):
         self.assertNotIn('item4', filtered_df['item_id'].values)
         
     def test_filter_by_activity_combined(self):
-        """Test filtering by both user and item activity"""
+        """Test filtering by both user and item activity sequentially."""
         filtered_df = self.data_filter.filter_by_activity(
             self.interactions_df,
             min_user_interactions=2,
             min_item_interactions=2
         )
         
-        # After filtering items: only item1 and item2 remain
-        # After filtering users: user4 is removed
-        # Final interactions should only be those between users 1,2,3 and items 1,2
+        # Explanation of the expected outcome:
+        # 1. Filter by item activity (>=2 interactions): 'item3' (1) and 'item4' (1) are removed.
+        #    The remaining interactions involve only 'item1' and 'item2'.
+        # 2. Filter the result of step 1 by user activity (>=2 interactions):
+        #    - user1: has interactions with ('item1', 'item2') -> 2 interactions, is KEPT.
+        #    - user2: has interaction with ('item1') -> 1 interaction, is REMOVED.
+        #    - user3: has interaction with ('item2') -> 1 interaction, is REMOVED.
+        #    - user4: has interaction with ('item1') -> 1 interaction, is REMOVED.
+        # 3. Therefore, only user1's two interactions should remain in the final DataFrame.
         expected_interactions = [
             ('user1', 'item1'), ('user1', 'item2')
         ]
