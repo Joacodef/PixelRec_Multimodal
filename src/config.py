@@ -1,12 +1,20 @@
-# src/config.py - Enhanced with model-specific checkpoint paths
+# src/config.py
 """
-Configuration module with model-specific checkpoint directory support
+Defines the configuration structure for the multimodal recommender system.
+
+This module utilizes Python's dataclasses to create a hierarchical and type-safe
+configuration system. It consolidates all tunable parameters—from model
+architecture and training settings to data paths and preprocessing rules—into
+a single, manageable structure. The configuration can be easily loaded from
+and saved to YAML files, promoting reproducibility and simplifying experimentation.
 """
 from dataclasses import dataclass, field, asdict, is_dataclass, fields
 from typing import Optional, Dict, Any, List, Union
 import yaml
 from pathlib import Path
 
+# A dictionary that centralizes the configurations for various pre-trained models.
+# It stores the Hugging Face model identifier and the expected output dimension for each model.
 MODEL_CONFIGS = {
     'vision': {
         'clip': {'name': 'openai/clip-vit-base-patch32', 'dim': 768, 'text_dim': 512},
@@ -24,139 +32,212 @@ MODEL_CONFIGS = {
 
 @dataclass
 class ModelConfig:
-    """Simplified model configuration without cross-modal attention complexity"""
-    # ESSENTIAL (always required)
+    """Specifies the architecture and parameters of the recommender model."""
+    # The pre-trained vision model to use as a feature extractor.
     vision_model: str = 'resnet'
+    # The pre-trained language model to use for text feature extraction.
     language_model: str = 'sentence-bert'
+    # The dimensionality of the latent embeddings for users, items, and projected features.
     embedding_dim: int = 64
+    # If True, enables an additional contrastive loss to align vision and text representations.
     use_contrastive: bool = True
     
-    # ADVANCED (with sensible defaults)
+    # If True, the weights of the pre-trained vision model are not updated during training.
     freeze_vision: bool = True
+    # If True, the weights of the pre-trained language model are not updated during training.
     freeze_language: bool = True
+    # The temperature parameter for scaling logits in the contrastive loss function.
     contrastive_temperature: float = 0.07
+    # The dropout rate applied for regularization in the projection and fusion layers.
     dropout_rate: float = 0.3
+    # The number of parallel attention heads in the self-attention fusion mechanism.
     num_attention_heads: int = 4
+    # The dropout rate applied within the attention mechanism.
     attention_dropout: float = 0.1
+    # A list of integers defining the dimensions of the hidden layers in the final fusion network.
     fusion_hidden_dims: List[int] = field(default_factory=lambda: [512, 256, 128])
+    # The activation function used in the fusion network.
     fusion_activation: str = 'relu'
+    # If True, a batch normalization layer is added after each hidden layer in the fusion network.
     use_batch_norm: bool = True
+    # The dimension of an optional intermediate hidden layer in the modality projection networks.
     projection_hidden_dim: Optional[int] = None
+    # The activation function for the final output layer of the model.
     final_activation: str = 'sigmoid'
+    # The method used to initialize the weights of the user and item embedding layers.
     init_method: str = 'xavier_uniform'
 
 @dataclass
 class TrainingConfig:
-    """Training configuration with smart defaults"""
-    # ESSENTIAL (always required)
+    """Specifies the parameters for the model training process."""
+    # The number of samples per batch fed to the model during training.
     batch_size: int = 64
+    # The initial learning rate for the optimizer.
     learning_rate: float = 0.001
+    # The maximum number of full passes through the training dataset.
     epochs: int = 30
+    # The number of epochs to wait for improvement in validation loss before stopping the training early.
     patience: int = 10
     
-    # ADVANCED (with sensible defaults)
+    # The L2 regularization factor applied by the optimizer to prevent overfitting.
     weight_decay: float = 0.01
+    # The maximum norm for gradients, used for clipping to prevent exploding gradients.
     gradient_clip: float = 1.0
+    # The number of subprocesses to use for data loading.
     num_workers: int = 8
+    # The weight of the contrastive loss component in the final combined loss.
     contrastive_weight: float = 0.1
+    # The weight of the binary cross-entropy loss component in the final combined loss.
     bce_weight: float = 1.0
+    # If True, a learning rate scheduler will be used to adjust the learning rate during training.
     use_lr_scheduler: bool = True
+    # The type of learning rate scheduler to use.
     lr_scheduler_type: str = 'reduce_on_plateau'
+    # The number of epochs with no improvement after which the learning rate will be reduced.
     lr_scheduler_patience: int = 2
+    # The factor by which the learning rate will be reduced (new_lr = lr * factor).
     lr_scheduler_factor: float = 0.5
+    # A lower bound on the learning rate for all parameter groups.
     lr_scheduler_min_lr: float = 1e-6
+    # The optimization algorithm to use for training.
     optimizer_type: str = 'adamw'
+    # The beta1 hyperparameter for the Adam and AdamW optimizers.
     adam_beta1: float = 0.9
+    # The beta2 hyperparameter for the Adam and AdamW optimizers.
     adam_beta2: float = 0.999
+    # The epsilon hyperparameter for the Adam and AdamW optimizers for numerical stability.
     adam_eps: float = 1e-8
 
 @dataclass
 class SimpleCacheConfig:
-    """Simplified cache configuration"""
+    """Configures the caching behavior for processed item features."""
+    # If True, enables the feature caching system.
     enabled: bool = True
+    # The maximum number of items to hold in the in-memory LRU cache.
     max_memory_items: int = 1000
+    # The base directory where feature caches will be stored.
     cache_directory: str = 'data/cache/features'
+    # If True, persists the feature cache to disk for reuse across sessions.
     use_disk: bool = False
 
 @dataclass
 class TextAugmentationConfig:
-    """Text augmentation configuration with defaults"""
+    """Configures text augmentation applied during the training data loading."""
+    # If True, enables the application of text augmentation.
     enabled: bool = False
+    # The type of text augmentation to apply.
     augmentation_type: str = 'random_delete'
+    # The probability of deleting a word during 'random_delete' augmentation.
     delete_prob: float = 0.1
+    # The probability of swapping adjacent words during 'random_swap' augmentation.
     swap_prob: float = 0.1
 
 @dataclass
 class ImageValidationConfig:
-    """Image validation configuration with defaults"""
+    """Configures the validation rules for images during offline preprocessing."""
+    # If True, attempts to identify and filter out corrupted or unreadable image files.
     check_corrupted: bool = True
+    # The minimum allowed width for an image in pixels.
     min_width: int = 64
+    # The minimum allowed height for an image in pixels.
     min_height: int = 64
+    # A list of valid image file extensions to consider during processing.
     allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
 
 @dataclass
 class OfflineTextCleaningConfig:
-    """Text cleaning configuration with defaults"""
+    """Configures text cleaning rules applied during offline preprocessing."""
+    # If True, removes HTML tags from all text fields.
     remove_html: bool = True
+    # If True, normalizes Unicode characters to a standard form.
     normalize_unicode: bool = True
+    # If True, converts all text to lowercase.
     to_lowercase: bool = True
 
 @dataclass
 class DataSplittingConfig:
-    """Data splitting configuration with defaults"""
+    """Configures the strategy for splitting data into train, validation, and test sets."""
+    # The seed for the random number generator to ensure reproducible splits.
     random_state: int = 42
+    # The proportion of the data to allocate to the final training set.
     train_final_ratio: float = 0.6
+    # The proportion of the data to allocate to the final validation set.
     val_final_ratio: float = 0.2
+    # The proportion of the data to allocate to the final test set.
     test_final_ratio: float = 0.2
+    # The minimum number of interactions a user must have to be included in the dataset.
     min_interactions_per_user: int = 5
+    # The minimum number of interactions an item must have to be included in the dataset.
     min_interactions_per_item: int = 5
+    # If True, prints statistics about user and item overlap between the generated splits.
     validate_no_leakage: bool = True
 
 @dataclass
 class OfflineImageCompressionConfig:
-    """Image compression configuration with defaults"""
+    """Configures image compression rules applied during offline preprocessing."""
+    # If True, enables the image compression process.
     enabled: bool = True
+    # Only images larger than this size in kilobytes will be considered for compression.
     compress_if_kb_larger_than: int = 500
+    # The quality setting for JPEG compression, on a scale of 1-95.
     target_quality: int = 85
+    # A list [width, height] specifying the dimension thresholds for resizing.
     resize_if_pixels_larger_than: Optional[List[int]] = field(default_factory=lambda: [2048, 2048])
+    # When resizing, the longest edge of the image will be scaled down to this size in pixels.
     resize_target_longest_edge: Optional[int] = 1024
 
 @dataclass
 class DataConfig:
-    """Data configuration with smart defaults for essential vs advanced settings"""
-    # ESSENTIAL paths (must be provided)
+    """Consolidates all data-related configurations."""
+    # Path to the raw CSV file containing item metadata.
     item_info_path: str = 'data/processed/item_info.csv'
+    # Path to the raw CSV file containing user-item interactions.
     interactions_path: str = 'data/processed/interactions.csv'
+    # Path to the directory containing raw item images.
     image_folder: str = 'data/raw/images'
+    # Path where the processed item metadata CSV will be stored.
     processed_item_info_path: str = 'data/processed/item_info.csv'
+    # Path where the processed interactions CSV will be stored.
     processed_interactions_path: str = 'data/processed/interactions.csv'
+    # Base directory where train, validation, and test splits will be stored.
     split_data_path: str = 'data/splits/split_1'
+    # Full path to the final training data CSV file.
     train_data_path: str = 'data/splits/split_1/train.csv'
+    # Full path to the final validation data CSV file.
     val_data_path: str = 'data/splits/split_1/val.csv'
+    # Full path to the final test data CSV file.
     test_data_path: str = 'data/splits/split_1/test.csv'
     
-    # ESSENTIAL cache config
+    # Nested configuration for the feature caching system.
     cache_config: SimpleCacheConfig = field(default_factory=SimpleCacheConfig)
     
-    # ADVANCED settings (with defaults)
+    # Path for saving or loading the fitted numerical feature scaler.
     scaler_path: str = 'data/processed/numerical_scaler.pkl'
+    # Directory where validated and optionally compressed images are stored.
     processed_image_destination_folder: Optional[str] = 'data/processed/images'
+    # The ratio of negative samples to positive samples generated for training.
     negative_sampling_ratio: float = 1.0
+    # The method used for scaling numerical features.
     numerical_normalization_method: str = 'standardization'
+    # A list of column names in the item metadata to be used as numerical features.
     numerical_features_cols: List[str] = field(default_factory=lambda: [
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
     
-    # ADVANCED nested configs (with defaults)
+    # Nested configuration for text augmentation.
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
+    # Nested configuration for offline image compression.
     offline_image_compression: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
+    # Nested configuration for offline image validation.
     offline_image_validation: ImageValidationConfig = field(default_factory=ImageValidationConfig)
+    # Nested configuration for offline text cleaning.
     offline_text_cleaning: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
+    # Nested configuration for creating data splits.
     splitting: DataSplittingConfig = field(default_factory=DataSplittingConfig)
     
     def __post_init__(self):
-        """Set up backward compatibility properties"""
+        """Initializes properties for backward compatibility."""
         self.cache_processed_images = self.cache_config.enabled
         self.cache_features = self.cache_config.enabled
         self.cache_max_items = self.cache_config.max_memory_items
@@ -165,93 +246,131 @@ class DataConfig:
 
 @dataclass
 class RecommendationConfig:
-    """Recommendation configuration with smart defaults"""
-    # ESSENTIAL
+    """Configures parameters for recommendation generation during inference."""
+    # The number of recommendations to generate per user.
     top_k: int = 50
     
-    # ADVANCED
+    # The weight for a diversity-promoting algorithm during reranking.
     diversity_weight: float = 0.3
+    # The weight for a novelty-promoting algorithm during reranking.
     novelty_weight: float = 0.2
+    # If True, filters items the user has already seen from the final recommendations.
     filter_seen: bool = True
+    # The maximum number of candidate items to score before final ranking.
     max_candidates: int = 1000
 
 @dataclass
 class Config:
-    """Main configuration class with model-specific checkpoint paths"""
+    """The main configuration class that aggregates all other configurations."""
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: DataConfig = field(default_factory=DataConfig)
     recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
+    # The base directory where model checkpoints and encoders are saved.
     checkpoint_dir: str = 'models/checkpoints'
+    # The base directory where all results, such as logs and metrics, are saved.
     results_dir: str = 'results'
 
     @property
     def model_specific_checkpoint_dir(self) -> str:
-        """Get model-specific checkpoint directory for .pth files"""
+        """
+        Generates the path to the directory for storing model-specific checkpoints.
+        
+        Returns:
+            A string representing the path, e.g., 'models/checkpoints/resnet_sentence-bert'.
+        """
         model_combo = f"{self.model.vision_model}_{self.model.language_model}"
         return f"{self.checkpoint_dir}/{model_combo}"
     
     @property
     def shared_encoders_dir(self) -> str:
-        """Get shared encoders directory (remains in base checkpoint_dir)"""
+        """
+        Returns the path to the directory for storing shared encoder files.
+        
+        Returns:
+            A string representing the path, e.g., 'models/checkpoints/encoders'.
+        """
         return f"{self.checkpoint_dir}/encoders"
     
     def get_model_checkpoint_path(self, filename: str) -> str:
-        """Get full path for a model checkpoint file"""
+        """
+        Constructs the full path for a given model checkpoint filename.
+
+        Args:
+            filename (str): The name of the checkpoint file (e.g., 'best_model.pth').
+
+        Returns:
+            The full path to the model checkpoint file.
+        """
         return f"{self.model_specific_checkpoint_dir}/{filename}"
     
     def get_encoder_path(self, encoder_name: str) -> str:
-        """Get full path for an encoder file"""
+        """
+        Constructs the full path for a given encoder filename.
+
+        Args:
+            encoder_name (str): The name of the encoder file (e.g., 'user_encoder.pkl').
+
+        Returns:
+            The full path to the encoder file.
+        """
         return f"{self.shared_encoders_dir}/{encoder_name}"
 
     @classmethod
     def from_yaml(cls, path: str) -> 'Config':
-        """Load configuration with smart defaults for missing parameters"""
+        """
+        Loads the configuration from a YAML file.
+
+        This method populates the dataclasses with values from the YAML file.
+        If a parameter is missing in the file, it falls back to the default
+        value defined in the corresponding dataclass.
+
+        Args:
+            path (str): The file path to the YAML configuration file.
+
+        Returns:
+            A populated Config object.
+        """
         with open(path, 'r') as f:
             yaml_config = yaml.safe_load(f)
 
         def _create_with_defaults(dc_type: Any, cfg_dict: Optional[Dict]) -> Any:
-            """Create dataclass instance with defaults for missing values"""
+            """
+            Recursively creates dataclass instances, applying defaults for missing values.
+
+            Args:
+                dc_type: The dataclass type to instantiate.
+                cfg_dict: The dictionary of values loaded from YAML for this level.
+
+            Returns:
+                An instance of the specified dataclass.
+            """
             if cfg_dict is None:
                 return dc_type()
             
-            # Get default instance to use for missing values
             default_instance = dc_type()
-            
-            # Start with defaults, then update with provided values
             final_args = {}
-            
-            # Get all field names from the dataclass
             dataclass_fields = {f.name: f for f in fields(dc_type)}
             
-            # Process each field
             for field_name, field_info in dataclass_fields.items():
                 if field_name in cfg_dict:
-                    # Value provided in config
                     value = cfg_dict[field_name]
-                    
-                    # Check if this field is a nested dataclass
                     field_type_hint = field_info.type
                     actual_field_type = field_type_hint
                     
-                    # Handle Optional types
                     if getattr(field_type_hint, '__origin__', None) is Union:
                         non_none_types = [t for t in field_type_hint.__args__ if t is not type(None)]
                         if non_none_types:
                             actual_field_type = non_none_types[0]
                     
-                    # Handle nested dataclasses
                     if is_dataclass(actual_field_type) and isinstance(value, dict):
                         final_args[field_name] = _create_with_defaults(actual_field_type, value)
                     else:
                         final_args[field_name] = value
                 else:
-                    # Value not provided, use default
                     final_args[field_name] = getattr(default_instance, field_name)
             
-            # Handle special case for DataConfig cache parameters
             if dc_type == DataConfig:
-                # Convert old-style cache parameters if present
                 old_cache_keys = ['cache_features', 'cache_processed_images', 'cache_max_items', 'cache_dir', 'cache_to_disk']
                 old_cache_params = {}
                 for key in old_cache_keys:
@@ -259,7 +378,6 @@ class Config:
                         old_cache_params[key] = cfg_dict[key]
                 
                 if old_cache_params:
-                    # Create cache_config from old parameters
                     cache_enabled = old_cache_params.get('cache_features', old_cache_params.get('cache_processed_images', True))
                     final_args['cache_config'] = SimpleCacheConfig(
                         enabled=cache_enabled,
@@ -270,7 +388,6 @@ class Config:
             
             return dc_type(**final_args)
 
-        # Create config sections with smart defaults
         model_config = _create_with_defaults(ModelConfig, yaml_config.get('model'))
         training_config = _create_with_defaults(TrainingConfig, yaml_config.get('training'))
         data_config = _create_with_defaults(DataConfig, yaml_config.get('data'))
@@ -286,7 +403,15 @@ class Config:
         )
 
     def to_yaml(self, path: str):
-        """Save configuration to YAML"""
+        """
+        Saves the current configuration object to a YAML file.
+
+        This method recursively converts the nested dataclasses into a dictionary
+        and then serializes it to a human-readable YAML file.
+
+        Args:
+            path (str): The destination file path for the YAML output.
+        """
         def as_dict_recursive(data_obj: Any) -> Any:
             if is_dataclass(data_obj):
                 result = {}
@@ -309,7 +434,13 @@ class Config:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
     def get_model_info(self) -> Dict[str, Any]:
-        """Get model information"""
+        """
+        Retrieves detailed information about the configured models.
+
+        Returns:
+            A dictionary containing the key names, Hugging Face model names,
+            and output dimensions for the selected vision and language models.
+        """
         vision_model_key = self.model.vision_model
         language_model_key = self.model.language_model
         return {

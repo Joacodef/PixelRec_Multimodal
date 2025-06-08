@@ -1,6 +1,10 @@
 # src/training/trainer.py
 """
-Training logic for multimodal recommender with configurable optimizer and scheduler
+Contains the training and validation logic for the multimodal recommender model.
+
+This module defines the Trainer class, which encapsulates the entire training
+process, including the training loop, validation, optimization, learning rate
+scheduling, and checkpoint management.
 """
 import torch
 import torch.nn as nn
@@ -17,7 +21,13 @@ from ..models.losses import MultimodalRecommenderLoss
 
 
 class Trainer:
-    """Trainer class for multimodal recommender"""
+    """
+    Manages the training process for a multimodal recommender model.
+
+    This class handles the training and validation loops, optimizer and scheduler
+    creation, checkpoint saving and loading, metric logging, and early stopping.
+    It is designed to be configurable to support various training setups.
+    """
 
     def __init__(
         self,
@@ -27,11 +37,24 @@ class Trainer:
         use_contrastive: bool = True,
         model_config: Optional[object] = None
     ):
+        """
+        Initializes the Trainer instance.
+
+        Args:
+            model (nn.Module): The PyTorch model to be trained.
+            device (torch.device): The device (CPU or GPU) to run the training on.
+            checkpoint_dir (str): The base directory to save model checkpoints and encoders.
+            use_contrastive (bool): Flag to determine if contrastive loss should be used.
+            model_config (Optional[object]): A configuration object containing model
+                                              details, used to create model-specific
+                                              checkpoint directories.
+        """
         self.model = model
         self.device = device
         self.base_checkpoint_dir = Path(checkpoint_dir)
         self.model_config = model_config
         
+        # Creates a model-specific directory for checkpoints to keep experiments organized.
         if model_config and hasattr(model_config, 'vision_model') and hasattr(model_config, 'language_model'):
             model_combo = f"{model_config.vision_model}_{model_config.language_model}"
             self.model_checkpoint_dir = self.base_checkpoint_dir / model_combo
@@ -40,6 +63,7 @@ class Trainer:
             if model_config is None:
                 print("Warning: No model config provided to Trainer. Using base checkpoint directory.")
         
+        # Defines a separate directory for shared encoder files.
         self.encoders_dir = self.base_checkpoint_dir / 'encoders'
         
         self.model_checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -49,7 +73,10 @@ class Trainer:
         print(f"  → Model checkpoints (.pth): {self.model_checkpoint_dir}")
         print(f"  → Shared encoders: {self.encoders_dir}")
         
+        # Initializes the loss function.
         self.criterion = MultimodalRecommenderLoss(use_contrastive=use_contrastive)
+        
+        # Initializes training state variables.
         self.epoch = 0
         self.best_val_loss = float('inf')
         self.patience_counter = 0
@@ -65,6 +92,20 @@ class Trainer:
         adam_beta2: float = 0.999,
         adam_eps: float = 1e-8
     ) -> optim.Optimizer:
+        """
+        Creates an optimizer based on the specified configuration.
+
+        Args:
+            lr (float): The learning rate.
+            weight_decay (float): The weight decay (L2 penalty) factor.
+            optimizer_type (str): The type of optimizer to create ('adamw', 'adam', 'sgd').
+            adam_beta1 (float): The beta1 parameter for Adam-based optimizers.
+            adam_beta2 (float): The beta2 parameter for Adam-based optimizers.
+            adam_eps (float): The epsilon parameter for Adam-based optimizers for numerical stability.
+
+        Returns:
+            optim.Optimizer: An initialized PyTorch optimizer.
+        """
         if optimizer_type.lower() == 'adamw':
             return optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay, betas=(adam_beta1, adam_beta2), eps=adam_eps)
         elif optimizer_type.lower() == 'adam':
@@ -84,6 +125,20 @@ class Trainer:
         min_lr: float = 1e-6,
         total_epochs: int = 10
     ):
+        """
+        Creates a learning rate scheduler.
+
+        Args:
+            optimizer (optim.Optimizer): The optimizer to which the scheduler will be attached.
+            scheduler_type (str): The type of scheduler ('reduce_on_plateau', 'cosine', 'step').
+            patience (int): The patience for the scheduler.
+            factor (float): The factor by which the learning rate will be reduced.
+            min_lr (float): The minimum learning rate.
+            total_epochs (int): The total number of epochs, used by some schedulers like 'cosine'.
+
+        Returns:
+            A PyTorch learning rate scheduler.
+        """
         if scheduler_type.lower() == 'reduce_on_plateau':
             return optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=patience, factor=factor, min_lr=min_lr)
         elif scheduler_type.lower() == 'cosine':
@@ -113,6 +168,31 @@ class Trainer:
         lr_scheduler_factor: float = 0.5,
         lr_scheduler_min_lr: float = 1e-6
     ) -> Tuple[List[float], List[float]]:
+        """
+        Executes the main training loop for a specified number of epochs.
+
+        Args:
+            train_loader (DataLoader): The DataLoader for the training set.
+            val_loader (Optional[DataLoader]): The DataLoader for the validation set.
+            epochs (int): The total number of epochs to train for.
+            lr (float): The learning rate.
+            weight_decay (float): The L2 regularization factor.
+            patience (int): The number of epochs to wait for validation loss improvement before early stopping.
+            gradient_clip (float): The maximum norm for gradient clipping.
+            optimizer_type (str): The type of optimizer to use.
+            adam_beta1 (float): The beta1 parameter for Adam optimizers.
+            adam_beta2 (float): The beta2 parameter for Adam optimizers.
+            adam_eps (float): The epsilon parameter for Adam optimizers.
+            use_lr_scheduler (bool): Whether to use a learning rate scheduler.
+            lr_scheduler_type (str): The type of learning rate scheduler.
+            lr_scheduler_patience (int): The patience for the learning rate scheduler.
+            lr_scheduler_factor (float): The factor for reducing the learning rate.
+            lr_scheduler_min_lr (float): The minimum learning rate.
+
+        Returns:
+            Tuple[List[float], List[float]]: A tuple containing the list of training
+                                             losses and validation losses for each epoch.
+        """
         
         optimizer = self._create_optimizer(
             lr=lr, weight_decay=weight_decay, optimizer_type=optimizer_type,
@@ -133,10 +213,12 @@ class Trainer:
         for epoch_num in range(self.epoch, epochs): 
             self.epoch = epoch_num
 
+            # Executes one full pass over the training data.
             train_metrics = self._train_epoch(train_loader, optimizer, gradient_clip)
             train_losses.append(train_metrics['total_loss'])
 
             validation_performed_this_epoch = False
+            # Executes one full pass over the validation data, if available.
             if val_loader is not None and len(val_loader) > 0:
                 val_metrics = self._validate_epoch(val_loader)
                 if 'total_loss' in val_metrics:
@@ -150,8 +232,10 @@ class Trainer:
                 val_metrics = {'total_loss': np.nan, 'bce_loss': np.nan, 'accuracy': 0.0, 'contrastive_loss': np.nan} 
                 val_losses.append(np.nan)
 
+            # Logs metrics to Weights & Biases if enabled.
             self._log_metrics(train_metrics, val_metrics, self.epoch)
 
+            # Steps the learning rate scheduler.
             if self.scheduler is not None:
                 if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                     if validation_performed_this_epoch and not np.isnan(val_metrics['total_loss']):
@@ -159,14 +243,17 @@ class Trainer:
                 else: 
                     self.scheduler.step()
             
+            # Checks for early stopping criteria.
             if validation_performed_this_epoch and not np.isnan(val_metrics['total_loss']):
                 if self._check_early_stopping(val_metrics['total_loss'], patience):
                     print(f"Early stopping at epoch {self.epoch+1}")
                     self.save_checkpoint('last_model.pth')
                     break 
             
+            # Saves a checkpoint at the end of each epoch.
             self.save_checkpoint('last_model.pth')
             
+            # Prints a summary of the epoch's performance.
             self._print_epoch_summary(self.epoch, epochs, train_metrics, val_metrics)
 
         return train_losses, val_losses
@@ -177,6 +264,20 @@ class Trainer:
         optimizer: optim.Optimizer,
         gradient_clip: float
     ) -> Dict[str, float]:
+        """
+        Performs a single training epoch.
+
+        This method iterates over the training DataLoader, performs forward and
+        backward passes, updates model weights, and computes training metrics.
+
+        Args:
+            train_loader (DataLoader): The DataLoader for the training data.
+            optimizer (optim.Optimizer): The optimizer for updating model weights.
+            gradient_clip (float): The value for gradient norm clipping.
+
+        Returns:
+            Dict[str, float]: A dictionary containing the average metrics for the epoch.
+        """
         self.model.train()
         
         total_loss_val, bce_loss_val, contrastive_loss_val = 0.0, 0.0, 0.0
@@ -200,6 +301,7 @@ class Trainer:
             vision_features_for_loss = None
             text_features_for_loss = None
 
+            # Determines how to call the model based on whether contrastive loss is active.
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                 model_call_args['return_embeddings'] = True
                 output_tuple = self.model(**model_call_args)
@@ -210,6 +312,7 @@ class Trainer:
             
             output = output_before_squeeze.squeeze(-1)
             
+            # Computes the loss.
             loss_dict = self.criterion(
                 output, batch['label'], 
                 vision_features_for_loss,
@@ -217,11 +320,13 @@ class Trainer:
                 self.model.temperature if hasattr(self.model, 'temperature') else None
             )
             
+            # Performs the backward pass and optimizer step if the loss is finite.
             if torch.isfinite(loss_dict['total']):
                 loss_dict['total'].backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip)
                 optimizer.step()
                 
+                # Accumulates metrics for the epoch.
                 total_loss_val += loss_dict['total'].item()
                 bce_loss_val += loss_dict['bce'].item()
                 contrastive_loss_val += loss_dict.get('contrastive', torch.tensor(0.0)).item()
@@ -235,10 +340,12 @@ class Trainer:
 
             total_samples += batch['label'].size(0)
 
+            # Updates the progress bar with the current loss and accuracy.
             current_loss_display = loss_dict['total'].item() if torch.isfinite(loss_dict['total']) else float('nan')
             current_accuracy = correct_preds / valid_batches if valid_batches > 0 else 0
             progress_bar.set_postfix({'loss': f"{current_loss_display:.4f}", 'acc': f"{current_accuracy:.4f}"})
         
+        # Calculates the average metrics for the entire epoch.
         avg_total_loss = total_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_bce_loss = bce_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_contrastive_loss = contrastive_loss_val / valid_batches if valid_batches > 0 else float('nan')
@@ -252,6 +359,18 @@ class Trainer:
         }
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
+        """
+        Performs a single validation epoch.
+
+        This method iterates over the validation DataLoader, performs a forward
+        pass, and computes validation metrics. No weight updates are performed.
+
+        Args:
+            val_loader (DataLoader): The DataLoader for the validation data.
+
+        Returns:
+            Dict[str, float]: A dictionary containing the average validation metrics.
+        """
         self.model.eval()
         
         total_loss_val, bce_loss_val, contrastive_loss_val_val = 0.0, 0.0, 0.0
@@ -316,9 +435,26 @@ class Trainer:
         }
 
     def _batch_to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        Moves all tensors in a batch to the configured device.
+
+        Args:
+            batch (Dict[str, torch.Tensor]): A dictionary of tensors.
+
+        Returns:
+            Dict[str, torch.Tensor]: The batch with all tensors moved to the correct device.
+        """
         return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
 
     def _log_metrics(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], current_epoch: int):
+        """
+        Logs training and validation metrics to Weights & Biases.
+
+        Args:
+            train_metrics (Dict[str, float]): A dictionary of training metrics.
+            val_metrics (Dict[str, float]): A dictionary of validation metrics.
+            current_epoch (int): The current epoch number.
+        """
         try:
             if wandb.run is not None:
                 wandb_log_data = {}
@@ -332,6 +468,16 @@ class Trainer:
         except Exception as e: print(f"Warning: Failed to log to wandb: {e}")
 
     def _check_early_stopping(self, val_loss: float, patience: int) -> bool:
+        """
+        Checks if the early stopping criteria have been met.
+
+        Args:
+            val_loss (float): The validation loss for the current epoch.
+            patience (int): The number of epochs to wait for improvement.
+
+        Returns:
+            bool: True if training should stop, False otherwise.
+        """
         if np.isnan(val_loss): return False 
 
         if val_loss < self.best_val_loss:
@@ -344,6 +490,15 @@ class Trainer:
             return self.patience_counter >= patience
 
     def _print_epoch_summary(self, current_epoch: int, total_epochs: int, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
+        """
+        Prints a formatted summary of the completed epoch's results.
+
+        Args:
+            current_epoch (int): The current epoch number.
+            total_epochs (int): The total number of epochs for the training run.
+            train_metrics (Dict[str, float]): Metrics from the training epoch.
+            val_metrics (Dict[str, float]): Metrics from the validation epoch.
+        """
         train_contrastive_loss = train_metrics.get('contrastive_loss', 0.0)
         val_contrastive_loss = val_metrics.get('contrastive_loss', np.nan)
 
@@ -364,6 +519,13 @@ class Trainer:
         print("-" * 50)
 
     def save_checkpoint(self, filename: str, is_best: bool = False):
+        """
+        Saves the model and optimizer state to a checkpoint file.
+
+        Args:
+            filename (str): The name of the checkpoint file.
+            is_best (bool): If True, indicates that this is the best model so far based on validation loss.
+        """
         checkpoint = {'epoch': self.epoch, 'model_state_dict': self.model.state_dict(), 'best_val_loss': self.best_val_loss}
         if self.optimizer: checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
         if self.scheduler: checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
@@ -376,6 +538,12 @@ class Trainer:
             except Exception as e: print(f"Warning: Failed to save checkpoint to wandb: {e}")
 
     def load_checkpoint(self, filename: str):
+        """
+        Loads the model and optimizer state from a checkpoint file.
+
+        Args:
+            filename (str): The name of the checkpoint file to load.
+        """
         path = self.model_checkpoint_dir / filename
         if not path.exists(): 
             print(f"Warning: Checkpoint file not found at {path}"); return
@@ -401,12 +569,30 @@ class Trainer:
         print(f"Loaded checkpoint from {path} (epoch {self.epoch})")
 
     def get_learning_rate(self) -> float:
+        """
+        Retrieves the current learning rate from the optimizer.
+
+        Returns:
+            float: The current learning rate.
+        """
         if self.optimizer is None: return 0.0
         for param_group in self.optimizer.param_groups: return param_group['lr']
         return 0.0
 
     def get_model_checkpoint_dir(self) -> Path:
+        """
+        Returns the path to the model-specific checkpoint directory.
+
+        Returns:
+            Path: The Path object for the directory.
+        """
         return self.model_checkpoint_dir
 
     def get_encoders_dir(self) -> Path:
+        """
+        Returns the path to the shared encoders directory.
+
+        Returns:
+            Path: The Path object for the directory.
+        """
         return self.encoders_dir

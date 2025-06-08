@@ -1,13 +1,23 @@
 #!/usr/bin/env python
 """
-Simplified preprocessing script using modular processors
+A comprehensive data preprocessing script for the multimodal recommender system.
+
+This script executes a sequential pipeline to clean, validate, filter, and
+transform raw interaction and item data into a state suitable for model
+training and evaluation. It leverages a series of modular processors to handle
+specific tasks such as text cleaning, image validation and compression,
+numerical feature scaling, and data filtering based on activity levels.
+The entire process is driven by a YAML configuration file, ensuring that
+all preprocessing steps are reproducible and configurable.
 """
 import argparse
 import pandas as pd
 from pathlib import Path
 import sys
 
-# Add parent directory to path
+# Adds the project's root directory to the system path.
+# This allows the script to import modules from the 'src' directory (e.g., config, processors)
+# when executed from the command line, regardless of the current working directory.
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config
@@ -19,13 +29,27 @@ from src.data.processors.feature_cache_processor import FeatureCacheProcessor
 
 
 class PreprocessingPipeline:
-    """Main preprocessing pipeline using modular processors"""
-    
+    """
+    Orchestrates the entire data preprocessing workflow.
+
+    This class encapsulates the logic for loading raw data, applying a series
+    of processing and validation steps using modular processors, and saving
+    the final, cleaned datasets. Each step is designed to be a distinct
+    function, making the pipeline easy to understand and maintain.
+    """
+
     def __init__(self, config: Config):
+        """
+        Initializes the PreprocessingPipeline with all necessary processors.
+
+        Args:
+            config: A Config object loaded from a YAML file, containing all
+                    necessary paths and settings for the preprocessing steps.
+        """
         self.config = config
         self.data_config = config.data
         
-        # Initialize processors
+        # Initializes all modular processors with their respective configurations.
         self.image_processor = ImageProcessor(
             self.data_config.offline_image_compression,
             self.data_config.offline_image_validation
@@ -39,70 +63,90 @@ class PreprocessingPipeline:
             getattr(self.data_config, 'processed_features_cache_config', None)
         )
         
-        # Define text columns (can be made configurable)
+        # Defines the columns that will be subjected to text cleaning.
         self.text_columns = ['title', 'tag', 'description']
     
     def run_full_pipeline(self):
-        """Execute the complete preprocessing pipeline"""
+        """
+        Executes the complete preprocessing pipeline in a defined order.
+
+        This method serves as the main entry point for the class, calling each
+        preprocessing step sequentially. It handles the flow of data from one
+        step to the next, ensuring that all transformations are applied
+        correctly before the final data is saved.
+        """
         print("=" * 60)
         print("Starting Preprocessing Pipeline")
         print("=" * 60)
         
-        # Step 1: Load raw data
+        # Step 1: Load raw data from the paths specified in the config.
         print("\n1. Loading raw data...")
         item_info_df, interactions_df = self._load_raw_data()
         
-        # Step 2: Clean text data
+        # Step 2: Clean and normalize text fields in the item metadata.
         print("\n2. Cleaning text data...")
         item_info_df = self._clean_text_data(item_info_df)
         
-        # Step 3: Process and validate images
+        # Step 3: Validate images, copy valid ones, and get the list of valid item IDs.
         print("\n3. Processing and validating images...")
         valid_item_ids = self._process_images(item_info_df)
         
+        # Halts execution if no items have valid images, as they are crucial for the model.
         if not valid_item_ids:
             print("ERROR: No valid items after image processing!")
             sys.exit(1)
         
-        # Step 4: Filter data by valid items
+        # Step 4: Filter both item and interaction dataframes to keep only items with valid images.
         print("\n4. Filtering data by valid items...")
         item_info_df, interactions_df = self._filter_by_valid_items(
             item_info_df, interactions_df, valid_item_ids
         )
         
-        # Step 5: Filter by activity levels
+        # Step 5: Filter out users and items that do not meet minimum interaction counts.
         print("\n5. Filtering by activity levels...")
         interactions_df = self._filter_by_activity(interactions_df)
         
+        # Halts execution if no interactions remain after activity filtering.
         if interactions_df.empty:
             print("ERROR: No interactions remaining after filtering!")
             sys.exit(1)
         
-        # Step 6: Align item info with final interactions
+        # Step 6: Ensure the item metadata only contains items present in the final interaction set.
         print("\n6. Aligning item info with interactions...")
         item_info_df = self._align_item_info(item_info_df, interactions_df)
         
-        # Step 7: Process numerical features
+        # Step 7: Fit a scaler on the numerical features and save it for later use.
         print("\n7. Processing numerical features...")
         self._process_numerical_features(item_info_df)
         
-        # Step 8: Save processed data
+        # Step 8: Save the final, processed dataframes to disk.
         print("\n8. Saving processed data...")
         self._save_processed_data(item_info_df, interactions_df)
         
-        # Step 9: Cache features (optional)
+        # Step 9: Pre-compute and cache features if enabled in the configuration.
         print("\n9. Caching features...")
         self._cache_features_if_enabled(item_info_df)
         
-        # Step 10: Print summary
+        # Step 10: Print a summary of the final dataset statistics.
         self._print_summary(item_info_df, interactions_df)
         
         print("\n" + "=" * 60)
         print("Preprocessing Pipeline Completed Successfully!")
         print("=" * 60)
     
-    def _load_raw_data(self):
-        """Load raw item info and interactions data"""
+    def _load_raw_data(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Loads the raw item info and interactions data from CSV files.
+
+        This function reads the raw data files specified in the configuration,
+        ensures that key ID columns are treated as strings, and handles potential
+        NaN values in numerical columns by filling them with zero.
+
+        Returns:
+            A tuple containing two pandas DataFrames:
+            - The raw item information.
+            - The raw user-item interactions.
+        """
         item_info_path = Path(self.data_config.item_info_path)
         interactions_path = Path(self.data_config.interactions_path)
         
@@ -115,13 +159,14 @@ class PreprocessingPipeline:
         interactions_df['item_id'] = interactions_df['item_id'].astype(str)
         interactions_df['user_id'] = interactions_df['user_id'].astype(str)
         
+        # Checks for and handles missing values in numerical feature columns.
         print("\nChecking for NaN values in numerical columns...")
         for col in self.data_config.numerical_features_cols:
             if col in item_info_df.columns:
                 nan_count = item_info_df[col].isna().sum()
                 if nan_count > 0:
                     print(f"WARNING: {nan_count} NaN values found in column '{col}'")
-                    # Fill NaN values with 0 or median
+                    # Fills missing numerical values with 0.
                     item_info_df[col] = item_info_df[col].fillna(0)
                     print(f"Filled NaN values in '{col}' with 0")
 
@@ -129,14 +174,38 @@ class PreprocessingPipeline:
         
         return item_info_df, interactions_df
     
-    def _clean_text_data(self, item_info_df):
-        """Clean text columns in item info"""
+    def _clean_text_data(self, item_info_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Cleans the text columns of the item metadata DataFrame.
+
+        This function utilizes the TextProcessor to apply cleaning operations
+        like removing HTML tags, normalizing unicode, and converting text to
+        lowercase, based on the settings in the configuration file.
+
+        Args:
+            item_info_df: The item metadata DataFrame with raw text columns.
+
+        Returns:
+            The item metadata DataFrame with cleaned text columns.
+        """
         return self.text_processor.clean_dataframe_text_columns(
             item_info_df, self.text_columns
         )
     
-    def _process_images(self, item_info_df):
-        """Process and validate images, return valid item IDs"""
+    def _process_images(self, item_info_df: pd.DataFrame) -> set:
+        """
+        Processes and validates all images corresponding to the items.
+
+        This function uses the ImageProcessor to check each item's image for
+        corruption and dimension requirements. Valid images are optionally
+        compressed and copied to a processed images directory.
+
+        Args:
+            item_info_df: The DataFrame containing the list of item IDs.
+
+        Returns:
+            A set of item IDs that have a valid, processed image.
+        """
         source_folder = Path(self.data_config.image_folder)
         dest_folder = Path(self.data_config.processed_image_destination_folder)
         
@@ -148,9 +217,22 @@ class PreprocessingPipeline:
         
         return valid_item_ids
     
-    def _filter_by_valid_items(self, item_info_df, interactions_df, valid_item_ids):
-        """Filter dataframes to only include valid items"""
-        # Filter item info
+    def _filter_by_valid_items(self, item_info_df: pd.DataFrame, interactions_df: pd.DataFrame, valid_item_ids: set) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Filters both item and interaction DataFrames based on a set of valid item IDs.
+
+        This step ensures that both datasets only contain entries corresponding
+        to items that have successfully passed the image validation stage.
+
+        Args:
+            item_info_df: The DataFrame of item metadata.
+            interactions_df: The DataFrame of user-item interactions.
+            valid_item_ids: A set of item IDs that are considered valid.
+
+        Returns:
+            A tuple containing the filtered item_info_df and interactions_df.
+        """
+        # Filters the item metadata DataFrame.
         original_item_count = len(item_info_df)
         item_info_df = item_info_df[
             item_info_df['item_id'].astype(str).isin(valid_item_ids)
@@ -159,89 +241,136 @@ class PreprocessingPipeline:
         print(f"Item info filtering: {len(item_info_df)} items remaining "
               f"out of {original_item_count}")
         
-        # Filter interactions
+        # Filters the interactions DataFrame using the DataFilter processor.
         interactions_df = self.data_filter.filter_interactions_by_valid_items(
             interactions_df, valid_item_ids
         )
         
         return item_info_df, interactions_df
     
-    def _filter_by_activity(self, interactions_df):
-        """Filter interactions by user and item activity"""
+    def _filter_by_activity(self, interactions_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Filters the interactions DataFrame by user and item activity levels.
+
+        This function uses the DataFilter processor to remove users and items
+        that do not meet the minimum interaction thresholds defined in the
+        configuration, which helps in reducing data sparsity.
+
+        Args:
+            interactions_df: The interactions DataFrame to be filtered.
+
+        Returns:
+            The filtered interactions DataFrame.
+        """
         return self.data_filter.filter_by_activity(
             interactions_df,
             min_user_interactions=self.data_config.splitting.min_interactions_per_user,
             min_item_interactions=self.data_config.splitting.min_interactions_per_item
         )
     
-    def _align_item_info(self, item_info_df, interactions_df):
-        """Align item info with final interactions"""
+    def _align_item_info(self, item_info_df: pd.DataFrame, interactions_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Aligns the item metadata with the final set of interactions.
+
+        After filtering interactions, this function ensures that the item_info
+        DataFrame only contains metadata for items that are still present in
+        the interactions dataset, preventing unused item data.
+
+        Args:
+            item_info_df: The current item metadata DataFrame.
+            interactions_df: The final, filtered interactions DataFrame.
+
+        Returns:
+            The aligned item metadata DataFrame.
+        """
         return self.data_filter.align_item_info_with_interactions(
             item_info_df, interactions_df
         )
     
-    def _process_numerical_features(self, item_info_df):
-        """Process numerical features and save scaler"""
+    def _process_numerical_features(self, item_info_df: pd.DataFrame):
+        """
+        Fits a numerical feature scaler and saves it to disk.
+
+        This function uses the NumericalProcessor to fit a scaler (e.g.,
+        StandardScaler) on the specified numerical feature columns from the
+        item data. The fitted scaler is then saved to a file so that the
+        exact same transformation can be applied during model training and inference.
+
+        Args:
+            item_info_df: The final, filtered DataFrame of item metadata.
+        """
         numerical_cols = self.data_config.numerical_features_cols
         method = self.data_config.numerical_normalization_method
         scaler_path = Path(self.data_config.scaler_path)
         
+        # Skips the process if no numerical columns are specified in the config.
         if not numerical_cols:
             print("No numerical columns specified. Skipping scaler processing.")
             return
 
-        # First, fill NaN values
+        # Ensures all numerical columns have no NaN values before scaling.
         for col in numerical_cols:
             if col in item_info_df.columns:
-                # Fill NaN with 0 or median
+                # Fills any remaining NaNs with 0.
                 item_info_df[col] = item_info_df[col].fillna(0)
         
-        # Then fit and apply scaler
+        # Fits and saves the scaler unless the method is 'none'.
         if self.data_config.numerical_normalization_method != 'none':
-            # This should already be happening, but make sure it's working
-            self.numerical_processor.fit_scaler(
-                item_info_df, 
-                numerical_cols, 
-                self.data_config.numerical_normalization_method
-        )
+            # Checks if a scaler already exists to avoid re-fitting unnecessarily.
+            if scaler_path.exists():
+                print(f"Loading existing scaler from {scaler_path}")
+                self.numerical_processor.load_scaler(scaler_path)
+            else:
+                print(f"Fitting new scaler with method: {method}")
+                self.numerical_processor.fit_scaler(item_info_df, numerical_cols, method)
+                self.numerical_processor.save_scaler(scaler_path)
         
-        # Check if scaler already exists
-        if scaler_path.exists():
-            print(f"Loading existing scaler from {scaler_path}")
-            self.numerical_processor.load_scaler(scaler_path)
-        else:
-            print(f"Fitting new scaler with method: {method}")
-            self.numerical_processor.fit_scaler(item_info_df, numerical_cols, method)
-            self.numerical_processor.save_scaler(scaler_path)
-        
-        # Print scaler info
+        # Prints information about the scaler that was used or loaded.
         scaler_info = self.numerical_processor.get_scaler_info()
         print(f"Scaler info: {scaler_info}")
     
-    def _save_processed_data(self, item_info_df, interactions_df):
-        """Save processed data to configured paths"""
-        # Ensure output directories exist
+    def _save_processed_data(self, item_info_df: pd.DataFrame, interactions_df: pd.DataFrame):
+        """
+        Saves the processed DataFrames to their final destination paths.
+
+        This function ensures the output directories exist and then writes the
+        cleaned and filtered item metadata and interaction data to CSV files.
+
+        Args:
+            item_info_df: The final processed item metadata DataFrame.
+            interactions_df: The final processed interactions DataFrame.
+        """
         item_info_path = Path(self.data_config.processed_item_info_path)
         interactions_path = Path(self.data_config.processed_interactions_path)
         
+        # Ensures that the directories for the output files exist.
         item_info_path.parent.mkdir(parents=True, exist_ok=True)
         interactions_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Save processed data
+        # Saves the final DataFrames to CSV files.
         print(f"Saving processed item info to: {item_info_path}")
         item_info_df.to_csv(item_info_path, index=False)
         
         print(f"Saving processed interactions to: {interactions_path}")
         interactions_df.to_csv(interactions_path, index=False)
     
-    def _cache_features_if_enabled(self, item_info_df):
-        """Cache features if caching is enabled"""
+    def _cache_features_if_enabled(self, item_info_df: pd.DataFrame):
+        """
+        Pre-computes and caches features if enabled in the configuration.
+
+        This function initializes a temporary dataset instance to process and
+        cache multimodal features, which can significantly speed up subsequent
+        model training.
+
+        Args:
+            item_info_df: The final processed item metadata DataFrame.
+        """
         if not hasattr(self.data_config, 'processed_features_cache_config'):
             print("Feature caching not configured. Skipping.")
             return
         
         try:
-            # Create temporary dataset for feature extraction
+            # A temporary dataset instance is created solely for feature extraction logic.
             from src.data.dataset import MultimodalDataset
             
             print("Creating temporary dataset for feature extraction...")
@@ -264,7 +393,7 @@ class PreprocessingPipeline:
                 cache_features=False
             )
 
-            # Precompute features
+            # The FeatureCacheProcessor handles the actual computation and saving.
             success = self.feature_cache_processor.precompute_features(
                 item_info_df, temp_dataset
             )
@@ -278,23 +407,23 @@ class PreprocessingPipeline:
             print(f"Error during feature caching: {e}")
             print("Continuing without feature caching...")
 
-    def clean_invalid_items(item_info_df, numerical_cols):
-        """Remove items where all numerical features are NaN"""
-        # Check which items have all NaN values
-        all_nan_mask = item_info_df[numerical_cols].isna().all(axis=1)
-        invalid_items = item_info_df[all_nan_mask]['item_id'].tolist()
+    def _print_summary(self, item_info_df: pd.DataFrame, interactions_df: pd.DataFrame):
+        """
+        Prints a final summary of the preprocessing results.
+
+        This function displays key statistics about the final datasets, such as
+        the number of items, interactions, and unique users, providing a quick
+        overview of the preprocessing outcome.
+
+        Args:
+            item_info_df: The final processed item metadata DataFrame.
+            interactions_df: The final processed interactions DataFrame.
+        """
+        # Retrieves the scaler type for the summary.
+        scaler_type = self.numerical_processor.get_scaler_info()['scaler_type'] if self.numerical_processor.scaler else 'None'
         
-        if invalid_items:
-            print(f"Found {len(invalid_items)} items with all NaN values: {invalid_items[:5]}...")
-            # Remove these items
-            item_info_df = item_info_df[~all_nan_mask]
-            print(f"Removed invalid items. Remaining items: {len(item_info_df)}")
-    
-        return item_info_df
-    
-    def _print_summary(self, item_info_df, interactions_df):
-        """Print preprocessing summary"""
-        print(f"""
+        # Formats and prints the final statistics.
+        summary_text = f"""
             Preprocessing Summary:
             ---------------------
             ✓ Final item count: {len(item_info_df)}
@@ -302,12 +431,19 @@ class PreprocessingPipeline:
             ✓ Unique users: {interactions_df['user_id'].nunique()}
             ✓ Unique items in interactions: {interactions_df['item_id'].nunique()}
             ✓ Processed images directory: {self.data_config.processed_image_destination_folder}
-            ✓ Numerical scaler: {self.numerical_processor.get_scaler_info()['scaler_type'] if self.numerical_processor.scaler else 'None'}
-                    """)
+            ✓ Numerical scaler: {scaler_type}
+        """
+        print(summary_text)
 
 
 def main():
-    """Main function for preprocessing"""
+    """
+    Main function to execute the preprocessing pipeline from the command line.
+
+    This function parses command-line arguments, loads the specified
+    configuration, and runs the entire preprocessing pipeline. It allows for
+    overriding certain configuration settings via flags.
+    """
     parser = argparse.ArgumentParser(description="Modular data preprocessing pipeline")
     parser.add_argument(
         '--config',
@@ -328,18 +464,18 @@ def main():
     
     args = parser.parse_args()
     
-    # Load configuration
+    # Loads the configuration from the specified YAML file.
     config = Config.from_yaml(args.config)
     print(f"Loaded configuration from: {args.config}")
     
-    # Modify config based on arguments
+    # Modifies the loaded configuration based on command-line arguments.
     if args.skip_caching:
-        # Disable caching in config
+        # Dynamically removes the caching configuration if the flag is set.
         if hasattr(config.data, 'processed_features_cache_config'):
             delattr(config.data, 'processed_features_cache_config')
         print("Feature caching disabled by --skip-caching flag")
     
-    # Create and run preprocessing pipeline
+    # Creates an instance of the pipeline and runs it.
     pipeline = PreprocessingPipeline(config)
     pipeline.run_full_pipeline()
 

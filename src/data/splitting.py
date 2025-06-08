@@ -1,6 +1,11 @@
 # src/data/splitting.py
 """
-Improved data splitting strategies for recommender systems
+Provides a collection of data splitting strategies tailored for recommender systems.
+
+This module contains the DataSplitter class, which implements various methods
+for dividing interaction data into training and validation sets. Each strategy
+serves a different evaluation purpose, from evaluating performance on new users
+and items (cold-start) to simulating a production environment with temporal splits.
 """
 import pandas as pd
 import numpy as np
@@ -11,9 +16,22 @@ from collections import defaultdict
 
 
 class DataSplitter:
-    """Handles various data splitting strategies for recommender systems"""
+    """
+    A class that encapsulates various data splitting strategies.
+
+    This class provides a suite of methods for splitting recommender system
+    datasets. It is initialized with a random state to ensure that all
+    splitting operations are reproducible.
+    """
     
     def __init__(self, random_state: int = 42):
+        """
+        Initializes the DataSplitter.
+
+        Args:
+            random_state (int): The seed for the random number generator to ensure
+                                that all splits are deterministic and reproducible.
+        """
         self.random_state = random_state
         np.random.seed(random_state)
         random.seed(random_state)
@@ -25,18 +43,21 @@ class DataSplitter:
         min_interactions_per_user: int = 5
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Split by users - ensures no user overlap between train/val.
-        Best for evaluating performance on completely new users.
-        
+        Splits data by users to prevent user overlap between sets.
+
+        This method is ideal for evaluating a model's ability to generalize to
+        entirely new users (a user-level cold-start scenario).
+
         Args:
-            interactions_df: DataFrame with user_id, item_id columns
-            train_ratio: Fraction of users for training
-            min_interactions_per_user: Minimum interactions required per user
-            
+            interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
+            train_ratio (float): The proportion of users to allocate to the training set.
+            min_interactions_per_user (int): The minimum number of interactions
+                                             a user must have to be included.
+
         Returns:
-            train_df, val_df
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
+                                               and validation DataFrames.
         """
-        # Filter users with minimum interactions
         user_counts = interactions_df['user_id'].value_counts()
         valid_users = user_counts[user_counts >= min_interactions_per_user].index
         
@@ -46,7 +67,6 @@ class DataSplitter:
         filtered_df = interactions_df[interactions_df['user_id'].isin(valid_users)]
         unique_users = filtered_df['user_id'].unique()
         
-        # Split users
         train_users, val_users = train_test_split(
             unique_users, 
             train_size=train_ratio, 
@@ -65,10 +85,21 @@ class DataSplitter:
         min_interactions_per_item: int = 3
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Split by items - ensures no item overlap between train/val.
-        Best for evaluating performance on completely new items.
+        Splits data by items to prevent item overlap between sets.
+
+        This method is used for evaluating a model's ability to recommend
+        entirely new items (an item-level cold-start scenario).
+
+        Args:
+            interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
+            train_ratio (float): The proportion of items to allocate to the training set.
+            min_interactions_per_item (int): The minimum number of interactions
+                                             an item must have to be included.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
+                                               and validation DataFrames.
         """
-        # Filter items with minimum interactions
         item_counts = interactions_df['item_id'].value_counts()
         valid_items = item_counts[item_counts >= min_interactions_per_item].index
         
@@ -78,7 +109,6 @@ class DataSplitter:
         filtered_df = interactions_df[interactions_df['item_id'].isin(valid_items)]
         unique_items = filtered_df['item_id'].unique()
         
-        # Split items
         train_items, val_items = train_test_split(
             unique_items,
             train_size=train_ratio,
@@ -97,16 +127,28 @@ class DataSplitter:
         train_ratio: float = 0.8
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Split by time - train on older interactions, validate on newer ones.
-        Most realistic for production systems.
+        Splits data based on time.
+
+        This method sorts interactions by a timestamp and splits them into a
+        training set of older data and a validation set of newer data. This is
+        often the most realistic evaluation scenario as it mimics a production
+        environment where a model predicts future interactions based on past behavior.
+
+        Args:
+            interactions_df (pd.DataFrame): The interactions DataFrame, which must
+                                            contain a timestamp column.
+            timestamp_col (str): The name of the timestamp column.
+            train_ratio (float): The proportion of the timeline to use for training.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
+                                               and validation DataFrames.
         """
         if timestamp_col not in interactions_df.columns:
             raise ValueError(f"Timestamp column '{timestamp_col}' not found")
         
-        # Sort by timestamp
         sorted_df = interactions_df.sort_values(timestamp_col)
         
-        # Split by time
         split_idx = int(len(sorted_df) * train_ratio)
         train_df = sorted_df.iloc[:split_idx]
         val_df = sorted_df.iloc[split_idx:]
@@ -119,36 +161,42 @@ class DataSplitter:
         strategy: Literal['random', 'latest'] = 'random'
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Leave-one-out split - hold out one interaction per user for validation.
-        Standard approach in many recommender system papers.
-        
+        Performs a leave-one-out split, holding out one item per user.
+
+        This is a common evaluation strategy in academic literature where for each
+        user, a single interaction is held out for the validation set, and the
+        model is trained on the rest of that user's interactions.
+
         Args:
-            strategy: 'random' to sample random interaction, 'latest' for most recent
+            interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
+            strategy ('random' or 'latest'): Determines which item to hold out.
+                                            'random' selects a random interaction.
+                                            'latest' selects the most recent one
+                                            (requires a 'timestamp' column).
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
+                                               and validation DataFrames.
         """
         train_data = []
         val_data = []
         
-        # Group by user
         user_groups = interactions_df.groupby('user_id')
         
         for user_id, user_interactions in user_groups:
             user_df = user_interactions.copy()
             
             if len(user_df) < 2:
-                # If user has only 1 interaction, put in training
                 train_data.append(user_df)
                 continue
             
             if strategy == 'random':
-                # Random sample for validation
                 val_idx = user_df.sample(n=1, random_state=self.random_state).index
-            else:  # latest
-                # Most recent interaction for validation
+            else:
                 if 'timestamp' in user_df.columns:
                     val_idx = user_df.loc[user_df['timestamp'].idxmax()].name
                     val_idx = [val_idx] if not isinstance(val_idx, list) else val_idx
                 else:
-                    # If no timestamp, take last row
                     val_idx = [user_df.index[-1]]
             
             val_data.append(user_df.loc[val_idx])
@@ -166,13 +214,28 @@ class DataSplitter:
         min_interactions_per_user: int = 3
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Stratified split - ensures each user has interactions in both train and val.
-        Good balance between realism and avoiding cold-start issues.
+        Performs a stratified split on a per-user basis.
+
+        This method ensures that for each user with enough interactions, their
+        interaction history is split between the training and validation sets
+        according to the specified ratio. This is useful for evaluating how well
+        a model can rank items for known users.
+
+        Args:
+            interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
+            train_ratio (float): The proportion of each user's interactions to
+                                 allocate to the training set.
+            min_interactions_per_user (int): The minimum number of interactions
+                                             a user must have to be included
+                                             in the stratified split.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
+                                               and validation DataFrames.
         """
         train_data = []
         val_data = []
         
-        # Group by user
         user_groups = interactions_df.groupby('user_id')
         
         print(f"Stratified split: Processing {len(user_groups)} users...")
@@ -182,18 +245,14 @@ class DataSplitter:
             user_df = user_interactions.copy()
             
             if len(user_df) < min_interactions_per_user:
-                # Put all interactions in training if too few
                 train_data.append(user_df)
                 continue
             
             users_with_enough_interactions += 1
             
-            # Split user's interactions
             n_train = max(1, int(len(user_df) * train_ratio))
-            # Ensure at least 1 interaction goes to validation
             n_train = min(n_train, len(user_df) - 1)
             
-            # Randomly sample for training
             train_indices = user_df.sample(
                 n=n_train, 
                 random_state=self.random_state
@@ -204,7 +263,6 @@ class DataSplitter:
         
         print(f"Users with >= {min_interactions_per_user} interactions: {users_with_enough_interactions}")
         
-        # Handle edge cases
         if not train_data:
             raise ValueError("No data available for training after filtering")
         
@@ -213,7 +271,6 @@ class DataSplitter:
         if not val_data:
             print(f"Warning: No users have >= {min_interactions_per_user} interactions. "
                   f"Using simple random split instead.")
-            # Fallback to simple random split
             train_df = interactions_df.sample(
                 frac=train_ratio, 
                 random_state=self.random_state
@@ -230,8 +287,18 @@ class DataSplitter:
         train_ratio: float = 0.8
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Simple random split - good for very small datasets where stratified approaches fail.
-        WARNING: Can cause data leakage as same users/items may appear in both splits.
+        Performs a simple random split of interactions.
+
+        This method randomly samples a fraction of the entire interactions
+        DataFrame for training and uses the rest for validation. It does not
+        guarantee user or item disjointness and should be used with caution.
+
+        Args:
+            interactions_df (pd.DataFrame): The DataFrame of interactions.
+            train_ratio (float): The fraction of interactions for the training set.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: A tuple of training and validation DataFrames.
         """
         train_df = interactions_df.sample(
             frac=train_ratio, 
@@ -249,19 +316,27 @@ class DataSplitter:
         train_ratio: float = 0.8
     ) -> Dict[str, pd.DataFrame]:
         """
-        Creates multiple evaluation scenarios:
-        - Warm users & warm items (standard)
-        - Cold users & warm items  
-        - Warm users & cold items
-        - Cold users & cold items
-        
-        Returns dict with keys: 'train', 'val_warm', 'val_cold_user', 'val_cold_item', 'val_cold_both'
+        Creates multiple validation sets for different cold-start scenarios.
+
+        This advanced method splits the data to create validation sets for:
+        - Warm users and warm items (standard evaluation)
+        - Cold users (new users) and warm items
+        - Warm users and cold items (new items)
+        - Cold users and cold items (new users and new items)
+
+        Args:
+            interactions_df (pd.DataFrame): The DataFrame of interactions.
+            cold_user_ratio (float): The quantile of user activity to define "cold" users.
+            cold_item_ratio (float): The quantile of item activity to define "cold" items.
+            train_ratio (float): The ratio for the training/validation split of the warm-warm set.
+
+        Returns:
+            Dict[str, pd.DataFrame]: A dictionary containing the training DataFrame
+                                     and the various validation DataFrames.
         """
-        # Get user and item statistics
         user_interactions = interactions_df.groupby('user_id').size()
         item_interactions = interactions_df.groupby('item_id').size()
         
-        # Define "cold" users and items (those with fewer interactions)
         cold_user_threshold = user_interactions.quantile(cold_user_ratio)
         cold_item_threshold = item_interactions.quantile(cold_item_ratio)
         
@@ -271,7 +346,6 @@ class DataSplitter:
         warm_users = user_interactions[user_interactions > cold_user_threshold].index
         warm_items = item_interactions[item_interactions > cold_item_threshold].index
         
-        # Create interaction subsets
         def get_subset(users, items):
             return interactions_df[
                 interactions_df['user_id'].isin(users) & 
@@ -283,11 +357,9 @@ class DataSplitter:
         warm_cold = get_subset(warm_users, cold_items)
         cold_cold = get_subset(cold_users, cold_items)
         
-        # Split warm-warm into train/val
         if len(warm_warm) > 0:
             train_df, val_warm = self.stratified_split(warm_warm, train_ratio)
         else:
-            # Fallback if no warm-warm interactions
             train_df, val_warm = self.simple_random_split(interactions_df, train_ratio)
         
         return {
@@ -303,12 +375,20 @@ class DataSplitter:
         train_df: pd.DataFrame, 
         val_df: pd.DataFrame
     ) -> Dict[str, any]:
-        """Calculate statistics about the split"""
-        # Check if train_df is not empty and has 'user_id' and 'item_id' columns
+        """
+        Calculates and returns statistics about a train/validation split.
+
+        Args:
+            train_df (pd.DataFrame): The training DataFrame.
+            val_df (pd.DataFrame): The validation DataFrame.
+
+        Returns:
+            Dict[str, any]: A dictionary containing statistics such as interaction
+                            counts, unique user/item counts, and overlap ratios.
+        """
         train_users = set(train_df['user_id'].unique()) if not train_df.empty and 'user_id' in train_df.columns else set()
         train_items = set(train_df['item_id'].unique()) if not train_df.empty and 'item_id' in train_df.columns else set()
         
-        # Check if val_df is not empty and has 'user_id' and 'item_id' columns
         val_users = set(val_df['user_id'].unique()) if not val_df.empty and 'user_id' in val_df.columns else set()
         val_items = set(val_df['item_id'].unique()) if not val_df.empty and 'item_id' in val_df.columns else set()
         
@@ -326,23 +406,26 @@ class DataSplitter:
         }
 
 
-# Helper function for backward compatibility
 def create_robust_splits(
     interactions_df: pd.DataFrame,
     split_strategy: str = 'stratified',
     **kwargs
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Create train/validation splits using the specified strategy
-    
+    A factory function to create train/validation splits using a named strategy.
+
     Args:
-        interactions_df: DataFrame with interactions
-        split_strategy: One of 'user', 'item', 'temporal', 'stratified', 'leave_one_out', 'simple_random'
-        **kwargs: Additional arguments for the splitting strategy
+        interactions_df (pd.DataFrame): The DataFrame of interactions to split.
+        split_strategy (str): The name of the splitting strategy to use.
+                              Options: 'user', 'item', 'temporal', 'stratified',
+                              'leave_one_out', 'simple_random'.
+        **kwargs: Additional arguments to be passed to the chosen splitting method.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: A tuple of training and validation DataFrames.
     """
     splitter = DataSplitter(random_state=kwargs.get('random_state', 42))
     
-    # Filter kwargs based on the splitting strategy
     if split_strategy == 'user':
         valid_kwargs = {k: v for k, v in kwargs.items() 
                        if k in ['train_ratio', 'min_interactions_per_user']}

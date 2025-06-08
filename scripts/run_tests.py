@@ -1,196 +1,118 @@
-# tests/unit/test_data_filter.py
+#!/usr/bin/env python
 """
-Unit tests for the DataFilter class
-"""
-import unittest
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import sys
-import pytest
+A command-line test runner for the multimodal recommender system.
 
-# Add parent directory to path to import src modules
+This script utilizes Python's native unittest framework to discover and execute
+tests. It provides options to run the entire test suite, only the unit tests,
+or a specific test module, making it a flexible tool for development and
+continuous integration.
+"""
+import sys
+import unittest
+from pathlib import Path
+
+# Adds the project root directory to the system path. This is necessary to ensure
+# that modules from the 'src' directory can be correctly imported by the test files
+# located in the 'tests/' directory.
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from src.data.processors.data_filter import DataFilter
 
+def run_all_tests():
+    """
+    Discovers and runs all tests located in the 'tests/' directory.
 
-class TestDataFilter(unittest.TestCase):
-    """Test cases for DataFilter functionality"""
+    This function searches recursively through the 'tests/' directory for any
+    files that match the pattern 'test_*.py'. It aggregates all found tests
+    into a single test suite and executes them.
+
+    Returns:
+        int: An exit code, 0 if all tests pass successfully, and 1 otherwise.
+    """
+    # Initializes the test loader, which is responsible for finding tests.
+    loader = unittest.TestLoader()
+    # Specifies the top-level directory where test discovery will begin.
+    test_dir = Path(__file__).resolve().parent.parent / 'tests'
     
-    def setUp(self):
-        """Set up test data before each test"""
-        self.data_filter = DataFilter()
-        
-        # Create sample item info DataFrame
-        self.item_info_df = pd.DataFrame({
-            'item_id': ['item1', 'item2', 'item3', 'item4', 'item5'],
-            'title': ['Title 1', 'Title 2', 'Title 3', 'Title 4', 'Title 5'],
-            'category': ['A', 'B', 'A', 'C', 'B']
-        })
-        
-        # Create sample interactions DataFrame
-        self.interactions_df = pd.DataFrame({
-            'user_id': ['user1', 'user1', 'user2', 'user2', 'user3', 'user3', 'user4'],
-            'item_id': ['item1', 'item2', 'item1', 'item3', 'item2', 'item4', 'item1']
-        })
-        
-    def test_filter_interactions_by_valid_items(self):
-        """Test filtering interactions by valid items"""
-        # Define valid items (exclude item5)
-        valid_item_ids = {'item1', 'item2', 'item3'}
-        
-        # Filter interactions
-        filtered_df = self.data_filter.filter_interactions_by_valid_items(
-            self.interactions_df, valid_item_ids
-        )
-        
-        # Check results
-        self.assertEqual(len(filtered_df), 6)  # item4 interaction should be removed
-        self.assertTrue(all(item in valid_item_ids for item in filtered_df['item_id']))
-        self.assertNotIn('item4', filtered_df['item_id'].values)
-        
-    def test_filter_interactions_empty_valid_items(self):
-        """Test filtering with empty valid items set"""
-        valid_item_ids = set()
-        
-        filtered_df = self.data_filter.filter_interactions_by_valid_items(
-            self.interactions_df, valid_item_ids
-        )
-        
-        self.assertEqual(len(filtered_df), 0)
-        
-    def test_filter_by_activity_min_user_interactions(self):
-        """Test filtering by minimum user interactions"""
-        # user1: 2 interactions, user2: 2 interactions, user3: 2 interactions, user4: 1 interaction
-        filtered_df = self.data_filter.filter_by_activity(
-            self.interactions_df,
-            min_user_interactions=2,
-            min_item_interactions=0
-        )
-        
-        # user4 should be filtered out
-        self.assertEqual(len(filtered_df), 6)
-        self.assertNotIn('user4', filtered_df['user_id'].values)
-        self.assertEqual(filtered_df['user_id'].nunique(), 3)
-        
-    def test_filter_by_activity_min_item_interactions(self):
-        """Test filtering by minimum item interactions"""
-        # item1: 3, item2: 2, item3: 1, item4: 1
-        filtered_df = self.data_filter.filter_by_activity(
-            self.interactions_df,
-            min_user_interactions=0,
-            min_item_interactions=2
-        )
-        
-        # item3 and item4 should be filtered out
-        self.assertEqual(len(filtered_df), 5)
-        self.assertNotIn('item3', filtered_df['item_id'].values)
-        self.assertNotIn('item4', filtered_df['item_id'].values)
-        
-    def test_filter_by_activity_combined(self):
-        """Test filtering by both user and item activity"""
-        filtered_df = self.data_filter.filter_by_activity(
-            self.interactions_df,
-            min_user_interactions=2,
-            min_item_interactions=2
-        )
-        
-        # After filtering items: only item1 and item2 remain (item3, item4 removed)
-        # This leaves: user1→[item1,item2], user2→[item1], user3→[item2], user4→[item1]
-        # After filtering users: only users with 2+ interactions remain
-        # Only user1 still has 2 interactions after item filtering!
-        expected_interactions = [
-            ('user1', 'item1'), ('user1', 'item2')
-        ]
-        
-        self.assertEqual(len(filtered_df), 2)
-        actual_interactions = list(zip(filtered_df['user_id'], filtered_df['item_id']))
-        self.assertEqual(set(actual_interactions), set(expected_interactions))
-        
-    def test_align_item_info_with_interactions(self):
-        """Test aligning item info with interactions"""
-        # Only items 1-4 appear in interactions, not item5
-        aligned_df = self.data_filter.align_item_info_with_interactions(
-            self.item_info_df,
-            self.interactions_df
-        )
-        
-        self.assertEqual(len(aligned_df), 4)
-        self.assertNotIn('item5', aligned_df['item_id'].values)
-        self.assertEqual(set(aligned_df['item_id']), {'item1', 'item2', 'item3', 'item4'})
-        
-    def test_get_filtering_stats(self):
-        """Test filtering statistics calculation"""
-        # Create filtered versions
-        filtered_interactions = self.interactions_df.iloc[:5]  # Remove 2 interactions
-        filtered_items = self.item_info_df.iloc[:3]  # Remove 2 items
-        
-        stats = self.data_filter.get_filtering_stats(
-            self.interactions_df,
-            filtered_interactions,
-            self.item_info_df,
-            filtered_items
-        )
-        
-        # Check structure
-        self.assertIn('interactions', stats)
-        self.assertIn('users', stats)
-        self.assertIn('items', stats)
-        
-        # Check values
-        self.assertEqual(stats['interactions']['original'], 7)
-        self.assertEqual(stats['interactions']['filtered'], 5)
-        self.assertAlmostEqual(stats['interactions']['retention_rate'], 5/7)
-        
-        self.assertEqual(stats['items']['original'], 5)
-        self.assertEqual(stats['items']['filtered'], 3)
-        self.assertAlmostEqual(stats['items']['retention_rate'], 3/5)
-        
-    def test_string_type_consistency(self):
-        """Test that string types are handled consistently"""
-        # Create data with mixed types
-        mixed_interactions = pd.DataFrame({
-            'user_id': [1, 2, 3],  # integers
-            'item_id': ['item1', 'item2', 'item3']  # strings
-        })
-        
-        valid_items = {'item1', 'item2'}  # strings
-        
-        # Filter should handle type conversion
-        filtered_df = self.data_filter.filter_interactions_by_valid_items(
-            mixed_interactions, valid_items
-        )
-        
-        self.assertEqual(len(filtered_df), 2)
-        self.assertIn('item1', filtered_df['item_id'].values)
-        self.assertIn('item2', filtered_df['item_id'].values)
-        
-    def test_empty_dataframe_handling(self):
-        """Test handling of empty DataFrames"""
-        empty_df = pd.DataFrame(columns=['user_id', 'item_id'])
-        
-        # Test filter by valid items
-        filtered = self.data_filter.filter_interactions_by_valid_items(
-            empty_df, {'item1'}
-        )
-        self.assertEqual(len(filtered), 0)
-        
-        # Test filter by activity
-        filtered = self.data_filter.filter_by_activity(empty_df, 1, 1)
-        self.assertEqual(len(filtered), 0)
-        
-        # Test align item info
-        aligned = self.data_filter.align_item_info_with_interactions(
-            self.item_info_df, empty_df
-        )
-        self.assertEqual(len(aligned), 0)
-
-
-# This script runs all tests in the 'tests/' directory using pytest.
-if __name__ == "__main__":
-    # You can add more pytest arguments here if needed
-    args = ['tests/']
+    # Discovers all test cases from modules matching the specified pattern.
+    suite = loader.discover(str(test_dir), pattern='test_*.py')
     
-    # Exit with the same code as pytest
-    sys.exit(pytest.main(args))
+    # Initializes a test runner to execute the discovered test suite.
+    # Verbosity is set to 2 for detailed output.
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    # Returns an exit code based on the success or failure of the test run.
+    return 0 if result.wasSuccessful() else 1
+
+
+def run_unit_tests():
+    """
+    Discovers and runs only the unit tests from the 'tests/unit/' directory.
+
+    This function specifically targets the unit test suite, allowing for a faster
+    and more focused test run that excludes longer-running integration tests.
+
+    Returns:
+        int: An exit code, 0 if all unit tests pass, and 1 otherwise.
+    """
+    loader = unittest.TestLoader()
+    # Specifies the directory containing only the unit tests.
+    test_dir = Path(__file__).resolve().parent.parent / 'tests' / 'unit'
+    
+    suite = loader.discover(str(test_dir), pattern='test_*.py')
+    
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    return 0 if result.wasSuccessful() else 1
+
+
+def run_specific_test(test_path):
+    """
+    Runs a single, specified test module or class.
+
+    This function is useful for debugging, allowing a developer to execute
+    only the tests relevant to a specific piece of functionality.
+
+    Args:
+        test_path (str): The dot-notation path to the test module.
+                         For example: 'tests.unit.test_data_filter'.
+
+    Returns:
+        int: An exit code, 0 if the specified tests pass, and 1 otherwise.
+    """
+    loader = unittest.TestLoader()
+    # Loads tests directly from the specified module name.
+    suite = loader.loadTestsFromName(test_path)
+    
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == '__main__':
+    # This block enables the script to be executed from the command line.
+    import argparse
+    
+    # Initializes the argument parser to handle command-line options.
+    parser = argparse.ArgumentParser(description='Run tests for the multimodal recommender system.')
+    # Defines a flag to run only the unit tests.
+    parser.add_argument('--unit', action='store_true', help='Run only unit tests.')
+    # Defines an option to run a specific test file by its path.
+    parser.add_argument('--test', type=str, help='Run a specific test module (e.g., tests.unit.test_data_filter).')
+    
+    args = parser.parse_args()
+    
+    # Executes the appropriate test-running function based on the provided arguments.
+    # The script prioritizes running a specific test, then the unit test suite,
+    # and defaults to running all tests if no arguments are given.
+    if args.test:
+        exit_code = run_specific_test(args.test)
+    elif args.unit:
+        exit_code = run_unit_tests()
+    else:
+        exit_code = run_all_tests()
+    
+    # Exits the script with the corresponding exit code from the test run.
+    sys.exit(exit_code)

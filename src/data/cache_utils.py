@@ -1,6 +1,11 @@
 # src/data/cache_utils.py
 """
-Utility functions for cache management
+Provides command-line and programmatic utilities for managing feature caches.
+
+This module contains a set of functions to list, inspect, and clear the
+on-disk feature caches that are generated during data preprocessing and training.
+It helps maintain an organized cache directory and provides visibility into the
+storage used by different model configurations.
 """
 from pathlib import Path
 import torch
@@ -10,10 +15,20 @@ from typing import Dict, List, Tuple
 
 def list_available_caches(base_cache_dir: str = "cache") -> Dict[str, Dict]:
     """
-    List all available model-specific caches
-    
+    Scans the base cache directory and lists all valid, non-empty cache subdirectories.
+
+    A valid cache directory is expected to be named using the format
+    '<vision_model>_<language_model>'. The function returns detailed information
+    for each valid cache found.
+
+    Args:
+        base_cache_dir (str): The path to the base directory containing all caches.
+
     Returns:
-        Dictionary with cache information
+        Dict[str, Dict]: A dictionary where keys are the cache names (e.g.,
+                         'resnet_sentence-bert') and values are dictionaries
+                         containing details such as model names, file count,
+                         and total size.
     """
     cache_dir = Path(base_cache_dir)
     available_caches = {}
@@ -21,24 +36,26 @@ def list_available_caches(base_cache_dir: str = "cache") -> Dict[str, Dict]:
     if not cache_dir.exists():
         return available_caches
     
-    # Look for model-specific cache directories
+    # Iterates through all subdirectories in the base cache directory.
     for model_dir in cache_dir.iterdir():
+        # A directory is considered a potential cache if it is a directory and its name contains an underscore.
         if model_dir.is_dir() and '_' in model_dir.name:
             try:
-                # Parse model names from directory
+                # Parses the vision and language model names from the directory name.
                 parts = model_dir.name.split('_')
                 if len(parts) >= 2:
                     vision_model = parts[0]
-                    language_model = '_'.join(parts[1:])  # Handle models with underscores
+                    language_model = '_'.join(parts[1:])
                     
-                    # Count cache files
+                    # Counts the number of PyTorch cache files (.pt) in the directory.
                     cache_files = list(model_dir.glob("*.pt"))
                     
+                    # Only includes non-empty caches in the result.
                     if cache_files:
-                        # Calculate total size
-                        total_size = sum(f.stat().st_size for f in cache_files) / (1024*1024)  # MB
+                        # Calculates the total size of the cache in megabytes.
+                        total_size = sum(f.stat().st_size for f in cache_files) / (1024*1024)
                         
-                        # Sample a file to check structure
+                        # Loads a sample file to inspect the structure of the cached features.
                         sample_features = {}
                         try:
                             sample_data = torch.load(cache_files[0], map_location='cpu')
@@ -64,7 +81,15 @@ def list_available_caches(base_cache_dir: str = "cache") -> Dict[str, Dict]:
 
 
 def print_cache_summary(base_cache_dir: str = "cache"):
-    """Print a summary of all available caches"""
+    """
+    Prints a formatted, human-readable summary of all available caches.
+
+    This function calls `list_available_caches` and presents the information
+    in a structured format to the console.
+
+    Args:
+        base_cache_dir (str): The path to the base directory containing all caches.
+    """
     
     print("📁 AVAILABLE FEATURE CACHES")
     print("=" * 50)
@@ -96,19 +121,49 @@ def print_cache_summary(base_cache_dir: str = "cache"):
 
 
 def get_cache_path(vision_model: str, language_model: str, base_cache_dir: str = "cache") -> Path:
-    """Get cache path for specific model combination"""
+    """
+    Constructs the standardized path for a model-specific cache directory.
+
+    Args:
+        vision_model (str): The name of the vision model.
+        language_model (str): The name of the language model.
+        base_cache_dir (str): The base directory for all caches.
+
+    Returns:
+        Path: A pathlib.Path object for the model-specific cache directory.
+    """
     cache_name = f"{vision_model}_{language_model}"
     return Path(base_cache_dir) / cache_name
 
 
 def cache_exists(vision_model: str, language_model: str, base_cache_dir: str = "cache") -> bool:
-    """Check if cache exists for model combination"""
+    """
+    Checks if a valid, non-empty cache exists for a given model combination.
+
+    Args:
+        vision_model (str): The name of the vision model.
+        language_model (str): The name of the language model.
+        base_cache_dir (str): The base directory for all caches.
+
+    Returns:
+        bool: True if a non-empty cache exists for the model combination, False otherwise.
+    """
     cache_path = get_cache_path(vision_model, language_model, base_cache_dir)
     return cache_path.exists() and any(cache_path.glob("*.pt"))
 
 
 def get_cache_stats(vision_model: str, language_model: str, base_cache_dir: str = "cache") -> Dict:
-    """Get statistics for specific cache"""
+    """
+    Retrieves statistics for a specific model combination's cache.
+
+    Args:
+        vision_model (str): The name of the vision model.
+        language_model (str): The name of the language model.
+        base_cache_dir (str): The base directory for all caches.
+
+    Returns:
+        Dict: A dictionary containing statistics like file count, size, and existence.
+    """
     cache_path = get_cache_path(vision_model, language_model, base_cache_dir)
     
     if not cache_path.exists():
@@ -130,7 +185,17 @@ def get_cache_stats(vision_model: str, language_model: str, base_cache_dir: str 
 
 
 def clear_cache(vision_model: str, language_model: str, base_cache_dir: str = "cache") -> bool:
-    """Clear cache for specific model combination"""
+    """
+    Deletes the cache directory for a specific model combination.
+
+    Args:
+        vision_model (str): The name of the vision model.
+        language_model (str): The name of the language model.
+        base_cache_dir (str): The base directory for all caches.
+
+    Returns:
+        bool: True if the cache was found and cleared, False otherwise.
+    """
     cache_path = get_cache_path(vision_model, language_model, base_cache_dir)
     
     if cache_path.exists():
@@ -143,7 +208,15 @@ def clear_cache(vision_model: str, language_model: str, base_cache_dir: str = "c
 
 
 def clear_all_caches(base_cache_dir: str = "cache") -> int:
-    """Clear all caches"""
+    """
+    Deletes all subdirectories within the base cache directory.
+
+    Args:
+        base_cache_dir (str): The base directory for all caches.
+
+    Returns:
+        int: The number of cache directories that were cleared.
+    """
     cache_dir = Path(base_cache_dir)
     
     if not cache_dir.exists():
@@ -157,7 +230,7 @@ def clear_all_caches(base_cache_dir: str = "cache") -> int:
             print(f"✅ Cleared: {model_dir.name}")
             cleared += 1
     
-    # Remove base cache dir if empty
+    # Removes the base directory itself if it has become empty.
     if not any(cache_dir.iterdir()):
         cache_dir.rmdir()
         print(f"✅ Removed empty cache directory: {cache_dir}")
@@ -166,14 +239,20 @@ def clear_all_caches(base_cache_dir: str = "cache") -> int:
 
 
 if __name__ == "__main__":
-    """Run as standalone script for cache management"""
+    """
+    Defines the command-line interface for the cache management script.
+
+    This block allows the script to be executed directly from the command line
+    with arguments to perform actions like listing, clearing, or viewing stats
+    for the feature caches.
+    """
     import argparse
     
     parser = argparse.ArgumentParser(description="Manage feature caches")
     parser.add_argument("--list", action="store_true", help="List available caches")
-    parser.add_argument("--clear", type=str, help="Clear cache for model combo (format: vision_language)")
+    parser.add_argument("--clear", type=str, help="Clear cache for a model combination (format: vision_language)")
     parser.add_argument("--clear_all", action="store_true", help="Clear all caches")
-    parser.add_argument("--stats", type=str, help="Show stats for model combo (format: vision_language)")
+    parser.add_argument("--stats", type=str, help="Show stats for a model combination (format: vision_language)")
     parser.add_argument("--cache_dir", default="cache", help="Base cache directory")
     
     args = parser.parse_args()
