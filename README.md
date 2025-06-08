@@ -1,189 +1,186 @@
 # Multimodal Recommender System
 
 <div align="center">
-    <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python Version">
+    <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python Version">
     <img src="https://img.shields.io/badge/PyTorch-2.6+-ee4c2c.svg" alt="PyTorch Version">
+    <img src="WORKFLOW_URL/badge.svg" alt="CI Status">
 </div>
 <br>
 
-Un framework basado en PyTorch para construir sistemas de recomendación multimodales que integran características visuales, textuales y numéricas para generar recomendaciones personalizadas.
+A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
 
 ---
 
-## Tabla de Contenidos
-- [Visión General](#visión-general)
-- [Características Clave](#características-clave)
-- [Inicio Rápido en 5 Minutos](#inicio-rápido-en-5-minutos)
-- [Instalación](#instalación)
-- [Flujo de Trabajo Detallado](#flujo-de-trabajo-detallado)
-  - [1. Preparación de Datos](#1-preparación-de-datos)
-  - [2. Configuración](#2-configuración)
-  - [3. Preprocesamiento de Datos](#3-preprocesamiento-de-datos)
-  - [4. División de Datos (Splits)](#4-división-de-datos-splits)
-  - [5. Pre-cómputo de Caché de Features](#5-pre-cómputo-de-caché-de-features)
-  - [6. Entrenamiento](#6-entrenamiento)
-  - [7. Evaluación](#7-evaluación)
-  - [8. Generación de Recomendaciones](#8-generación-de-recomendaciones)
-- [Uso como Librería](#uso-como-librería)
-- [Gestión Avanzada](#gestión-avanzada)
-  - [Gestión de Caché](#gestión-de-caché)
-  - [Gestión de Checkpoints](#gestión-de-checkpoints)
-- [Estructura del Proyecto](#estructura-del-proyecto)
-- [Cómo Contribuir](#cómo-contribuir)
-- [Licencia](#licencia)
-- [Citar](#citar)
+## Table of Contents
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Quickstart in 5 Minutes](#quickstart-in-5-minutes)
+- [Installation](#installation)
+- [Detailed Workflow](#detailed-workflow)
+  - [1. Data Preparation](#1-data-preparation)
+  - [2. Configuration](#2-configuration)
+  - [3. Data Preprocessing](#3-data-preprocessing)
+  - [4. Data Splitting](#4-data-splitting)
+  - [5. Feature Caching](#5-feature-caching)
+  - [6. Training](#6-training)
+  - [7. Evaluation](#7-evaluation)
+  - [8. Generating Recommendations](#8-generating-recommendations)
+- [Advanced Management](#advanced-management)
+  - [Cache Management](#cache-management)
+  - [Checkpoint Management](#checkpoint-management)
+- [Project Structure](#project-structure)
 
-## Visión General
+## Overview
 
-Este sistema implementa un recomendador neuronal que combina múltiples modalidades de datos para superar las limitaciones de los métodos tradicionales de filtrado colaborativo:
+This system implements a neural recommender that combines multiple data modalities to overcome the limitations of traditional collaborative filtering methods:
 
--   **Features Visuales**: Extraídas de imágenes de ítems usando modelos pre-entrenados (e.g., ResNet, CLIP, DINO).
--   **Features Textuales**: Procesadas a partir de descripciones de ítems usando modelos de lenguaje (e.g., Sentence-BERT, MPNet).
--   **Features Numéricas**: Metadatos de ítems y estadísticas de interacción.
+-   **Visual Features**: Extracted from item images using pre-trained models (e.g., ResNet, CLIP, DINO).
+-   **Textual Features**: Processed from item descriptions using language models (e.g., Sentence-BERT, MPNet).
+-   **Numerical Features**: Item metadata and interaction statistics.
 
-La arquitectura utiliza mecanismos de atención para fusionar representaciones multimodales y es compatible con el aprendizaje contrastivo para una mejor alineación visión-texto.
+The architecture uses attention mechanisms to fuse multimodal representations and supports contrastive learning for improved vision-text alignment.
 
-## Características Clave
+## Key Features
 
--   **Arquitectura Flexible**: Fusión configurable de embeddings de usuario/ítem y features multimodales.
--   **Modelos Pre-entrenados**: Soporte para una variedad de backbones de visión y lenguaje de Hugging Face.
--   **Procesamiento de Datos Modular**: Pipeline de preprocesamiento robusto con validación, limpieza y compresión automáticas.
--   **Estrategias de División de Datos**: Soporte para splits estratificados, temporales y por usuario/ítem.
--   **Entrenamiento Eficiente**: Optimizadores y schedulers configurables, early stopping, y seguimiento con Weights & Biases.
--   **Evaluación Exhaustiva**: Métricas estándar (Precision, Recall, NDCG, MRR) y comparación con baselines (Popularity, ItemKNN).
--   **Rendimiento Optimizado**: Sistema de caché de features con gestión de memoria LRU para acelerar el entrenamiento y la inferencia.
+-   **Flexible Architecture**: Configurable fusion of user/item embeddings and multimodal features.
+-   **Pre-trained Models**: Support for a variety of vision and language backbones from Hugging Face.
+-   **Modular Data Processing**: Robust preprocessing pipeline with automatic validation, cleaning, and compression.
+-   **Data Splitting Strategies**: Support for stratified, temporal, and user/item-based splits.
+-   **Efficient Training**: Configurable optimizers and schedulers, early stopping, and Weights & Biases integration.
+-   **Comprehensive Evaluation**: Standard metrics (Precision, Recall, NDCG, MRR) and baseline comparisons (Popularity, ItemKNN).
+-   **Performance Optimized**: Feature caching system with LRU memory management to accelerate training and inference.
 
-## Inicio Rápido en 5 Minutos
+## Quickstart in 5 Minutes
 
-Sigue estos pasos para tener el sistema funcionando con datos de ejemplo.
+Follow these steps to get the system running with sample data.
 
 ```bash
-# 1. Clona el repositorio
-git clone [https://github.com/tu_usuario/tu_repo.git](https://github.com/tu_usuario/tu_repo.git)
-cd tu_repo
+# 1. Clone the repository
+git clone [https://github.com/your_user/your_repo.git](https://github.com/your_user/your_repo.git)
+cd your_repo
 
-# 2. Crea un entorno virtual e instala las dependencias
+# 2. Create a virtual environment and install dependencies
 python -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. Preprocesa los datos de ejemplo
-# (Esto limpiará, validará y preparará los datos en data/raw/)
+# 3. Preprocess the sample data
+# (This will clean, validate, and prepare the data in data/raw/)
 python scripts/preprocess_data.py --config configs/simple_config.yaml
 
-# 4. Crea los splits de entrenamiento/validación/test
+# 4. Create the train/validation/test splits
 python scripts/create_splits.py --config configs/simple_config.yaml
 
-# 5. Entrena el modelo
-# (Usa --device cpu si no tienes una GPU compatible con CUDA)
+# 5. Train the model
+# (Use --device cpu if you don't have a CUDA-compatible GPU)
 python scripts/train.py --config configs/simple_config.yaml --device cuda
 
-# 6. Evalúa el modelo entrenado
+# 6. Evaluate the trained model
 python scripts/evaluate.py --config configs/simple_config.yaml --device cuda
 ````
 
-## Instalación
+## Installation
 
-### Prerrequisitos
+### Prerequisites
 
   - Python 3.7+
   - PyTorch 2.2.1+
   - Transformers 4.47.1+
-  - Una GPU compatible con CUDA es recomendada para un entrenamiento rápido.
+  - A CUDA-capable GPU is recommended for fast training.
 
-### Pasos de Instalación
+### Installation Steps
 
-1.  **Clona el repositorio:**
+1.  **Clone the repository:**
 
     ```bash
-    git clone [https://github.com/tu_usuario/tu_repo.git](https://github.com/tu_usuario/tu_repo.git)
-    cd tu_repo
+    git clone [https://github.com/your_user/your_repo.git](https://github.com/your_user/your_repo.git)
+    cd your_repo
     ```
 
-2.  **Crea un entorno virtual:**
+2.  **Create a virtual environment:**
 
     ```bash
     python -m venv venv
-    source venv/bin/activate  # En Windows usa: venv\Scripts\activate
+    source venv/bin/activate  # On Windows use: venv\Scripts\activate
     ```
 
-3.  **Instala las dependencias:**
+3.  **Install dependencies:**
 
     ```bash
     pip install -r requirements.txt
     ```
 
-## Flujo de Trabajo Detallado
+## Detailed Workflow
 
-### 1\. Preparación de Datos
+### 1\. Data Preparation
 
-Organiza tus datos en la carpeta `data/raw/` con la siguiente estructura:
+Organize your data in the `data/raw/` folder with the following structure:
 
-  - `item_info.csv`: Metadatos de los ítems. Debe contener `item_id` y columnas con features textuales y numéricas.
-  - `interactions.csv`: Interacciones usuario-ítem. Requiere columnas `user_id` y `item_id`.
-  - `images/`: Un directorio que contenga las imágenes de los ítems, nombradas como `{item_id}.jpg`.
+  - `item_info.csv`: Item metadata. Must contain `item_id` and columns for textual and numerical features.
+  - `interactions.csv`: User-item interactions. Requires `user_id` and `item_id` columns.
+  - `images/`: A directory containing item images, named as `{item_id}.jpg`.
 
-### 2\. Configuración
+### 2\. Configuration
 
-Edita los archivos de configuración en `configs/` para ajustar los parámetros.
+Edit the configuration files in `configs/` to adjust parameters.
 
-  - **`simple_config.yaml`**: Contiene los parámetros esenciales para empezar. Ideal para experimentos iniciales.
-  - **`advanced_config.yaml`**: Ofrece un control granular sobre todos los aspectos del modelo, entrenamiento y datos.
+  - **`simple_config.yaml`**: Contains essential parameters to get started. Ideal for initial experiments.
+  - **`advanced_config.yaml`**: Offers granular control over all aspects of the model, training, and data.
 
-Para más detalles, consulta la [Guía de Configuración](https://www.google.com/search?q=docs/configuration.md).
+For more details, see the [Configuration Guide](https://www.google.com/search?q=docs/configuration.md).
 
-### 3\. Preprocesamiento de Datos
+### 3\. Data Preprocessing
 
-Este script valida, limpia y procesa los datos crudos.
+This script validates, cleans, and processes the raw data.
 
 ```bash
 python scripts/preprocess_data.py --config configs/simple_config.yaml
 ```
 
-### 4\. División de Datos (Splits)
+### 4\. Data Splitting
 
-Crea conjuntos de datos estandarizados para entrenamiento, validación y prueba.
+Create standardized datasets for training, validation, and testing.
 
 ```bash
 python scripts/create_splits.py --config configs/simple_config.yaml
 ```
 
-### 5\. Pre-cómputo de Caché de Features
+### 5\. Feature Caching
 
-(Opcional pero muy recomendado) Pre-calcula las features multimodales para acelerar drásticamente el entrenamiento.
+(Optional but highly recommended) Pre-compute multimodal features to dramatically speed up training.
 
 ```bash
 python scripts/precompute_cache.py --config configs/simple_config.yaml
 ```
 
-### 6\. Entrenamiento
+### 6\. Training
 
-Entrena el recomendador multimodal.
+Train the multimodal recommender.
 
 ```bash
 python scripts/train.py --config configs/simple_config.yaml --device cuda
 ```
 
-Puedes habilitar el seguimiento con Weights & Biases añadiendo los flags `--use_wandb` y `--wandb_project "MiProyecto"`.
+You can enable Weights & Biases tracking by adding the `--use_wandb` and `--wandb_project "MyProject"` flags.
 
-### 7\. Evaluación
+### 7\. Evaluation
 
-Evalúa el modelo entrenado sobre el conjunto de test.
+Evaluate the trained model on the test set.
 
 ```bash
 python scripts/evaluate.py --config configs/simple_config.yaml --recommender_type multimodal --eval_task retrieval
 ```
 
-El script también permite evaluar baselines:
+The script also allows for evaluating baselines:
 
 ```bash
-# Evaluar baseline de popularidad
+# Evaluate popularity baseline
 python scripts/evaluate.py --config configs/simple_config.yaml --recommender_type popularity
 ```
 
-**Ejemplo de Salida de Evaluación:**
+**Example Evaluation Output:**
 
-| Métrica               | Valor   |
+| Metric                | Value   |
 | --------------------- | ------- |
 | avg\_precision\_at\_k    | 0.1234  |
 | avg\_recall\_at\_k       | 0.2345  |
@@ -192,106 +189,60 @@ python scripts/evaluate.py --config configs/simple_config.yaml --recommender_typ
 | avg\_ndcg\_at\_k         | 0.4567  |
 | avg\_mrr               | 0.3890  |
 
-### 8\. Generación de Recomendaciones
+### 8\. Generating Recommendations
 
-Genera una lista de recomendaciones para usuarios específicos.
+Generate a list of recommendations for specific users.
 
 ```bash
 python scripts/generate_recommendations.py --config configs/simple_config.yaml --users user_123 user_456
 ```
 
-## Uso como Librería
+## Advanced Management
 
-Además de usar los scripts, puedes importar las clases principales del recomendador en tu propio código.
+### Cache Management
 
-```python
-import torch
-from src.config import Config
-from src.data.dataset import MultimodalDataset
-from src.inference.recommender import Recommender
-from src.models.multimodal import MultimodalRecommender as Model
-
-# 1. Cargar configuración
-config = Config.from_yaml('configs/simple_config.yaml')
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# 2. Cargar el modelo entrenado
-# (Asegúrate de haber entrenado un modelo primero)
-model = Model(
-    n_users=1000, # Reemplazar con el número real de tu dataset
-    n_items=5000, # Reemplazar con el número real de tu dataset
-    num_numerical_features=len(config.data.numerical_features_cols),
-    embedding_dim=config.model.embedding_dim,
-    vision_model_name=config.model.vision_model,
-    language_model_name=config.model.language_model
-).to(device)
-
-checkpoint_path = config.get_model_checkpoint_path('best_model.pth')
-model.load_state_dict(torch.load(checkpoint_path, map_location=device)['model_state_dict'])
-
-# 3. Cargar el dataset (necesario para los encoders y el preprocesamiento de ítems)
-# Asume que los datos ya han sido preprocesados
-dataset = ... # Cargar el dataset de la misma forma que en los scripts
-
-# 4. Inicializar el recomendador de inferencia
-recommender = Recommender(model, dataset, device)
-
-# 5. Generar recomendaciones
-user_id = 'un_id_de_usuario'
-top_k = 10
-recommendations = recommender.get_recommendations(user_id, top_k)
-
-print(f"Recomendaciones para {user_id}: {recommendations}")
-```
-
-## Gestión Avanzada
-
-### Gestión de Caché
-
-El script `scripts/cache.py` te permite inspeccionar y limpiar las cachés de features.
+The `scripts/cache.py` script allows you to inspect and clear feature caches.
 
 ```bash
-# Listar todas las cachés de features disponibles
+# List all available feature caches
 python scripts/cache.py list
 
-# Ver estadísticas de una caché específica
+# View stats for a specific cache
 python scripts/cache.py stats resnet_sentence-bert
 
-# Limpiar la caché de una combinación de modelos
+# Clear the cache for a model combination
 python scripts/cache.py clear resnet_sentence-bert
 ```
 
-### Gestión de Checkpoints
+### Checkpoint Management
 
-El script `scripts/checkpoint_manager.py` ayuda a organizar los checkpoints guardados.
+The `scripts/checkpoint_manager.py` script helps organize saved checkpoints.
 
 ```bash
-# Listar todos los checkpoints y su estado de organización
+# List all checkpoints and their organization status
 python scripts/checkpoint_manager.py list
 
-# Organizar automáticamente los checkpoints en directorios por modelo
+# Automatically organize checkpoints into model-specific directories
 python scripts/checkpoint_manager.py organize
 ```
 
-## Estructura del Proyecto
+## Project Structure
 
 ```
 multimodal-recommender/
-├── configs/              # Archivos de configuración YAML
-├── data/                 # Datos crudos, procesados y splits
-├── docs/                 # Documentación adicional
-├── models/               # Checkpoints de modelos guardados
-├── results/              # Resultados de evaluación y logs
-├── scripts/              # Scripts ejecutables (train, evaluate, etc.)
-├── src/                  # Código fuente del framework
-│   ├── config.py         # Gestión de configuración
-│   ├── data/             # Módulos de datos y preprocesamiento
-│   ├── evaluation/       # Módulos de métricas y tareas de evaluación
-│   ├── inference/        # Lógica para generar recomendaciones
-│   ├── models/           # Arquitecturas de los modelos
-│   └── training/         # Lógica de entrenamiento
-├── tests/                # Pruebas unitarias e de integración
-└── requirements.txt      # Dependencias de Python
+├── configs/              # YAML configuration files
+├── data/                 # Raw, processed, and split data
+├── docs/                 # Additional documentation
+├── models/               # Saved model checkpoints
+├── results/              # Evaluation results and logs
+├── scripts/              # Executable scripts (train, evaluate, etc.)
+├── src/                  # Source code for the framework
+│   ├── config.py         # Configuration management
+│   ├── data/             # Data and preprocessing modules
+│   ├── evaluation/       # Metrics and evaluation task modules
+│   ├── inference/        # Logic for generating recommendations
+│   ├── models/           # Model architectures
+│   └── training/         # Training logic
+├── tests/                # Unit and integration tests
+└── requirements.txt      # Python dependencies
 ```
-
-
