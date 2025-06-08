@@ -68,11 +68,11 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 3. Download PixelRec data
-Choose a sample of your preference at [PixelRec](https://github.com/westlake-repl/PixelRec).
-It is recommended to save the images with the following structure inside data/raw:
--images/  (all images in their original format)
--interactions/interactions_sample.csv  (the csv with columns item_id,user_id,timestamp)
--item_info/item_info_sample.csv (the csv with metadata of the images)
+# Choose a sample of your preference at [PixelRec](https://github.com/westlake-repl/PixelRec).
+# It is recommended to save the images with the following structure inside data/raw:
+# -images/  (all images in their original format)
+# -interactions/interactions_sample.csv  (the csv with columns item_id,user_id,timestamp)
+# -item_info/item_info_sample.csv (the csv with metadata of the images)
 
 # 4. Preprocess the sample data
 # (This will clean, validate, and prepare the data in data/raw/)
