@@ -8,12 +8,6 @@
 
 Un framework basado en PyTorch para construir sistemas de recomendación multimodales que integran características visuales, textuales y numéricas para generar recomendaciones personalizadas.
 
-<p align="center">
-  <img src="docs/assets/architecture_diagram.png" alt="Architecture Diagram" width="700"/>
-  <br>
-  <em>Diagrama de la arquitectura del recomendador multimodal.</em>
-</p>
-
 ---
 
 ## Tabla de Contenidos
