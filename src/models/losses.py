@@ -1,6 +1,11 @@
 # src/models/losses.py
 """
-Loss functions for multimodal recommender system
+Defines custom loss functions used for training the multimodal recommender system.
+
+This module contains implementations of specialized loss functions tailored for
+recommendation tasks, including contrastive loss for aligning different
+modalities and a combined loss function that integrates multiple training
+objectives.
 """
 import torch
 import torch.nn as nn
@@ -9,92 +14,137 @@ from typing import Optional
 
 
 class ContrastiveLoss(nn.Module):
-    """CLIP-style contrastive loss for image-text alignment"""
-    
+    """
+    Implements a contrastive loss, similar to the one used in CLIP.
+
+    This loss function encourages the model to learn a shared embedding space
+    where the representations of corresponding image-text pairs are pulled
+    closer together, while representations of non-corresponding pairs are
+    pushed apart.
+    """
+
     def __init__(self, temperature: float = 0.07):
+        """
+        Initializes the ContrastiveLoss module.
+
+        Args:
+            temperature (float): A temperature parameter that scales the logits
+                                 before the softmax operation, controlling the
+                                 sharpness of the distribution.
+        """
         super(ContrastiveLoss, self).__init__()
         self.temperature = temperature
-    
+
     def forward(
-        self, 
-        image_features: torch.Tensor, 
+        self,
+        image_features: torch.Tensor,
         text_features: torch.Tensor,
         temperature: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Compute contrastive loss between image and text features.
-        
+        Computes the contrastive loss between image and text feature batches.
+
         Args:
-            image_features: Image feature vectors
-            text_features: Text feature vectors
-            temperature: Temperature parameter (optional, uses default if not provided)
-            
+            image_features (torch.Tensor): A tensor of image feature vectors,
+                                           typically with shape (batch_size, embedding_dim).
+            text_features (torch.Tensor): A tensor of text feature vectors,
+                                          typically with shape (batch_size, embedding_dim).
+            temperature (Optional[torch.Tensor]): An optional learnable temperature
+                                                  parameter to override the default.
+
         Returns:
-            Contrastive loss value
+            torch.Tensor: A scalar tensor representing the computed contrastive loss.
         """
+        # Use the provided temperature parameter if available, otherwise use the default.
         if temperature is None:
             temperature = self.temperature
-        
-        # Normalize features
+
+        # Normalize the feature vectors to unit length (L2 norm).
         image_features = F.normalize(image_features, p=2, dim=-1)
         text_features = F.normalize(text_features, p=2, dim=-1)
-        
-        # Compute similarity matrix
+
+        # Compute the cosine similarity matrix between all image and text features.
+        # The result is scaled by the temperature parameter.
         logits = torch.matmul(image_features, text_features.t()) / temperature
-        
-        # Create labels (diagonal elements are positive pairs)
+
+        # The ground truth labels are the diagonal elements of the similarity matrix,
+        # as corresponding image-text pairs are at the same index in the batch.
         labels = torch.arange(logits.size(0)).to(logits.device)
-        
-        # Compute cross entropy loss in both directions
+
+        # Compute the cross-entropy loss for image-to-text and text-to-image directions.
         loss_i2t = F.cross_entropy(logits, labels)
         loss_t2i = F.cross_entropy(logits.t(), labels)
-        
+
+        # The final loss is the average of the two directional losses.
         return (loss_i2t + loss_t2i) / 2
 
 
 class BPRLoss(nn.Module):
-    """Bayesian Personalized Ranking loss"""
-    
+    """
+    Implements the Bayesian Personalized Ranking (BPR) loss function.
+
+    BPR loss is a pairwise ranking loss that encourages the model to score a
+    positive (interacted-with) item higher than a randomly sampled negative
+    (not interacted-with) item for a given user.
+    """
+
     def __init__(self):
+        """Initializes the BPRLoss module."""
         super(BPRLoss, self).__init__()
-    
+
     def forward(
-        self, 
-        positive_scores: torch.Tensor, 
+        self,
+        positive_scores: torch.Tensor,
         negative_scores: torch.Tensor
     ) -> torch.Tensor:
         """
-        Compute BPR loss.
-        
+        Computes the BPR loss.
+
         Args:
-            positive_scores: Scores for positive items
-            negative_scores: Scores for negative items
-            
+            positive_scores (torch.Tensor): The model's scores for positive items.
+            negative_scores (torch.Tensor): The model's scores for negative items.
+
         Returns:
-            BPR loss value
+            torch.Tensor: A scalar tensor representing the computed BPR loss.
         """
+        # The loss is calculated as the negative log-likelihood of the sigmoid
+        # of the difference between positive and negative item scores.
         return -torch.mean(torch.log(torch.sigmoid(positive_scores - negative_scores)))
 
 
 class MultimodalRecommenderLoss(nn.Module):
-    """Combined loss for multimodal recommender"""
-    
+    """
+    A combined loss function for the multimodal recommender system.
+
+    This class integrates a primary prediction loss (Binary Cross-Entropy)
+    with an optional auxiliary contrastive loss. The two components are
+    weighted to form the final loss value used for backpropagation.
+    """
+
     def __init__(
-        self, 
+        self,
         use_contrastive: bool = True,
         contrastive_weight: float = 0.1,
         bce_weight: float = 1.0
     ):
+        """
+        Initializes the combined loss module.
+
+        Args:
+            use_contrastive (bool): If True, the contrastive loss component is enabled.
+            contrastive_weight (float): The weight factor for the contrastive loss.
+            bce_weight (float): The weight factor for the BCE loss.
+        """
         super(MultimodalRecommenderLoss, self).__init__()
         self.use_contrastive = use_contrastive
         self.contrastive_weight = contrastive_weight
         self.bce_weight = bce_weight
-        
+
         self.bce_loss = nn.BCELoss()
         self.contrastive_loss = ContrastiveLoss()
-    
+
     def forward(
-        self, 
+        self,
         predictions: torch.Tensor,
         labels: torch.Tensor,
         vision_features: Optional[torch.Tensor] = None,
@@ -102,18 +152,24 @@ class MultimodalRecommenderLoss(nn.Module):
         temperature: Optional[torch.Tensor] = None
     ) -> dict:
         """
-        Compute combined loss.
-        
+        Computes the combined loss.
+
         Args:
-            predictions: Model predictions (expected to be probabilities after sigmoid).
-            labels: Ground truth labels (0 or 1).
-            vision_features: Vision features for contrastive loss.
-            text_features: Text features for contrastive loss.
-            temperature: Temperature for contrastive loss.
-            
+            predictions (torch.Tensor): The model's output predictions, expected
+                                        to be probabilities (after a sigmoid).
+            labels (torch.Tensor): The ground truth binary labels (0 or 1).
+            vision_features (Optional[torch.Tensor]): Vision feature vectors, required
+                                                      if contrastive loss is used.
+            text_features (Optional[torch.Tensor]): Text feature vectors, required
+                                                    if contrastive loss is used.
+            temperature (Optional[torch.Tensor]): A learnable temperature parameter
+                                                  for the contrastive loss.
+
         Returns:
-            Dictionary with total loss and individual components.
+            dict: A dictionary containing the total loss and its individual
+                  components ('total', 'bce', 'contrastive').
         """
+        # Handles cases where the model outputs NaN or Inf to prevent crashing.
         if not torch.isfinite(predictions).all():
             nan_loss = torch.tensor(float('nan'), device=predictions.device)
             return {
@@ -122,24 +178,28 @@ class MultimodalRecommenderLoss(nn.Module):
                 'contrastive': torch.tensor(0.0, device=predictions.device)
             }
 
+        # Clamp predictions to a small epsilon range to prevent log(0) and ensure numerical stability.
         epsilon = 1e-7
         clamped_predictions = torch.clamp(predictions, min=epsilon, max=1.0 - epsilon)
-        
+
+        # Compute the Binary Cross-Entropy loss for the primary recommendation task.
         bce_loss = self.bce_loss(clamped_predictions, labels)
-        
+
+        # Compute the contrastive loss if enabled and features are provided.
         contrastive_loss_value = torch.tensor(0.0, device=predictions.device)
         if self.use_contrastive and vision_features is not None and text_features is not None:
             contrastive_loss_value = self.contrastive_loss(
-                vision_features, 
-                text_features, 
+                vision_features,
+                text_features,
                 temperature
             )
-        
+
+        # Combine the losses using their respective weights.
         total_loss = (
-            self.bce_weight * bce_loss + 
+            self.bce_weight * bce_loss +
             self.contrastive_weight * contrastive_loss_value
         )
-        
+
         return {
             'total': total_loss,
             'bce': bce_loss,

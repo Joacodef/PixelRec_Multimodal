@@ -1,5 +1,13 @@
 # src/models/multimodal.py
+"""
+Defines the main architecture for the multimodal recommendation system.
 
+This module contains the MultimodalRecommender class, which integrates various
+data modalities—such as user/item IDs, visual features from images, textual
+content, and numerical metadata—to generate personalized recommendations. The
+architecture is designed to be flexible, allowing for different combinations of
+pre-trained models and fusion strategies.
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,11 +24,21 @@ from ..config import MODEL_CONFIGS
 
 
 class MultimodalRecommender(nn.Module):
+    """
+    A multimodal recommender model that fuses embeddings from multiple sources.
+
+    This model creates a comprehensive user-item interaction representation by
+    combining traditional user and item embeddings with deep features extracted
+    from various modalities. It uses pre-trained models for vision and language
+    processing, projects their outputs into a common embedding space, and then
+    fuses all features using a self-attention mechanism followed by a final
+    prediction network.
+    """
     def __init__(
         self,
         n_users: int,
         n_items: int,
-        num_numerical_features: int, # Added num_numerical_features
+        num_numerical_features: int,
         embedding_dim: int = 128,
         vision_model_name: str = 'clip',
         language_model_name: str = 'sentence-bert',
@@ -39,6 +57,40 @@ class MultimodalRecommender(nn.Module):
         init_method: str = 'xavier_uniform',
         contrastive_temperature: float = 0.07
     ):
+        """
+        Initializes the MultimodalRecommender model and its components.
+
+        Args:
+            n_users (int): The total number of unique users in the dataset.
+            n_items (int): The total number of unique items in the dataset.
+            num_numerical_features (int): The number of numerical features
+                                          associated with each item.
+            embedding_dim (int): The dimensionality of the latent space for all
+                                 embeddings.
+            vision_model_name (str): The key for the pre-trained vision model
+                                     to be used.
+            language_model_name (str): The key for the pre-trained language
+                                       model to be used.
+            freeze_vision (bool): If True, the weights of the vision model are
+                                  frozen and not updated during training.
+            freeze_language (bool): If True, the weights of the language model
+                                    are frozen.
+            use_contrastive (bool): If True, enables an auxiliary contrastive
+                                    loss to align vision and text spaces.
+            dropout_rate (float): The dropout rate for regularization.
+            num_attention_heads (int): The number of heads in the attention layer.
+            attention_dropout (float): The dropout rate within the attention layer.
+            fusion_hidden_dims (List[int]): A list of hidden layer dimensions for
+                                            the final fusion network.
+            fusion_activation (str): The activation function for the fusion network.
+            use_batch_norm (bool): If True, applies batch normalization in the
+                                   fusion network.
+            projection_hidden_dim (Optional[int]): The dimension for an optional
+                                                   hidden layer in modality projections.
+            final_activation (str): The final activation function for the output.
+            init_method (str): The weight initialization method for embeddings.
+            contrastive_temperature (float): The temperature for the contrastive loss.
+        """
         super(MultimodalRecommender, self).__init__()
         
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
@@ -47,14 +99,11 @@ class MultimodalRecommender(nn.Module):
         self.language_model_name = language_model_name
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
-        self.num_numerical_features = num_numerical_features # Use the passed argument
-
+        self.num_numerical_features = num_numerical_features
         self.vision_model_name = vision_model_name
 
-        # Validate configurations
         self._validate_model_configs()
         
-        # Architectural parameters
         self.num_attention_heads = num_attention_heads
         self.attention_dropout = attention_dropout
         self.fusion_hidden_dims = fusion_hidden_dims or [512, 256, 128]
@@ -71,8 +120,16 @@ class MultimodalRecommender(nn.Module):
         self._init_projection_layers()
         self._init_fusion_network()
 
-    def _get_activation(self, activation_name: str):
-        """Get activation function by name"""
+    def _get_activation(self, activation_name: str) -> nn.Module:
+        """
+        Retrieves a PyTorch activation function module based on its name.
+
+        Args:
+            activation_name (str): The name of the activation function (e.g., 'relu').
+
+        Returns:
+            nn.Module: The corresponding PyTorch activation function module.
+        """
         activations = {
             'relu': nn.ReLU(),
             'gelu': nn.GELU(),
@@ -83,11 +140,20 @@ class MultimodalRecommender(nn.Module):
         return activations.get(activation_name.lower(), nn.ReLU())
 
     def _init_embeddings(self, n_users: int, n_items: int):
-        """Initializes user and item embedding layers with configurable initialization."""
+        """
+        Initializes the user and item embedding layers.
+
+        This method creates the embedding layers and applies a specified weight
+        initialization method for better training stability.
+
+        Args:
+            n_users (int): The total number of unique users.
+            n_items (int): The total number of unique items.
+        """
         self.user_embedding = nn.Embedding(n_users, self.embedding_dim)
         self.item_embedding = nn.Embedding(n_items, self.embedding_dim)
         
-        # Apply configured initialization
+        # Apply the configured weight initialization method.
         if self.init_method == 'xavier_uniform':
             nn.init.xavier_uniform_(self.user_embedding.weight)
             nn.init.xavier_uniform_(self.item_embedding.weight)
@@ -101,12 +167,17 @@ class MultimodalRecommender(nn.Module):
             nn.init.kaiming_normal_(self.user_embedding.weight, nonlinearity='relu')
             nn.init.kaiming_normal_(self.item_embedding.weight, nonlinearity='relu')
         else:
-            # Default to xavier_uniform
             nn.init.xavier_uniform_(self.user_embedding.weight)
             nn.init.xavier_uniform_(self.item_embedding.weight)
 
     def _init_vision_model(self, model_key: str, freeze: bool):
-        """Initializes the vision model based on the provided key."""
+        """
+        Initializes the pre-trained vision model from Hugging Face.
+
+        Args:
+            model_key (str): The key identifying the vision model in MODEL_CONFIGS.
+            freeze (bool): If True, freezes the model's weights.
+        """
         hf_model_name = self.vision_config['name']
         if model_key == 'clip':
             self.vision_model = CLIPVisionModel.from_pretrained(hf_model_name)
@@ -115,15 +186,14 @@ class MultimodalRecommender(nn.Module):
         elif model_key == 'dino': 
             self.vision_model = Dinov2Model.from_pretrained(hf_model_name)
         elif model_key == 'resnet' or model_key == 'convnext':
-            # Load as a base model to get features before a classification head
             self.vision_model = AutoModel.from_pretrained(hf_model_name)
         else: 
-            print(f"Warning: Vision model key '{model_key}' not explicitly handled for base model loading. Defaulting to AutoModelForImageClassification.")
             self.vision_model = AutoModelForImageClassification.from_pretrained(
                 hf_model_name,
                 num_labels=self.vision_config['dim'], 
                 ignore_mismatched_sizes=True
             )
+        # Freeze weights if configured to do so.
         if freeze:
             for param in self.vision_model.parameters():
                 param.requires_grad = False
@@ -132,7 +202,13 @@ class MultimodalRecommender(nn.Module):
                 param.requires_grad = False
 
     def _init_language_model(self, model_key: str, freeze: bool):
-        """Initializes the language model based on the provided key."""
+        """
+        Initializes the pre-trained language model from Hugging Face.
+
+        Args:
+            model_key (str): The key identifying the language model in MODEL_CONFIGS.
+            freeze (bool): If True, freezes the model's weights.
+        """
         hf_model_name = self.language_config['name']
         self.language_model = AutoModel.from_pretrained(hf_model_name)
         if freeze:
@@ -140,10 +216,15 @@ class MultimodalRecommender(nn.Module):
                 param.requires_grad = False
 
     def _init_projection_layers(self):
-        """Initializes linear projection layers for modality features with optional hidden layers."""
+        """
+        Initializes projection layers for all modalities.
+
+        These layers project the raw feature outputs from the pre-trained models
+        into the common embedding space dimension, allowing them to be fused.
+        """
         activation = self._get_activation(self.fusion_activation)
         
-        # Vision projection
+        # Defines the vision projection network.
         if self.projection_hidden_dim:
             self.vision_projection = nn.Sequential(
                 nn.Linear(self.vision_config['dim'], self.projection_hidden_dim),
@@ -160,7 +241,7 @@ class MultimodalRecommender(nn.Module):
                 nn.Dropout(self.dropout_rate)
             )
         
-        # Language projection
+        # Defines the language projection network.
         if self.projection_hidden_dim:
             self.language_projection = nn.Sequential(
                 nn.Linear(self.language_config['dim'], self.projection_hidden_dim),
@@ -177,12 +258,11 @@ class MultimodalRecommender(nn.Module):
                 nn.Dropout(self.dropout_rate)
             )
         
-        # Numerical projection
+        # Defines the numerical features projection network.
         if self.num_numerical_features > 0:
-            # Numerical projection
             if self.projection_hidden_dim:
                 self.numerical_projection = nn.Sequential(
-                    nn.Linear(self.num_numerical_features, self.projection_hidden_dim), # Use self.num_numerical_features
+                    nn.Linear(self.num_numerical_features, self.projection_hidden_dim),
                     activation,
                     nn.Dropout(self.dropout_rate),
                     nn.Linear(self.projection_hidden_dim, self.embedding_dim),
@@ -191,20 +271,19 @@ class MultimodalRecommender(nn.Module):
                 )
             else:
                 self.numerical_projection = nn.Sequential(
-                    nn.Linear(self.num_numerical_features, self.embedding_dim), # Use self.num_numerical_features
+                    nn.Linear(self.num_numerical_features, self.embedding_dim),
                     activation,
                     nn.Dropout(self.dropout_rate)
                 )
         else:
             self.numerical_projection = None
 
+        # Defines separate projection layers for contrastive loss.
         if self.use_contrastive:
             self.vision_contrastive_projection = nn.Linear(
                 self.vision_config['dim'],
                 self.embedding_dim
             )
-            
-            # Dynamically determine CLIP text model output dimension
             clip_text_output_dim = self._get_clip_text_output_dim()
             self.text_contrastive_projection = nn.Linear(
                 clip_text_output_dim, 
@@ -213,160 +292,139 @@ class MultimodalRecommender(nn.Module):
             self.temperature = nn.Parameter(torch.tensor(self.contrastive_temperature))
 
     def _init_fusion_network(self):
-        """Initializes the attention-based fusion network and final prediction layers with configurable architecture."""
-        # Multi-head attention with configurable parameters
+        """
+        Initializes the attention-based fusion network and final prediction layers.
+        """
+        # Defines the multi-head self-attention layer for feature fusion.
         self.attention = nn.MultiheadAttention(
             embed_dim=self.embedding_dim,
             num_heads=self.num_attention_heads,
             dropout=self.attention_dropout,
-            batch_first=False  # We'll handle the dimension ordering
+            batch_first=False
         )
         
-        # Build fusion network layers dynamically
+        # Dynamically builds the final multi-layer perceptron (MLP) for prediction.
         activation = self._get_activation(self.fusion_activation)
         fusion_layers = []
         
-        # Input dimension is 5 * embedding_dim (user, item, vision, language, numerical)
+        # The input to the MLP is the concatenated output of the attention layer.
         input_dim = self.embedding_dim * 5
         
         for i, hidden_dim in enumerate(self.fusion_hidden_dims):
             fusion_layers.append(nn.Linear(input_dim, hidden_dim))
             fusion_layers.append(activation)
             fusion_layers.append(nn.Dropout(self.dropout_rate))
-            
             if self.use_batch_norm:
                 fusion_layers.append(nn.BatchNorm1d(hidden_dim))
-            
             input_dim = hidden_dim
         
-        # Final prediction layer
+        # Appends the final output layer.
         fusion_layers.append(nn.Linear(input_dim, 1))
         
-        # Add final activation if specified
+        # Appends the final activation function if specified.
         if self.final_activation == 'sigmoid':
             fusion_layers.append(nn.Sigmoid())
         elif self.final_activation == 'tanh':
             fusion_layers.append(nn.Tanh())
-        # If 'none', no activation is added
         
         self.fusion = nn.Sequential(*fusion_layers)
     
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
-        """Extracts vision features from the image tensor using the vision model."""
-        # Validate input tensor
-        if not isinstance(image, torch.Tensor):
-            raise TypeError(f"Expected torch.Tensor, got {type(image)}")
-        
-        if image.dim() not in [3, 4]:
-            raise ValueError(f"Expected 3D or 4D tensor, got {image.dim()}D tensor with shape {image.shape}")
-        
+        """
+        Extracts vision features from an image tensor, handling different model outputs.
+
+        This method supports various Hugging Face vision models. It correctly
+        identifies the output structure (e.g., `pooler_output` vs.
+        `last_hidden_state`) and applies the necessary pooling and reshaping
+        to produce a consistent 2D feature tensor (batch_size, feature_dim).
+
+        Args:
+            image (torch.Tensor): The input image tensor.
+
+        Returns:
+            torch.Tensor: The extracted and processed vision feature tensor.
+
+        Raises:
+            ValueError: If the model's output structure is not recognized or
+                        if the final feature dimensions are incorrect.
+            RuntimeError: If a memory or dimension mismatch error occurs during
+                          feature extraction.
+        """
         model_input = {'pixel_values': image}
         vision_output = None
-
-        # Check if the model is a CLIP vision model and has 'get_image_features'
         is_clip_model_type = 'clip' in self.vision_config.get('name', '').lower()
 
         try:
             if is_clip_model_type and hasattr(self.vision_model, 'get_image_features'):
                 vision_output = self.vision_model.get_image_features(**model_input)
             else:
-                # For other models like ResNet, DINOv2, ConvNeXT
                 outputs = self.vision_model(**model_input)
-                
                 if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
                     vision_output = outputs.pooler_output
                 elif hasattr(outputs, 'last_hidden_state'):
                     lhs = outputs.last_hidden_state
-                    if lhs.ndim == 4:  # CNN feature maps (batch_size, num_channels, height, width)
+                    if lhs.ndim == 4:
                         vision_output = torch.nn.functional.adaptive_avg_pool2d(lhs, (1, 1)).squeeze(-1).squeeze(-1)
-                    elif lhs.ndim == 3:  # ViT-like sequence outputs (batch_size, seq_len, hidden_dim)
-                        vision_output = lhs.mean(dim=1)  # Pool over sequence length
+                    elif lhs.ndim == 3:
+                        vision_output = lhs.mean(dim=1)
                     else:
                         raise ValueError(f"Unsupported last_hidden_state dimensions: {lhs.ndim}D with shape {lhs.shape}")
                 else:
-                    # Check for other possible output attributes
                     available_attrs = [attr for attr in dir(outputs) if not attr.startswith('_') and hasattr(outputs, attr)]
-                    raise ValueError(
-                        f"Vision model output structure not recognized for model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                        f"No 'pooler_output' or 'last_hidden_state' found. "
-                        f"Available attributes: {available_attrs}"
-                    )
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                raise RuntimeError(
-                    f"GPU out of memory during vision feature extraction. "
-                    f"Input shape: {image.shape}, Model: {getattr(self, 'vision_model_name', 'unknown')}. "
-                    f"Original error: {e}"
-                ) from e
-            elif "size mismatch" in str(e).lower() or "dimension" in str(e).lower():
-                raise RuntimeError(
-                    f"Tensor dimension mismatch in vision model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                    f"Input shape: {image.shape}, Expected input format may be different. "
-                    f"Original error: {e}"
-                ) from e
-            else:
-                raise RuntimeError(
-                    f"Runtime error during vision feature extraction with model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                    f"Input shape: {image.shape}. Original error: {e}"
-                ) from e
-        
+                    raise ValueError(f"Vision model output structure not recognized. Available attributes: {available_attrs}")
         except Exception as e:
-            raise RuntimeError(
-                f"Unexpected error during vision feature extraction with model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                f"Input shape: {image.shape}. Error type: {type(e).__name__}. "
-                f"Original error: {e}"
-            ) from e
-        
-        # Validate that we got an output
-        if vision_output is None:
-            raise ValueError(
-                f"Failed to extract vision features from model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                f"Model returned None output. Input shape: {image.shape}"
-            )
+            raise RuntimeError(f"Error during vision feature extraction: {e}") from e
 
-        # Validate and fix output dimensions
+        if vision_output is None:
+            raise ValueError("Failed to extract vision features; model returned None.")
+
+        # This block handles cases where the output might still not be 2D.
         if vision_output.ndim != 2:
-            # Attempt to fix common dimension issues
             if vision_output.ndim == 4 and vision_output.shape[2] == 1 and vision_output.shape[3] == 1:
                 vision_output = vision_output.squeeze(-1).squeeze(-1)
             elif vision_output.ndim == 3 and vision_output.shape[0] == 1:
-                # Batch dimension of 1 that can be squeezed
                 vision_output = vision_output.squeeze(0)
             elif vision_output.ndim == 1:
-                # Add batch dimension if missing
                 vision_output = vision_output.unsqueeze(0)
             else:
-                raise ValueError(
-                    f"Vision output has unexpected dimensions: {vision_output.ndim}D with shape {vision_output.shape}. "
-                    f"Expected 2D (batch_size, feature_dim). Model: {getattr(self, 'vision_model_name', 'unknown')}, "
-                    f"Input shape: {image.shape}"
-                )
+                 raise ValueError(f"Vision output has unexpected dimensions: {vision_output.ndim}D. Expected 2D.")
         
-        # Final validation of feature dimension
         expected_dim = self.vision_config['dim']
-        actual_dim = vision_output.shape[1] if vision_output.ndim >= 2 else vision_output.numel()
+        actual_dim = vision_output.shape[1]
         
         if actual_dim != expected_dim:
-            raise ValueError(
-                f"Vision feature dimension mismatch for model '{getattr(self, 'vision_model_name', 'unknown')}'. "
-                f"Expected: {expected_dim}, Got: {actual_dim}. "
-                f"Output shape: {vision_output.shape}, Input shape: {image.shape}. "
-                f"This may indicate a configuration error in MODEL_CONFIGS or model version mismatch."
-            )
+            raise ValueError(f"Vision feature dimension mismatch. Expected: {expected_dim}, Got: {actual_dim}.")
         
         return vision_output
     
     def _get_language_features(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """Extracts language features from text inputs using the main language model."""
+        """
+        Extracts language features from text input tensors.
+
+        Args:
+            input_ids (torch.Tensor): The tokenized input IDs.
+            attention_mask (torch.Tensor): The attention mask for the input.
+
+        Returns:
+            torch.Tensor: The extracted language feature tensor.
+        """
         outputs = self.language_model(input_ids=input_ids, attention_mask=attention_mask)
         if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
-            lang_feat = outputs.pooler_output
-        else: 
-            lang_feat = outputs.last_hidden_state.mean(dim=1)
-        return lang_feat
+            return outputs.pooler_output
+        return outputs.last_hidden_state.mean(dim=1)
 
     def _get_clip_text_features(self, clip_input_ids: torch.Tensor, clip_attention_mask: torch.Tensor) -> Optional[torch.Tensor]:
-        """Extracts text features using the CLIP text model, if available."""
+        """
+        Extracts text features specifically using the CLIP text model.
+
+        Args:
+            clip_input_ids (torch.Tensor): The tokenized input IDs for CLIP.
+            clip_attention_mask (torch.Tensor): The attention mask for the CLIP input.
+
+        Returns:
+            Optional[torch.Tensor]: The extracted feature tensor, or None if the
+                                    CLIP text model is not used.
+        """
         if hasattr(self, 'clip_text_model') and self.clip_text_model is not None:
             outputs = self.clip_text_model(input_ids=clip_input_ids, attention_mask=clip_attention_mask)
             return outputs.pooler_output 
@@ -376,11 +434,20 @@ class MultimodalRecommender(nn.Module):
         self, user_emb: torch.Tensor, item_emb: torch.Tensor, vision_emb: torch.Tensor,
         language_emb: torch.Tensor, numerical_emb: torch.Tensor, batch_size: int
     ) -> torch.Tensor:
-        """Combines features using self-attention and prepares for final fusion layers."""
+        """
+        Applies self-attention to fuse different feature embeddings.
+
+        Args:
+            user_emb, item_emb, vision_emb, language_emb, numerical_emb: The
+                embedding tensors for each modality.
+            batch_size (int): The number of samples in the batch.
+
+        Returns:
+            torch.Tensor: The concatenated, attention-fused feature tensor.
+        """
         features_stacked = torch.stack([user_emb, item_emb, vision_emb, language_emb, numerical_emb], dim=0)
         attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
-        combined = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
-        return combined
+        return attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
 
     def forward(
         self, user_idx: torch.Tensor, item_idx: torch.Tensor, image: torch.Tensor,
@@ -391,43 +458,44 @@ class MultimodalRecommender(nn.Module):
         return_embeddings: bool = False,
         debug_this_batch: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
-        
-        def check_tensor(tensor: torch.Tensor, name: str):
-            # Helper function to check and print if a tensor contains NaN or Inf.
-            if debug_this_batch: # Only print for the problematic batch
-                if torch.isnan(tensor).any() or torch.isinf(tensor).any():
-                    print(f"DEBUG: NaN/Inf detected in '{name}'")
-                    print(f"  Shape: {tensor.shape}")
-                    print(f"  Contains NaN: {torch.isnan(tensor).any().item()}")
-                    print(f"  Contains Inf: {torch.isinf(tensor).any().item()}")
-                    finite_vals = tensor[torch.isfinite(tensor)]
-                    if finite_vals.numel() > 0:
-                        print(f"  Finite min: {finite_vals.min().item()}, max: {finite_vals.max().item()}, mean: {finite_vals.mean().item()}")
-                    else:
-                        print(f"  No finite values in '{name}'.")
-                else:
-                    print(f"DEBUG: '{name}' is clean. Shape: {tensor.shape}, Min: {tensor.min().item()}, Max: {tensor.max().item()}, Mean: {tensor.mean().item()}")
+        """
+        Defines the main forward pass of the model.
 
+        Args:
+            user_idx (torch.Tensor): Tensor of user indices.
+            item_idx (torch.Tensor): Tensor of item indices.
+            image (torch.Tensor): Tensor of item images.
+            text_input_ids (torch.Tensor): Tensor of tokenized text input IDs.
+            text_attention_mask (torch.Tensor): Tensor of text attention masks.
+            numerical_features (torch.Tensor): Tensor of numerical features.
+            clip_text_input_ids (Optional[torch.Tensor]): Optional text inputs for CLIP.
+            clip_text_attention_mask (Optional[torch.Tensor]): Optional attention masks for CLIP.
+            return_embeddings (bool): If True, returns intermediate embeddings
+                                      along with the final prediction.
 
+        Returns:
+            Union[torch.Tensor, Tuple]: Either the final prediction tensor or a
+                                        tuple containing the prediction and
+                                        intermediate embeddings.
+        """
         batch_size = user_idx.size(0)
 
+        # Generate base embeddings.
         user_emb = self.user_embedding(user_idx)
         item_emb = self.item_embedding(item_idx)
 
+        # Extract and project features from each modality.
         raw_vision_output = self._get_vision_features(image)
-        
         projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
-
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
         projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
 
         if self.numerical_projection is not None and self.num_numerical_features > 0:
             projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
         else:
-            # Create a zero tensor as a placeholder to maintain consistent dimensions
             projected_numerical_emb_main_task = torch.zeros(batch_size, self.embedding_dim, device=user_idx.device)
-
-        # Features for Contrastive Loss
+        
+        # Generate features specifically for the contrastive loss objective.
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
 
@@ -440,23 +508,22 @@ class MultimodalRecommender(nn.Module):
                 if raw_clip_text_output is not None and hasattr(self, 'text_contrastive_projection'): 
                     text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
         
+        # Stack all features and apply attention-based fusion.
         features_stacked = torch.stack([
             user_emb, item_emb, 
             projected_vision_emb_main_task,
             projected_language_emb_main_task, 
             projected_numerical_emb_main_task
         ], dim=0) 
-        
         attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
-
         combined_features = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
-
+        
+        # Pass fused features through the final prediction network.
         output = self.fusion(combined_features)
         
-        # Sanitize the output to prevent NaN/Inf values from crashing downstream processes.
+        # Sanitize the output to prevent NaN/Inf values from propagating.
         if torch.isnan(output).any() or torch.isinf(output).any():
             output = torch.nan_to_num(output, nan=0.0, posinf=10.0, neginf=-10.0)
-        
 
         if return_embeddings:
             if vision_features_for_contrastive_loss is not None:
@@ -473,8 +540,14 @@ class MultimodalRecommender(nn.Module):
         text_attention_mask: torch.Tensor, numerical_features: torch.Tensor
     ) -> torch.Tensor:
         """
-        Computes a comprehensive item embedding by concatenating its ID-based embedding
-        with projected modal features. For inference or analysis purposes.
+        Computes a comprehensive item embedding for analysis or inference.
+
+        Args:
+            item_idx, image, text_input_ids, text_attention_mask, numerical_features:
+                The tensors representing a single item's data.
+
+        Returns:
+            torch.Tensor: A single tensor representing the combined features of the item.
         """
         with torch.no_grad(): 
             base_item_emb = self.item_embedding(item_idx)
@@ -490,131 +563,36 @@ class MultimodalRecommender(nn.Module):
             )
         return item_full_embedding
 
-    def get_user_item_score(self, user_idx: torch.Tensor, item_idx: torch.Tensor, 
-                           image: torch.Tensor, text_input_ids: torch.Tensor,
-                           text_attention_mask: torch.Tensor, numerical_features: torch.Tensor) -> torch.Tensor:
-        """
-        Get the prediction score for a specific user-item pair.
-        Useful for ranking evaluation.
-        """
-        with torch.no_grad():
-            # Forward pass to get the score
-            output = self.forward(
-                user_idx=user_idx,
-                item_idx=item_idx,
-                image=image,
-                text_input_ids=text_input_ids,
-                text_attention_mask=text_attention_mask,
-                numerical_features=numerical_features,
-                return_embeddings=False
-            )
-            return output.squeeze()  # Remove batch dimension if single item
-
     def _validate_model_configs(self):
-        """Validate that model configurations are available and consistent."""
-        # Check if vision model config exists
+        """
+        Validates that the selected model configurations are available and consistent.
+        """
         if self.vision_model_name not in MODEL_CONFIGS['vision']:
-            available_models = list(MODEL_CONFIGS['vision'].keys())
-            raise ValueError(
-                f"Vision model '{self.vision_model_name}' not found in MODEL_CONFIGS. "
-                f"Available options: {available_models}"
-            )
-        
-        # Check if language model config exists
+            raise ValueError(f"Vision model '{self.vision_model_name}' not found in MODEL_CONFIGS.")
         if self.language_model_name not in MODEL_CONFIGS['language']:
-            available_models = list(MODEL_CONFIGS['language'].keys())
-            raise ValueError(
-                f"Language model '{self.language_model_name}' not found in MODEL_CONFIGS. "
-                f"Available options: {available_models}"
-            )
-        
-        # Validate dimensions are positive integers
+            raise ValueError(f"Language model '{self.language_model_name}' not found in MODEL_CONFIGS.")
         vision_dim = self.vision_config.get('dim')
-        language_dim = self.language_config.get('dim')
-        
         if not isinstance(vision_dim, int) or vision_dim <= 0:
             raise ValueError(f"Invalid vision model dimension: {vision_dim}")
-        
-        if not isinstance(language_dim, int) or language_dim <= 0:
-            raise ValueError(f"Invalid language model dimension: {language_dim}")
-        
-        # Validate contrastive learning setup
-        if self.use_contrastive and self.vision_model_name != 'clip':
-            print(f"Warning: Contrastive learning enabled but vision model is '{self.vision_model_name}', not 'clip'. "
-                f"This may not work as expected.")
 
     def _get_clip_text_output_dim(self) -> int:
         """
-        Dynamically determine the output dimension of the CLIP text model.
-        
+        Determines the output dimension of the CLIP text model.
+
         Returns:
-            int: The output dimension of the CLIP text model
+            int: The output dimension of the CLIP text model.
         """
         if not hasattr(self, 'clip_text_model') or self.clip_text_model is None:
-            # Fallback: try to get from config or use reasonable default
-            clip_text_dim = MODEL_CONFIGS['vision']['clip'].get('text_dim')
-            if clip_text_dim is not None:
-                return clip_text_dim
-            
-            # Last resort: use the most common CLIP text dimension
-            print("Warning: Could not determine CLIP text output dimension. Using default 512.")
-            return 512
-        
-        # Try to get the actual dimension from the model
+            return MODEL_CONFIGS['vision']['clip'].get('text_dim', 512)
         try:
-            # Most CLIP text models have a text_projection layer
             if hasattr(self.clip_text_model, 'text_projection'):
                 return self.clip_text_model.text_projection.in_features
-            
-            # Alternative: check the final layer of the text model
-            if hasattr(self.clip_text_model, 'text_model') and hasattr(self.clip_text_model.text_model, 'final_layer_norm'):
-                return self.clip_text_model.text_model.final_layer_norm.normalized_shape[0]
-            
-            # Another alternative: use the pooler output if available
             if hasattr(self.clip_text_model, 'config') and hasattr(self.clip_text_model.config, 'text_config'):
-                text_config = self.clip_text_model.config.text_config
-                if hasattr(text_config, 'hidden_size'):
-                    return text_config.hidden_size
-            
-            # If all else fails, use a test forward pass (less efficient but reliable)
-            return self._probe_clip_text_output_dim()
-            
+                return self.clip_text_model.config.text_config.hidden_size
         except Exception as e:
-            print(f"Warning: Error determining CLIP text output dimension: {e}. Using default 512.")
-            return 512
+            print(f"Warning: Could not determine CLIP text output dimension: {e}.")
+        return 512
 
-    def _probe_clip_text_output_dim(self) -> int:
-        """
-        Determine CLIP text output dimension by running a test forward pass.
         
-        Returns:
-            int: The output dimension
-        """
-        try:
-            # Create a dummy input
-            dummy_input_ids = torch.zeros(1, 77, dtype=torch.long)  # Standard CLIP sequence length
-            dummy_attention_mask = torch.ones(1, 77, dtype=torch.long)
-            
-            # Run forward pass
-            with torch.no_grad():
-                outputs = self.clip_text_model(
-                    input_ids=dummy_input_ids,
-                    attention_mask=dummy_attention_mask
-                )
-                
-            # Get the pooler output dimension
-            if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
-                return outputs.pooler_output.shape[-1]
-            
-            # Fallback to last hidden state
-            if hasattr(outputs, 'last_hidden_state'):
-                return outputs.last_hidden_state.shape[-1]
-                
-        except Exception as e:
-            print(f"Warning: Error probing CLIP text output dimension: {e}")
-        
-        return 512  # Safe default
-
-
 # Backward compatibility alias
 PretrainedMultimodalRecommender = MultimodalRecommender
