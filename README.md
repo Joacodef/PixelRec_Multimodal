@@ -2,7 +2,7 @@
 
 <div align="center">
     <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python Version">
-    <img src="https://img.shields.io/badge/PyTorch-2.6+-ee4c2c.svg" alt="PyTorch Version">
+    <img src="https://img.shields.io/badge/PyTorch-2.2.1+-ee4c2c.svg" alt="PyTorch Version">
 </div>
 <br>
 
@@ -83,7 +83,7 @@ python scripts/evaluate.py --config configs/simple_config.yaml --device cuda
 ### Prerequisites
 
   - Python 3.11+
-  - PyTorch 2.2.6+
+  - PyTorch 2.2.1+
   - Transformers 4.47.1+
   - A CUDA-capable GPU is recommended for fast training.
 
