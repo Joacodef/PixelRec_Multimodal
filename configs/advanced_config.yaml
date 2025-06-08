@@ -16,14 +16,14 @@ model:
   contrastive_temperature: 0.07     # Temperature for contrastive loss
   
   # Regularization
-  dropout_rate: 0.3                 # Dropout rate for regularization
+  dropout_rate: 0.5                 # Dropout rate for regularization
   
   # Attention mechanism (advanced)
   num_attention_heads: 8            # Number of attention heads
-  attention_dropout: 0.1            # Dropout in attention layers
+  attention_dropout: 0.2            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [1024, 512, 256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
@@ -38,8 +38,8 @@ training:
   # Basic training parameters
   batch_size: 128
   epochs: 100
-  learning_rate: 0.0001
-  weight_decay: 0.01               # L2 regularization
+  learning_rate: 0.00001
+  weight_decay: 0.1               # L2 regularization
   patience: 10                     # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
   num_workers: 8                   # DataLoader workers
@@ -51,8 +51,8 @@ training:
   # Learning rate scheduling (advanced)
   use_lr_scheduler: true
   lr_scheduler_type: reduce_on_plateau  # Options: reduce_on_plateau, cosine, step
-  lr_scheduler_patience: 2         # Scheduler patience
-  lr_scheduler_factor: 0.5         # LR reduction factor
+  lr_scheduler_patience: 1         # Scheduler patience
+  lr_scheduler_factor: 0.3         # LR reduction factor
   lr_scheduler_min_lr: 0.000001    # Minimum learning rate
   
   # Optimizer configuration (advanced)
@@ -98,9 +98,27 @@ data:
     #- barrage_number
   numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
   
-  # Text augmentation (experimental)
+  # Image augmentation settings
+  image_augmentation:
+    enabled: true
+    # Color augmentations
+    brightness: 0.3        # Random brightness adjustment
+    contrast: 0.3          # Random contrast adjustment  
+    saturation: 0.3        # Random saturation adjustment
+    hue: 0.1              # Random hue shift
+    # Geometric augmentations
+    random_crop: true      # Random crop and resize
+    crop_scale: [0.8, 1.0] # Scale range for random crop
+    horizontal_flip: true  # Random horizontal flip
+    rotation_degrees: 15   # Max rotation in degrees
+    # Blur
+    gaussian_blur: true    # Apply random gaussian blur
+    blur_kernel_size: [5, 9]  # Kernel size range
+
+    
+  # Text augmentation
   text_augmentation:
-    enabled: false                  # Enable text augmentation during training
+    enabled: true                 # Enable text augmentation during training
     augmentation_type: random_delete  # Options: random_delete, random_swap, none
     delete_prob: 0.05              # Probability of deleting words
     swap_prob: 0.05                # Probability of swapping adjacent words

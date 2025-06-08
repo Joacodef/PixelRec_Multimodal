@@ -9,7 +9,7 @@ a single, manageable structure. The configuration can be easily loaded from
 and saved to YAML files, promoting reproducibility and simplifying experimentation.
 """
 from dataclasses import dataclass, field, asdict, is_dataclass, fields
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Tuple
 import yaml
 from pathlib import Path
 
@@ -145,6 +145,24 @@ class ImageValidationConfig:
     allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
 
 @dataclass
+class ImageAugmentationConfig:
+    """Configuration for image augmentation during training"""
+    enabled: bool = False
+    brightness: float = 0.2
+    contrast: float = 0.2
+    saturation: float = 0.2
+    hue: float = 0.1
+    random_crop: bool = True
+    crop_scale: List[float] = field(default_factory=lambda: [0.8, 1.0])  # Use List instead of tuple
+    horizontal_flip: bool = True
+    rotation_degrees: float = 10
+    gaussian_blur: bool = True
+    blur_kernel_size: List[int] = field(default_factory=lambda: [5, 9])  # Use List instead of tuple
+    gaussian_noise: bool = False
+    noise_std: float = 0.01
+
+
+@dataclass
 class OfflineTextCleaningConfig:
     """Configures text cleaning rules applied during offline preprocessing."""
     # If True, removes HTML tags from all text fields.
@@ -227,6 +245,8 @@ class DataConfig:
     
     # Nested configuration for text augmentation.
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)
+    # Nested configuration for image augmentation.
+    image_augmentation: ImageAugmentationConfig = field(default_factory=ImageAugmentationConfig)
     # Nested configuration for offline image compression.
     offline_image_compression: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
     # Nested configuration for offline image validation.

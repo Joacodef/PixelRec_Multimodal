@@ -22,7 +22,7 @@ from typing import Dict, Optional, Any, List
 import traceback
 
 from .simple_cache import SimpleFeatureCache
-from ..config import MODEL_CONFIGS, TextAugmentationConfig
+from ..config import MODEL_CONFIGS, TextAugmentationConfig, ImageAugmentationConfig
 from ..data.preprocessing import augment_text
 
 
@@ -131,6 +131,17 @@ class MultimodalDataset(Dataset):
         else:
             self.n_users = 0
             self.n_items = 0
+
+        self.image_augmentation_config = kwargs.get(
+            'image_augmentation_config', 
+            ImageAugmentationConfig(enabled=False)
+        )
+        
+        # Only initialize augmentations if truly needed
+        if hasattr(self, 'image_augmentation_config'):
+            self._init_image_augmentations()
+        else:
+            self.image_augmentation = None
 
         # Creates the final set of samples, including negatives if specified.
         if create_negative_samples:
@@ -280,26 +291,27 @@ class MultimodalDataset(Dataset):
             return None
 
     def _load_and_process_image(self, item_id: str) -> torch.Tensor:
-        """
-        Loads an image from disk and processes it.
-
-        Handles cases where the image file is missing by returning a placeholder tensor.
-
-        Args:
-            item_id (str): The ID of the item whose image is to be loaded.
-
-        Returns:
-            torch.Tensor: The processed image tensor.
-        """
+        """Load and process image with optional augmentation"""
         image_path = os.path.join(self.image_folder, f"{item_id}.jpg")
         try:
             image = Image.open(image_path).convert("RGB")
         except FileNotFoundError:
             image = Image.new("RGB", (224, 224), color="grey")
         
-        processed_np = self.image_processor(images=[image], return_tensors="np")['pixel_values']
+        # Only apply augmentations if they exist and we're in training mode
+        if hasattr(self, 'image_augmentation') and self.image_augmentation is not None:
+            try:
+                from torchvision import transforms
+                # Convert to tensor for augmentation
+                image = transforms.ToTensor()(image)
+                image = self.image_augmentation(image)
+                # Convert back to PIL for processor
+                image = transforms.ToPILImage()(image)
+            except ImportError:
+                # If torchvision is not available, skip augmentation
+                pass
         
-        return torch.tensor(processed_np, dtype=torch.float32).squeeze(0)
+        return self.image_processor(images=image, return_tensors="pt")['pixel_values'].squeeze(0)
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
         """
@@ -338,6 +350,63 @@ class MultimodalDataset(Dataset):
         negative_df = pd.DataFrame(neg_samples, columns=['user_id', 'item_id', 'user_idx', 'item_idx', 'label'])
         
         return pd.concat([positive_df, negative_df], ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+
+    def _init_image_augmentations(self):
+        """Initialize image augmentation pipeline"""
+        if self.is_train_mode and hasattr(self, 'image_augmentation_config') and self.image_augmentation_config.enabled:
+            from torchvision import transforms
+            
+            augmentation_list = []
+            
+            # Color jittering
+            if any([self.image_augmentation_config.brightness,
+                    self.image_augmentation_config.contrast,
+                    self.image_augmentation_config.saturation,
+                    self.image_augmentation_config.hue]):
+                augmentation_list.append(
+                    transforms.ColorJitter(
+                        brightness=self.image_augmentation_config.brightness,
+                        contrast=self.image_augmentation_config.contrast,
+                        saturation=self.image_augmentation_config.saturation,
+                        hue=self.image_augmentation_config.hue
+                    )
+                )
+            
+            # Random crop and resize
+            if self.image_augmentation_config.random_crop:
+                augmentation_list.append(
+                    transforms.RandomResizedCrop(
+                        224,
+                        scale=tuple(self.image_augmentation_config.crop_scale),  # Convert list to tuple
+                        ratio=(0.75, 1.33)
+                    )
+                )
+            
+            # Horizontal flip
+            if self.image_augmentation_config.horizontal_flip:
+                augmentation_list.append(transforms.RandomHorizontalFlip(p=0.5))
+            
+            # Rotation
+            if self.image_augmentation_config.rotation_degrees > 0:
+                augmentation_list.append(
+                    transforms.RandomRotation(degrees=self.image_augmentation_config.rotation_degrees)
+                )
+            
+            # Gaussian blur
+            if self.image_augmentation_config.gaussian_blur:
+                augmentation_list.append(
+                    transforms.RandomApply([
+                        transforms.GaussianBlur(
+                            kernel_size=tuple(self.image_augmentation_config.blur_kernel_size),  # Convert list to tuple
+                            sigma=(0.1, 2.0)
+                        )
+                    ], p=0.5)
+                )
+        
+            self.image_augmentation = transforms.Compose(augmentation_list)
+        else:
+            self.image_augmentation = None
+
 
     def get_user_history(self, user_id: str) -> set:
         """

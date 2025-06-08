@@ -622,6 +622,7 @@ def main():
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
             text_augmentation_config=data_config.text_augmentation,
+            image_augmentation_config=data_config.image_augmentation,
             numerical_feat_cols=valid_numerical_features,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
