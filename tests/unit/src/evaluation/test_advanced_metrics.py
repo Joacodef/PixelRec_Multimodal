@@ -81,20 +81,47 @@ class TestAdvancedMetrics(unittest.TestCase):
         self.assertEqual(AdvancedMetrics.calculate_gini_coefficient({}), 0.0)
 
     def test_calculate_serendipity(self):
-        """Tests the serendipity calculation (unexpected but relevant)."""
-        recommendations = [['a', 'b', 'c']]
+        """Tests the serendipity calculation (unexpected but relevant) for single and multiple users."""
+        # --- SUB-TEST 1: Single user case ---
+        recommendations_single = [['a', 'b', 'c']]
         # 'a' is expected. 'b' and 'c' are unexpected.
-        expected_items = [{'a'}]
+        expected_items_single = [{'a'}]
         # 'b' and 'c' are relevant.
-        relevant_items = [{'b', 'c'}]
+        relevant_items_single = [{'b', 'c'}]
         # Serendipitous items are 'b' and 'c' (relevant and not expected). Score = 2/3
-        serendipity = AdvancedMetrics.calculate_serendipity(recommendations, expected_items, relevant_items)
-        # Corrected assertion to match the actual logic.
-        self.assertAlmostEqual(serendipity, 2 / 3)
+        serendipity = AdvancedMetrics.calculate_serendipity(recommendations_single, expected_items_single, relevant_items_single)
+        self.assertAlmostEqual(serendipity, 2 / 3, msg="Single user serendipity calculation failed")
+
+        # --- SUB-TEST 2: Multi-user case with varied results ---
+        recommendations_multi = [
+            ['i1', 'i2', 'i3'],  # User 1: 2 serendipitous items / 3 recs = 0.666
+            ['i4', 'i5', 'i6'],  # User 2: 1 serendipitous item / 3 recs = 0.333
+            ['i7', 'i8'],        # User 3: 0 serendipitous items / 2 recs = 0.0
+            []                   # User 4: Empty recommendations, score = 0.0
+        ]
+        expected_items_multi = [
+            {'i10'},             # User 1: All recommendations are unexpected
+            {'i4', 'i11'},       # User 2: 'i4' is expected
+            {'i7', 'i12'},       # User 3: 'i7' is expected
+            {'i13'}              # User 4: (no recommendations)
+        ]
+        relevant_items_multi = [
+            {'i1', 'i2'},        # User 1: 'i1', 'i2' are relevant and unexpected
+            {'i4', 'i5'},        # User 2: 'i5' is relevant and unexpected, 'i4' is relevant and expected
+            {'i7', 'i14'},       # User 3: 'i7' is relevant and expected, 'i8' is not relevant
+            {'i15'}              # User 4: (no recommendations)
+        ]
+
+        # Expected average serendipity: ( (2/3) + (1/3) + (0/2) + 0 ) / 4 = (1.0) / 4 = 0.25
+        avg_serendipity = AdvancedMetrics.calculate_serendipity(
+            recommendations_multi, expected_items_multi, relevant_items_multi
+        )
+        self.assertAlmostEqual(avg_serendipity, 0.25, msg="Multi-user average serendipity calculation failed")
         
-        # Tests case with no serendipitous items.
+        # --- SUB-TEST 3: Case with no serendipitous items ---
         no_serendipity = AdvancedMetrics.calculate_serendipity([['a']], [{'a'}], [{'a'}])
-        self.assertAlmostEqual(no_serendipity, 0.0)
+        self.assertAlmostEqual(no_serendipity, 0.0, msg="Zero serendipity case failed")
+
 
 class TestFairnessMetrics(unittest.TestCase):
     """Test cases for the FairnessMetrics calculation methods."""

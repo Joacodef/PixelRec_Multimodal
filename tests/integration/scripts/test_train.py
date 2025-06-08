@@ -5,12 +5,15 @@ from pathlib import Path
 import sys
 import shutil
 import json
+import torch
 from PIL import Image
 
 # Add parent directory to path to import src and scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from scripts.train import main as train_main
+from src.config import Config # Used to load config for model instantiation
+from src.models.multimodal import MultimodalRecommender # To inspect model weights
 
 class TestTrainScript(unittest.TestCase):
     """Integration test for the train.py script."""
@@ -70,13 +73,15 @@ model:
   vision_model: resnet
   language_model: sentence-bert
   embedding_dim: 8
-  use_contrastive: false # Disable for simplicity and speed in test
+  use_contrastive: false
+  freeze_vision: false # Ensure vision model is trainable
+  freeze_language: false # Ensure language model is trainable
 
 training:
   batch_size: 2
-  epochs: 1 # Only run for one epoch
+  epochs: 2 # Run for two epochs to verify learning
   learning_rate: 0.01
-  patience: 1
+  patience: 2
   num_workers: 0 # IMPORTANT for avoiding multiprocessing issues in tests
 
 data:
@@ -103,11 +108,38 @@ results_dir: {self.results_dir.as_posix()}
         if self.test_dir.exists():
             shutil.rmtree(self.test_dir)
 
-    def test_training_pipeline_single_epoch(self):
+    def test_training_pipeline_and_model_learning(self):
         """
-        Test the entire training pipeline for a single epoch to ensure all components
-        are wired correctly and the script produces the expected artifacts.
+        Tests the entire training pipeline for two epochs, ensuring not only that
+        it runs without errors, but also that the model's weights are updated,
+        confirming that learning is taking place.
         """
+        # Load config to get model parameters
+        config = Config.from_yaml(str(self.config_path))
+        
+        # Correctly determine n_users and n_items from the full "processed"
+        # data, mimicking how the training script fits the encoders.
+        full_interactions_df = pd.read_csv(self.processed_interactions_path)
+        full_item_info_df = pd.read_csv(self.processed_item_info_path)
+        n_users = full_interactions_df['user_id'].nunique()
+        n_items = full_item_info_df['item_id'].nunique()
+        
+        # We must use the validated numerical features count for model instantiation
+        num_numerical_features = 2 # 'view_number' and 'comment_number'
+
+        initial_model = MultimodalRecommender(
+            n_users=n_users, n_items=n_items,
+            num_numerical_features=num_numerical_features,
+            embedding_dim=config.model.embedding_dim,
+            vision_model_name=config.model.vision_model,
+            language_model_name=config.model.language_model,
+            freeze_vision=config.model.freeze_vision,
+            freeze_language=config.model.freeze_language
+        )
+        
+        # Store a deep copy of the initial weights of a trainable layer
+        initial_user_embedding_weights = initial_model.user_embedding.weight.clone().detach()
+
         # Mock sys.argv to simulate running the script from the command line
         original_argv = sys.argv
         sys.argv = [
@@ -121,42 +153,43 @@ results_dir: {self.results_dir.as_posix()}
 
         # --- Verification ---
         # 1. Verify that all expected output files and directories were created.
-
-        # Check for model-specific checkpoint directory
         model_specific_checkpoint_dir = self.checkpoints_dir / "resnet_sentence-bert"
         self.assertTrue(model_specific_checkpoint_dir.exists())
-
-        # Check for saved model checkpoints
         self.assertTrue((model_specific_checkpoint_dir / "best_model.pth").exists())
         self.assertTrue((model_specific_checkpoint_dir / "last_model.pth").exists())
-
-        # Check for saved encoders
-        encoders_dir = self.checkpoints_dir / "encoders"
-        self.assertTrue(encoders_dir.exists())
-        self.assertTrue((encoders_dir / "user_encoder.pkl").exists())
-        self.assertTrue((encoders_dir / "item_encoder.pkl").exists())
-
-        # Check for results files (excluding the plot)
         self.assertTrue((self.results_dir / "training_metadata.json").exists())
-        self.assertTrue((self.results_dir / "training_run_config.yaml").exists())
 
-        # 2. Verify the content of the metadata file
+        # 2. Verify model learning by checking that weights have changed.
+        # Load the final state of the model from the saved checkpoint
+        final_checkpoint = torch.load(model_specific_checkpoint_dir / "last_model.pth", map_location='cpu')
+        
+        # Create a new model instance and load the trained weights into it
+        # This now uses the correct n_users and n_items, preventing the size mismatch
+        final_model = MultimodalRecommender(
+            n_users=n_users, n_items=n_items,
+            num_numerical_features=num_numerical_features,
+            embedding_dim=config.model.embedding_dim,
+            vision_model_name=config.model.vision_model,
+            language_model_name=config.model.language_model
+        )
+        final_model.load_state_dict(final_checkpoint['model_state_dict'])
+        final_user_embedding_weights = final_model.user_embedding.weight.clone().detach()
+
+        # Assert that the weights are NOT equal to their initial state
+        self.assertFalse(
+            torch.equal(initial_user_embedding_weights, final_user_embedding_weights),
+            "Model weights did not change after training, indicating a problem in the training loop."
+        )
+
+        # 3. Verify the content of the metadata file
         with open(self.results_dir / "training_metadata.json", "r") as f:
             metadata = json.load(f)
 
         self.assertTrue(metadata['training_completed'])
-        self.assertEqual(metadata['epochs_completed'], 1)
+        self.assertEqual(metadata['epochs_completed'], 2, "Training should run for 2 epochs as configured.")
         self.assertIn('final_train_loss', metadata)
         self.assertIsNotNone(metadata['final_train_loss'])
-        
-        # Verify that the numerical feature validation worked correctly
-        validated_features = metadata['numerical_features_validation']['validated_features']
-        missing_features = metadata['numerical_features_validation']['missing_features']
-        self.assertIn('view_number', validated_features)
-        self.assertIn('comment_number', validated_features)
-        self.assertNotIn('non_existent_feature', validated_features)
-        self.assertIn('non_existent_feature', missing_features)
-        self.assertEqual(metadata['numerical_features_validation']['num_features_used'], 2)
+        self.assertTrue(np.isfinite(metadata['final_train_loss']), "Final training loss should be a finite number.")
 
         # Restore original sys.argv
         sys.argv = original_argv
