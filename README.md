@@ -1,10 +1,8 @@
 # Multimodal Recommender System
 
 <div align="center">
-    <img src="https://img.shields.io/badge/Python-3.7+-blue.svg" alt="Python Version">
-    <img src="https://img.shields.io/badge/PyTorch-2.2+-ee4c2c.svg" alt="PyTorch Version">
-    <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
-    <img src="URL_DEL_WORKFLOW/badge.svg" alt="CI Status">
+    <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python Version">
+    <img src="https://img.shields.io/badge/PyTorch-2.6+-ee4c2c.svg" alt="PyTorch Version">
 </div>
 <br>
 
