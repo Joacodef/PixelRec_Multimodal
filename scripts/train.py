@@ -81,7 +81,7 @@ def print_progress_footer(start_time: float, additional_info: str = ""):
         additional_info (str, optional): Extra information to display. Defaults to "".
     """
     elapsed = time.time() - start_time
-    print(f"✓ Completed in {elapsed:.2f}s")
+    print(f"Completed in {elapsed:.2f}s")
     if additional_info:
         print(f"  {additional_info}")
     print("-" * 60)
@@ -122,16 +122,16 @@ def validate_numerical_features(item_info_df: pd.DataFrame, config_numerical_col
             missing_cols.append(col)
     
     if missing_cols:
-        print(f"⚠️  Warning: The following numerical columns from config are missing in data:")
+        print(f"Warning: The following numerical columns from config are missing in data:")
         for col in missing_cols:
             print(f"    - {col}")
-        print(f"📊 Available columns in data: {available_cols}")
-        print(f"✅ Using valid columns: {valid_cols}")
+        print(f"Available columns in data: {available_cols}")
+        print(f"Using valid columns: {valid_cols}")
     
     if not valid_cols:
-        print(f"❌ Error: No valid numerical columns found!")
-        print(f"   Configured columns: {config_numerical_cols}")
-        print(f"   Available columns: {available_cols}")
+        print(f"Error: No valid numerical columns found!")
+        print(f"Configured columns: {config_numerical_cols}")
+        print(f"Available columns: {available_cols}")
         raise ValueError("No valid numerical feature columns found in the data")
     
     return valid_cols
@@ -150,11 +150,11 @@ def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
     Returns:
         A fitted scaler object from scikit-learn.
     """
-    print(f"  → Fitting {method} scaler on {len(df)} samples...")
+    print(f"Fitting {method} scaler on {len(df)} samples...")
     processor = NumericalProcessor()
     processor.fit_scaler(df, numerical_cols, method)
     processor.save_scaler(scaler_path)
-    print(f"  → Scaler saved to {scaler_path}")
+    print(f"Scaler saved to {scaler_path}")
     return processor.scaler
 
 
@@ -168,7 +168,7 @@ def load_numerical_scaler(scaler_path):
     Returns:
         The loaded scikit-learn scaler object.
     """
-    print(f"  → Loading scaler from {scaler_path}")
+    print(f"Loading scaler from {scaler_path}")
     processor = NumericalProcessor()
     processor.load_scaler(scaler_path)
     return processor.scaler
@@ -211,7 +211,7 @@ def validate_data_integrity(interactions_df, item_info_df):
     print(f"Item overlap: {overlap:,} ({100*overlap/n_unique_items_interactions:.1f}%)")
     
     if overlap < n_unique_items_interactions * 0.9:
-        print("⚠️  Warning: Less than 90% of interaction items have item info")
+        print("Warning: Less than 90% of interaction items have item info")
     
     return {
         'n_users': n_unique_users,
@@ -242,11 +242,11 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
     # Determine the optimal number of workers based on system capabilities.
     optimal_workers = min(training_config.num_workers, os.cpu_count(), 8)
     if optimal_workers != training_config.num_workers:
-        print(f"  → Adjusting workers from {training_config.num_workers} to {optimal_workers} (system optimal)")
+        print(f"Adjusting workers from {training_config.num_workers} to {optimal_workers} (system optimal)")
     
-    print(f"  → Batch size: {training_config.batch_size}")
-    print(f"  → Workers: {optimal_workers}")
-    print(f"  → Pin memory: True")
+    print(f"Batch size: {training_config.batch_size}")
+    print(f"Workers: {optimal_workers}")
+    print(f"Pin memory: True")
     
     loader_args = {
         'batch_size': training_config.batch_size,
@@ -257,11 +257,11 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
     if optimal_workers > 0:
         loader_args['persistent_workers'] = True
         loader_args['prefetch_factor'] = 2
-        print(f"  → Persistent workers: True")
-        print(f"  → Prefetch factor: 2")
+        print(f"Persistent workers: True")
+        print(f"Prefetch factor: 2")
     else:
-        print(f"  → Persistent workers: False")
-        print(f"  → Prefetch factor: None")
+        print(f"Persistent workers: False")
+        print(f"Prefetch factor: None")
 
     train_loader = DataLoader(
         train_dataset,
@@ -277,16 +277,16 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
             **loader_args
         )
     
-    print(f"  → Training batches: {len(train_loader)}")
+    print(f"Training batches: {len(train_loader)}")
     if val_loader:
-        print(f"  → Validation batches: {len(val_loader)}")
+        print(f"Validation batches: {len(val_loader)}")
     else:
-        print("  → No validation data")
+        print("No validation data")
     
     return train_loader, val_loader
 
 
-def main():
+def main(cli_args: Optional[List[str]] = None):
     """
     Main function to execute the full training pipeline for the multimodal recommender.
 
@@ -316,10 +316,10 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default=None, help='Weights & Biases entity (username or team)')
     parser.add_argument('--wandb_run_name', type=str, default=None, help='Weights & Biases run name for this training')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
 
     # Print a header for the training run.
-    print("🚀 MULTIMODAL RECOMMENDER TRAINING (DYNAMIC NUMERICAL FEATURES)")
+    print("MULTIMODAL RECOMMENDER TRAINING (DYNAMIC NUMERICAL FEATURES)")
     print("=" * 80)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Config file: {args.config}")
@@ -343,13 +343,13 @@ def main():
         original_numerical_features_from_config = data_config.numerical_features_cols.copy()
         
         print(f"Configuration loaded successfully:")
-        print(f"  → Vision model: {model_config.vision_model}")
-        print(f"  → Language model: {model_config.language_model}")
-        print(f"  → Embedding dim: {model_config.embedding_dim}")
-        print(f"  → Batch size: {training_config.batch_size}")
-        print(f"  → Learning rate: {training_config.learning_rate}")
-        print(f"  → Epochs: {training_config.epochs}")
-        print(f"  → Configured numerical features: {data_config.numerical_features_cols}")
+        print(f"Vision model: {model_config.vision_model}")
+        print(f"Language model: {model_config.language_model}")
+        print(f"Embedding dim: {model_config.embedding_dim}")
+        print(f"Batch size: {training_config.batch_size}")
+        print(f"Learning rate: {training_config.learning_rate}")
+        print(f"Epochs: {training_config.epochs}")
+        print(f"Configured numerical features: {data_config.numerical_features_cols}")
         
         print_progress_footer(step_start)
 
@@ -367,14 +367,14 @@ def main():
                     config=config_dict_for_wandb, 
                     reinit=True
                 )
-                print("✓ Weights & Biases logging enabled")
+                print("Weights & Biases logging enabled")
                 wandb.define_metric("epoch")
                 wandb.define_metric("train/*", step_metric="epoch")
                 wandb.define_metric("val/*", step_metric="epoch")
                 wandb.define_metric("train/learning_rate", step_metric="epoch")
             except Exception as e:
-                print(f"⚠️  Failed to initialize wandb: {e}")
-                print("   Proceeding without wandb logging")
+                print(f"Failed to initialize wandb: {e}")
+                print("Proceeding without wandb logging")
                 args.use_wandb = False
         else:
             print("Weights & Biases logging disabled")
@@ -389,11 +389,11 @@ def main():
         print(f"Using device: {device}")
         
         if device.type == 'cuda':
-            print(f"  → GPU: {torch.cuda.get_device_name(0)}")
-            print(f"  → Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
             # Clear any residual memory in the GPU cache.
             torch.cuda.empty_cache()
-            print("  → GPU cache cleared")
+            print("GPU cache cleared")
         
         print_progress_footer(step_start)
 
@@ -402,13 +402,13 @@ def main():
         step_start = time.time()
         
         print(f"Loading data files:")
-        print(f"  → Item info: {data_config.processed_item_info_path}")
-        print(f"  → Interactions: {data_config.processed_interactions_path}")
+        print(f"Item info: {data_config.processed_item_info_path}")
+        print(f"Interactions: {data_config.processed_interactions_path}")
         
-        item_info_df_full = pd.read_csv(data_config.processed_item_info_path)
-        interactions_df_full = pd.read_csv(data_config.processed_interactions_path)
+        item_info_df_full = pd.read_csv(Path(data_config.processed_item_info_path).resolve())
+        interactions_df_full = pd.read_csv(Path(data_config.processed_interactions_path).resolve())
         
-        print(f"\n📊 VALIDATING NUMERICAL FEATURES:")
+        print(f"\nVALIDATING NUMERICAL FEATURES:")
         print(f"   Original config numerical features: {data_config.numerical_features_cols}")
         
         # Ensure that the numerical columns specified in the config exist in the loaded data.
@@ -419,8 +419,8 @@ def main():
         
         # Update the configuration object to use only the validated columns.
         data_config.numerical_features_cols = valid_numerical_features
-        print(f"   ✅ Final numerical features to use: {valid_numerical_features}")
-        print(f"   📏 Number of numerical features: {len(valid_numerical_features)}")
+        print(f"Final numerical features to use: {valid_numerical_features}")
+        print(f"Number of numerical features: {len(valid_numerical_features)}")
         
         data_stats = validate_data_integrity(interactions_df_full, item_info_df_full)
         
@@ -445,11 +445,11 @@ def main():
                 effective_cache_dir = auto_cache_dir
             
             print("Cache configuration:")
-            print(f"  → Strategy: Memory-based caching")
-            print(f"  → Max memory items: {cache_config.max_memory_items:,}")
-            print(f"  → Cache directory: {effective_cache_dir}")
-            print(f"  → Use disk: {cache_config.use_disk}")
-            print(f"  → Model combination: {model_config.vision_model} + {model_config.language_model}")
+            print(f"Strategy: Memory-based caching")
+            print(f"Max memory items: {cache_config.max_memory_items:,}")
+            print(f"Cache directory: {effective_cache_dir}")
+            print(f"Use disk: {cache_config.use_disk}")
+            print(f"Model combination: {model_config.vision_model} + {model_config.language_model}")
             
             # Create the cache directory on disk if it doesn't exist.
             cache_dir = Path(effective_cache_dir)
@@ -459,9 +459,9 @@ def main():
             existing_files = list(cache_dir.glob("*.pt"))
             if existing_files:
                 total_size = sum(f.stat().st_size for f in existing_files) / (1024*1024)
-                print(f"  → Found existing cache: {len(existing_files):,} files, {total_size:.1f} MB")
+                print(f"Found existing cache: {len(existing_files):,} files, {total_size:.1f} MB")
             else:
-                print(f"  → Cache directory is empty - features will be computed during training")
+                print(f"Cache directory is empty - features will be computed during training")
             
             base_cache_directory_from_config = cache_config.cache_directory
 
@@ -495,10 +495,10 @@ def main():
                 print("Loading existing scaler...")
                 try:
                     numerical_scaler = load_numerical_scaler(scaler_path_obj)
-                    print(f"  → Scaler loaded successfully")
+                    print(f"Scaler loaded successfully")
                 except Exception as e:
-                    print(f"  → Error loading scaler: {e}")
-                    print(f"  → Will fit new scaler...")
+                    print(f"Error loading scaler: {e}")
+                    print(f"Will fit new scaler...")
                     scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
                     numerical_scaler = fit_numerical_scaler(
                         item_info_df_full, 
@@ -538,9 +538,9 @@ def main():
         if os.path.exists(effective_image_folder):
             image_count = len([f for f in os.listdir(effective_image_folder) 
                              if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-            print(f"  → Found {image_count:,} image files")
+            print(f"Found {image_count:,} image files")
         else:
-            print(f"⚠️  Warning: Image folder does not exist: {effective_image_folder}")
+            print(f"Warning: Image folder does not exist: {effective_image_folder}")
         
         print_progress_footer(step_start)
 
@@ -571,9 +571,9 @@ def main():
         )
         
         print("Encoder fitting results:")
-        print(f"  → Users: {full_dataset_for_encoders.n_users:,}")
-        print(f"  → Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"  → Numerical features used: {len(valid_numerical_features)}")
+        print(f"Users: {full_dataset_for_encoders.n_users:,}")
+        print(f"Items: {full_dataset_for_encoders.n_items:,}")
+        print(f"Numerical features used: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -582,27 +582,30 @@ def main():
         step_start = time.time()
         
         print(f"Loading split data:")
-        print(f"  → Train: {data_config.train_data_path}")
-        print(f"  → Val: {data_config.val_data_path}")
+        print(f"Train: {data_config.train_data_path}")
+        print(f"Val: {data_config.val_data_path}")
         
-        train_interactions_df = pd.read_csv(data_config.train_data_path)
-        val_interactions_df = pd.read_csv(data_config.val_data_path)
+        train_interactions_df = pd.read_csv(Path(data_config.train_data_path).resolve())
+        val_interactions_df = pd.read_csv(Path(data_config.val_data_path).resolve())
 
-        # Filter the main item metadata to only include items that are in the train/val splits.
-        all_item_ids_in_splits = pd.concat([
-            train_interactions_df['item_id'], 
-            val_interactions_df['item_id']
-        ]).unique()
+        
+        # We must filter the main item_info DataFrame to only include items that
+        # are actually present in the train and validation splits being used.
+        # This ensures consistency when the dataset objects are created.
+        all_item_ids_in_splits = pd.concat(
+            [train_interactions_df['item_id'], val_interactions_df['item_id']]
+        ).unique()
+        
         item_info_df_for_datasets = item_info_df_full[
-            item_info_df_full['item_id'].isin(all_item_ids_in_splits)
+            item_info_df_full['item_id'].astype(str).isin(all_item_ids_in_splits)
         ].reset_index(drop=True)
 
         print("Split data statistics:")
-        print(f"  → Training interactions: {len(train_interactions_df):,}")
-        print(f"  → Validation interactions: {len(val_interactions_df):,}")
-        print(f"  → Items in splits: {len(item_info_df_for_datasets):,}")
-        print(f"  → Train users: {train_interactions_df['user_id'].nunique():,}")
-        print(f"  → Val users: {val_interactions_df['user_id'].nunique():,}")
+        print(f"Training interactions: {len(train_interactions_df):,}")
+        print(f"Validation interactions: {len(val_interactions_df):,}")
+        print(f"Items in splits: {len(item_info_df_for_datasets):,}")
+        print(f"Train users: {train_interactions_df['user_id'].nunique():,}")
+        print(f"Val users: {val_interactions_df['user_id'].nunique():,}")
         
         print_progress_footer(step_start)
 
@@ -666,10 +669,10 @@ def main():
         val_dataset.n_items = full_dataset_for_encoders.n_items
         
         print("Dataset creation results:")
-        print(f"  → Training samples: {len(train_dataset):,}")
-        print(f"  → Validation samples: {len(val_dataset):,}")
-        print(f"  → Negative sampling ratio: {data_config.negative_sampling_ratio}")
-        print(f"  → Numerical features: {len(valid_numerical_features)}")
+        print(f"Training samples: {len(train_dataset):,}")
+        print(f"Validation samples: {len(val_dataset):,}")
+        print(f"Negative sampling ratio: {data_config.negative_sampling_ratio}")
+        print(f"Numerical features: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -692,7 +695,7 @@ def main():
             pickle.dump(full_dataset_for_encoders.user_encoder, f)
         with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
             pickle.dump(full_dataset_for_encoders.item_encoder, f)
-        print(f"  → Encoders saved to {encoders_dir}")
+        print(f"Encoders saved to {encoders_dir}")
 
         # STEP 12: Initialize the model with the correct number of features.
         print_progress_header(12, "Initializing Model", total_steps=13)
@@ -701,24 +704,24 @@ def main():
         num_numerical_features = len(valid_numerical_features)
         
         print("Model configuration:")
-        print(f"  → Architecture: MultimodalRecommender")
-        print(f"  → Users: {full_dataset_for_encoders.n_users:,}")
-        print(f"  → Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"  → Numerical features: {num_numerical_features} (validated)")
-        print(f"  → Feature names: {valid_numerical_features}")
-        print(f"  → Embedding dim: {model_config.embedding_dim}")
-        print(f"  → Vision model: {model_config.vision_model}")
-        print(f"  → Language model: {model_config.language_model}")
-        print(f"  → Use contrastive: {model_config.use_contrastive}")
+        print(f"Architecture: MultimodalRecommender")
+        print(f"Users: {full_dataset_for_encoders.n_users:,}")
+        print(f"Items: {full_dataset_for_encoders.n_items:,}")
+        print(f"Numerical features: {num_numerical_features} (validated)")
+        print(f"Feature names: {valid_numerical_features}")
+        print(f"Embedding dim: {model_config.embedding_dim}")
+        print(f"Vision model: {model_config.vision_model}")
+        print(f"Language model: {model_config.language_model}")
+        print(f"Use contrastive: {model_config.use_contrastive}")
         
         # Define and display the directory structure for saving checkpoints.
         model_combo = f"{model_config.vision_model}_{model_config.language_model}"
         model_checkpoint_dir = Path(config.checkpoint_dir) / model_combo
         shared_encoders_dir = Path(config.checkpoint_dir) / 'encoders'
         
-        print(f"\n📁 Checkpoint Organization:")
-        print(f"  → Model checkpoints (.pth): {model_checkpoint_dir}")
-        print(f"  → Shared encoders: {shared_encoders_dir}")
+        print(f"\n Checkpoint Organization:")
+        print(f"Model checkpoints (.pth): {model_checkpoint_dir}")
+        print(f"Shared encoders: {shared_encoders_dir}")
         
         print("\nInitializing model (this may take several minutes for model downloads)...")
         
@@ -751,10 +754,10 @@ def main():
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
         print("Model statistics:")
-        print(f"  → Total parameters: {total_params:,}")
-        print(f"  → Trainable parameters: {trainable_params:,}")
-        print(f"  → Frozen parameters: {total_params - trainable_params:,}")
-        print(f"  → Model size: ~{total_params * 4 / 1e6:.1f} MB")
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Frozen parameters: {total_params - trainable_params:,}")
+        print(f"Model size: ~{total_params * 4 / 1e6:.1f} MB")
         
         print_progress_footer(step_start, f"Model ready with {trainable_params:,} trainable parameters")
 
@@ -774,15 +777,15 @@ def main():
         trainer.criterion.bce_weight = training_config.bce_weight
 
         print("Training configuration:")
-        print(f"  → Optimizer: {training_config.optimizer_type}")
-        print(f"  → Learning rate: {training_config.learning_rate}")
-        print(f"  → Weight decay: {training_config.weight_decay}")
-        print(f"  → Batch size: {training_config.batch_size}")
-        print(f"  → Epochs: {training_config.epochs}")
-        print(f"  → Patience: {training_config.patience}")
-        print(f"  → Gradient clip: {training_config.gradient_clip}")
-        print(f"  → Contrastive weight: {training_config.contrastive_weight}")
-        print(f"  → BCE weight: {training_config.bce_weight}")
+        print(f"Optimizer: {training_config.optimizer_type}")
+        print(f"Learning rate: {training_config.learning_rate}")
+        print(f"Weight decay: {training_config.weight_decay}")
+        print(f"Batch size: {training_config.batch_size}")
+        print(f"Epochs: {training_config.epochs}")
+        print(f"Patience: {training_config.patience}")
+        print(f"Gradient clip: {training_config.gradient_clip}")
+        print(f"Contrastive weight: {training_config.contrastive_weight}")
+        print(f"BCE weight: {training_config.bce_weight}")
 
         # If a checkpoint path is provided, resume training from that state.
         if args.resume:
@@ -797,16 +800,16 @@ def main():
             pickle.dump(full_dataset_for_encoders.user_encoder, f)
         with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
             pickle.dump(full_dataset_for_encoders.item_encoder, f)
-        print(f"  → Encoders saved to {encoders_dir}")
+        print(f"Encoders saved to {encoders_dir}")
 
-        print(f"\n🚀 Starting training...")
+        print(f"\n Starting training...")
         print("=" * 60)
 
         # Save the final, validated configuration used for this run.
         print("Saving updated configuration with validated numerical features...")
         updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
         config.to_yaml(str(updated_config_path))
-        print(f"✓ Updated configuration saved to {updated_config_path}")
+        print(f"Updated configuration saved to {updated_config_path}")
 
         # Assemble the dictionary of parameters for the training loop.
         training_params = {
@@ -870,70 +873,70 @@ def main():
         import json
         with open(metadata_path, 'w') as f:
             json.dump(training_metadata, f, indent=2, default=str)
-        print(f"✓ Training metadata saved to {metadata_path}")
+        print(f"Training metadata saved to {metadata_path}")
 
         # Save the final configuration file.
         config_save_path = Path(config.results_dir) / 'training_run_config.yaml'
         config.to_yaml(str(config_save_path))
-        print(f"✓ Configuration saved to {config_save_path}")
+        print(f"Configuration saved to {config_save_path}")
         
         if args.use_wandb and wandb.run is not None:
             try:
                 wandb.save(str(config_save_path))
                 wandb.save(str(metadata_path))
                 wandb.save(str(updated_config_path))
-                print("✓ Files saved to wandb")
+                print("Files saved to wandb")
             except Exception as e:
-                print(f"⚠️  Failed to save files to wandb: {e}")
+                print(f"Failed to save files to wandb: {e}")
 
         # Print a final summary of the training run.
         print("\n" + "=" * 80)
-        print("🎉 TRAINING COMPLETED SUCCESSFULLY!")
+        print(" TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 80)
-        print(f"📊 Training Summary:")
-        print(f"   → Duration: {training_time/3600:.2f} hours")
-        print(f"   → Epochs: {len(train_losses) if train_losses else 0}")
-        print(f"   → Final train loss: {train_losses[-1]:.6f}" if train_losses else "   → No training loss recorded")
-        print(f"   → Final val loss: {val_losses[-1]:.6f}" if val_losses else "   → No validation loss recorded")
-        print(f"   → Best val loss: {min(val_losses):.6f}" if val_losses else "   → No validation loss recorded")
-        print(f"📏 Numerical Features:")
-        print(f"   → Features used: {num_numerical_features}")
-        print(f"   → Feature names: {valid_numerical_features}")
-        print(f"📁 Outputs saved to: {config.results_dir}")
-        print(f"🤖 Model checkpoint: {model_checkpoint_dir}/best_model.pth")
-        print(f"🔄 Encoders: {encoders_dir}")
+        print(f" Training Summary:")
+        print(f" Duration: {training_time/3600:.2f} hours")
+        print(f" Epochs: {len(train_losses) if train_losses else 0}")
+        print(f" Final train loss: {train_losses[-1]:.6f}" if train_losses else " No training loss recorded")
+        print(f" Final val loss: {val_losses[-1]:.6f}" if val_losses else " No validation loss recorded")
+        print(f" Best val loss: {min(val_losses):.6f}" if val_losses else " No validation loss recorded")
+        print(f" Numerical Features:")
+        print(f" Features used: {num_numerical_features}")
+        print(f" Feature names: {valid_numerical_features}")
+        print(f" Outputs saved to: {config.results_dir}")
+        print(f" Model checkpoint: {model_checkpoint_dir}/best_model.pth")
+        print(f" Encoders: {encoders_dir}")
         
         # Provide recommendations based on performance metrics.
-        print(f"\n💡 Performance Notes:")
+        print(f"\n Performance Notes:")
         if training_time > 0:
             samples_per_second = (len(train_dataset) * len(train_losses)) / training_time
-            print(f"   → Training speed: {samples_per_second:.1f} samples/second")
+            print(f" Training speed: {samples_per_second:.1f} samples/second")
             
             if samples_per_second < 100:
-                print("   → Consider reducing image resolution or batch size for faster training")
+                print(" Consider reducing image resolution or batch size for faster training")
             elif samples_per_second > 1000:
-                print("   → Training speed is excellent!")
+                print(" Training speed is excellent!")
         
         if torch.cuda.is_available():
             gpu_memory_used = torch.cuda.max_memory_allocated() / 1e9
-            print(f"   → Peak GPU memory: {gpu_memory_used:.1f} GB")
+            print(f" Peak GPU memory: {gpu_memory_used:.1f} GB")
             
             if gpu_memory_used > 10:
-                print("   → High GPU memory usage - consider reducing batch size")
+                print(" High GPU memory usage - consider reducing batch size")
         
         print("=" * 80)
         
     except KeyboardInterrupt:
-        print("\n⚠️  Training interrupted by user")
+        print("\n  Training interrupted by user")
         print("Saving current state...")
         
         # Save an emergency checkpoint if the training is interrupted.
         if 'trainer' in locals():
             try:
                 trainer.save_checkpoint('interrupted_model.pth')
-                print(f"✓ Emergency checkpoint saved to {config.checkpoint_dir}/interrupted_model.pth")
+                print(f"Emergency checkpoint saved to {config.checkpoint_dir}/interrupted_model.pth")
             except Exception as e:
-                print(f"❌ Failed to save emergency checkpoint: {e}")
+                print(f"Failed to save emergency checkpoint: {e}")
         
         # Save any partial results that were generated before the interruption.
         if 'train_losses' in locals() and train_losses:
@@ -953,16 +956,16 @@ def main():
                 import json
                 with open(interrupted_path, 'w') as f:
                     json.dump(partial_results, f, indent=2)
-                print(f"✓ Partial results saved to {interrupted_path}")
+                print(f"Partial results saved to {interrupted_path}")
             except Exception as e:
-                print(f"❌ Failed to save partial results: {e}")
+                print(f"Failed to save partial results: {e}")
         else:
             print("No training progress to save (training may not have started)")
         
         raise
         
     except Exception as e:
-        print(f"\n❌ ERROR during training: {e}")
+        print(f"\nERROR during training: {e}")
         import traceback
         traceback.print_exc()
         
@@ -984,9 +987,9 @@ def main():
                 import json
                 with open(error_path, 'w') as f:
                     json.dump(error_info, f, indent=2)
-                print(f"✓ Error log saved to {error_path}")
+                print(f"Error log saved to {error_path}")
         except Exception as save_error:
-            print(f"❌ Failed to save error log: {save_error}")
+            print(f"Failed to save error log: {save_error}")
         
         raise
         
@@ -996,14 +999,14 @@ def main():
             print("Finishing wandb run...")
             try:
                 wandb.finish()
-                print("✓ Wandb run finished")
+                print("Wandb run finished")
             except Exception as e:
-                print(f"⚠️  Warning during wandb cleanup: {e}")
+                print(f"Warning during wandb cleanup: {e}")
         
         # Clear GPU cache at the end of the script.
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            print("✓ GPU cache cleared")
+            print("GPU cache cleared")
         
         print(f"\nSession ended at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 

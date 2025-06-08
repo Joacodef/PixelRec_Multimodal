@@ -14,10 +14,8 @@ import argparse
 import pandas as pd
 from pathlib import Path
 import sys
+from typing import List, Optional
 
-# Adds the project's root directory to the system path.
-# This allows the script to import modules from the 'src' directory (e.g., config, processors)
-# when executed from the command line, regardless of the current working directory.
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config
@@ -436,7 +434,7 @@ class PreprocessingPipeline:
         print(summary_text)
 
 
-def main():
+def main(cli_args: Optional[List[str]] = None):
     """
     Main function to execute the preprocessing pipeline from the command line.
 
@@ -462,7 +460,7 @@ def main():
         help='Force reprocessing of all images and features'
     )
     
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
     
     # Loads the configuration from the specified YAML file.
     config = Config.from_yaml(args.config)

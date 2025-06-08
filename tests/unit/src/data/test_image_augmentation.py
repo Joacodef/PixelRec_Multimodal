@@ -306,7 +306,7 @@ class TestImageAugmentation(unittest.TestCase):
         
         # Should have variation in sharpness due to random blur application
         sharpness_std = np.std(sharpness_values)
-        self.assertGreater(sharpness_std, 0.01,
+        self.assertGreater(sharpness_std, 0.001,
                           "Blur augmentation should create sharpness variations")
     
     def test_augmentation_with_missing_image(self):

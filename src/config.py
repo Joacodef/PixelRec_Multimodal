@@ -161,6 +161,19 @@ class ImageAugmentationConfig:
     gaussian_noise: bool = False
     noise_std: float = 0.01
 
+    def __post_init__(self):
+        """Validate augmentation parameters after initialization."""
+        if self.brightness < 0:
+            raise ValueError("Brightness factor must be non-negative.")
+        if self.contrast < 0:
+            raise ValueError("Contrast factor must be non-negative.")
+        if self.saturation < 0:
+            raise ValueError("Saturation factor must be non-negative.")
+        if not (0 <= self.hue <= 0.5):
+            raise ValueError("Hue factor must be between 0 and 0.5.")
+        if self.random_crop and (not (0 < self.crop_scale[0] <= self.crop_scale[1] <= 1.0)):
+            raise ValueError("Invalid crop_scale. Must be [min, max] with 0 < min <= max <= 1.0.")
+
 
 @dataclass
 class OfflineTextCleaningConfig:
