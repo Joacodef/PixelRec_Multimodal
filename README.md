@@ -1,350 +1,305 @@
 # Multimodal Recommender System
 
-A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
+<div align="center">
+    <img src="https://img.shields.io/badge/Python-3.7+-blue.svg" alt="Python Version">
+    <img src="https://img.shields.io/badge/PyTorch-2.2+-ee4c2c.svg" alt="PyTorch Version">
+    <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+    <img src="URL_DEL_WORKFLOW/badge.svg" alt="CI Status">
+</div>
+<br>
 
-## Overview
+Un framework basado en PyTorch para construir sistemas de recomendación multimodales que integran características visuales, textuales y numéricas para generar recomendaciones personalizadas.
 
-This system implements a neural recommender that combines multiple data modalities:
-- **Visual features**: Extracted from item images using pre-trained vision models (ResNet, CLIP, DINO, ConvNeXT)
-- **Textual features**: Processed from item descriptions using language models (BERT, RoBERTa, Sentence-BERT, MPNet)
-- **Numerical features**: Item metadata and interaction statistics
+<p align="center">
+  <img src="docs/assets/architecture_diagram.png" alt="Architecture Diagram" width="700"/>
+  <br>
+  <em>Diagrama de la arquitectura del recomendador multimodal.</em>
+</p>
 
-The architecture uses attention mechanisms to fuse multimodal representations and supports contrastive learning for vision-text alignment.
+---
 
-## Key Features
+## Tabla de Contenidos
+- [Visión General](#visión-general)
+- [Características Clave](#características-clave)
+- [Inicio Rápido en 5 Minutos](#inicio-rápido-en-5-minutos)
+- [Instalación](#instalación)
+- [Flujo de Trabajo Detallado](#flujo-de-trabajo-detallado)
+  - [1. Preparación de Datos](#1-preparación-de-datos)
+  - [2. Configuración](#2-configuración)
+  - [3. Preprocesamiento de Datos](#3-preprocesamiento-de-datos)
+  - [4. División de Datos (Splits)](#4-división-de-datos-splits)
+  - [5. Pre-cómputo de Caché de Features](#5-pre-cómputo-de-caché-de-features)
+  - [6. Entrenamiento](#6-entrenamiento)
+  - [7. Evaluación](#7-evaluación)
+  - [8. Generación de Recomendaciones](#8-generación-de-recomendaciones)
+- [Uso como Librería](#uso-como-librería)
+- [Gestión Avanzada](#gestión-avanzada)
+  - [Gestión de Caché](#gestión-de-caché)
+  - [Gestión de Checkpoints](#gestión-de-checkpoints)
+- [Estructura del Proyecto](#estructura-del-proyecto)
+- [Cómo Contribuir](#cómo-contribuir)
+- [Licencia](#licencia)
+- [Citar](#citar)
 
-### Architecture
-- Configurable fusion of user embeddings, item embeddings, and multimodal features
-- Multi-head self-attention for feature integration
-- Support for various pre-trained backbone models
-- Optional CLIP-style contrastive learning
+## Visión General
 
-### Data Processing
-- Modular preprocessing pipeline with dedicated processors for each data type
-- Automatic image validation and compression
-- Text cleaning and augmentation capabilities
-- Flexible data splitting strategies (stratified, temporal, user-based, item-based)
-- Dynamic numerical feature validation
+Este sistema implementa un recomendador neuronal que combina múltiples modalidades de datos para superar las limitaciones de los métodos tradicionales de filtrado colaborativo:
 
-### Training
-- Configurable optimizers (AdamW, Adam, SGD) and learning rate schedulers
-- Early stopping with model checkpointing
-- Gradient clipping and dropout regularization
-- Optional Weights & Biases integration for experiment tracking
-- Model-specific checkpoint organization
+-   **Features Visuales**: Extraídas de imágenes de ítems usando modelos pre-entrenados (e.g., ResNet, CLIP, DINO).
+-   **Features Textuales**: Procesadas a partir de descripciones de ítems usando modelos de lenguaje (e.g., Sentence-BERT, MPNet).
+-   **Features Numéricas**: Metadatos de ítems y estadísticas de interacción.
 
-### Evaluation
-- Standard recommendation metrics: Precision@K, Recall@K, NDCG@K, MRR, Hit Rate
-- Multiple evaluation tasks: Top-K retrieval and ranking
-- Baseline comparisons: Random, Popularity, ItemKNN, UserKNN
-- Efficient negative sampling for large-scale evaluation
+La arquitectura utiliza mecanismos de atención para fusionar representaciones multimodales y es compatible con el aprendizaje contrastivo para una mejor alineación visión-texto.
 
-### Performance Optimization
-- Feature caching system with LRU memory management
-- Support for pre-computing all item features before training
-- Batch processing for efficient inference
-- Model-specific cache directories for different configurations
+## Características Clave
 
-## Installation
+-   **Arquitectura Flexible**: Fusión configurable de embeddings de usuario/ítem y features multimodales.
+-   **Modelos Pre-entrenados**: Soporte para una variedad de backbones de visión y lenguaje de Hugging Face.
+-   **Procesamiento de Datos Modular**: Pipeline de preprocesamiento robusto con validación, limpieza y compresión automáticas.
+-   **Estrategias de División de Datos**: Soporte para splits estratificados, temporales y por usuario/ítem.
+-   **Entrenamiento Eficiente**: Optimizadores y schedulers configurables, early stopping, y seguimiento con Weights & Biases.
+-   **Evaluación Exhaustiva**: Métricas estándar (Precision, Recall, NDCG, MRR) y comparación con baselines (Popularity, ItemKNN).
+-   **Rendimiento Optimizado**: Sistema de caché de features con gestión de memoria LRU para acelerar el entrenamiento y la inferencia.
 
-1. Clone the repository
-2. Create a Python virtual environment:
+## Inicio Rápido en 5 Minutos
+
+Sigue estos pasos para tener el sistema funcionando con datos de ejemplo.
+
 ```bash
+# 1. Clona el repositorio
+git clone [https://github.com/tu_usuario/tu_repo.git](https://github.com/tu_usuario/tu_repo.git)
+cd tu_repo
+
+# 2. Crea un entorno virtual e instala las dependencias
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-## Usage
+# 3. Preprocesa los datos de ejemplo
+# (Esto limpiará, validará y preparará los datos en data/raw/)
+python scripts/preprocess_data.py --config configs/simple_config.yaml
 
-### 1. Data Preparation
+# 4. Crea los splits de entrenamiento/validación/test
+python scripts/create_splits.py --config configs/simple_config.yaml
 
-Prepare your data in the following format:
-- `item_info.csv`: Item metadata with columns for item_id, title, description, and numerical features
-- `interactions.csv`: User-item interactions with user_id and item_id columns
-- `images/`: Directory containing item images named as `{item_id}.jpg`
+# 5. Entrena el modelo
+# (Usa --device cpu si no tienes una GPU compatible con CUDA)
+python scripts/train.py --config configs/simple_config.yaml --device cuda
 
-### 2. Configuration
+# 6. Evalúa el modelo entrenado
+python scripts/evaluate.py --config configs/simple_config.yaml --device cuda
+````
 
-Edit `configs/simple_config.yaml` to specify:
-- Model architecture choices
-- Data paths and preprocessing options
-- Training hyperparameters
-- Evaluation settings
+## Instalación
 
-### 3. Data Preprocessing
+### Prerrequisitos
 
-Process raw data into the format required by the system:
+  - Python 3.7+
+  - PyTorch 2.2.1+
+  - Transformers 4.47.1+
+  - Una GPU compatible con CUDA es recomendada para un entrenamiento rápido.
+
+### Pasos de Instalación
+
+1.  **Clona el repositorio:**
+
+    ```bash
+    git clone [https://github.com/tu_usuario/tu_repo.git](https://github.com/tu_usuario/tu_repo.git)
+    cd tu_repo
+    ```
+
+2.  **Crea un entorno virtual:**
+
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # En Windows usa: venv\Scripts\activate
+    ```
+
+3.  **Instala las dependencias:**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+## Flujo de Trabajo Detallado
+
+### 1\. Preparación de Datos
+
+Organiza tus datos en la carpeta `data/raw/` con la siguiente estructura:
+
+  - `item_info.csv`: Metadatos de los ítems. Debe contener `item_id` y columnas con features textuales y numéricas.
+  - `interactions.csv`: Interacciones usuario-ítem. Requiere columnas `user_id` y `item_id`.
+  - `images/`: Un directorio que contenga las imágenes de los ítems, nombradas como `{item_id}.jpg`.
+
+### 2\. Configuración
+
+Edita los archivos de configuración en `configs/` para ajustar los parámetros.
+
+  - **`simple_config.yaml`**: Contiene los parámetros esenciales para empezar. Ideal para experimentos iniciales.
+  - **`advanced_config.yaml`**: Ofrece un control granular sobre todos los aspectos del modelo, entrenamiento y datos.
+
+Para más detalles, consulta la [Guía de Configuración](https://www.google.com/search?q=docs/configuration.md).
+
+### 3\. Preprocesamiento de Datos
+
+Este script valida, limpia y procesa los datos crudos.
 
 ```bash
 python scripts/preprocess_data.py --config configs/simple_config.yaml
 ```
 
-Optional preprocessing arguments:
-```bash
-python scripts/preprocess_data.py --config configs/simple_config.yaml \
-    --skip-caching \
-    --force-reprocess
-```
+### 4\. División de Datos (Splits)
 
-### 4. Data Splitting
-
-Create standardized train/validation/test splits:
+Crea conjuntos de datos estandarizados para entrenamiento, validación y prueba.
 
 ```bash
 python scripts/create_splits.py --config configs/simple_config.yaml
 ```
 
-Optional splitting arguments:
-```bash
-python scripts/create_splits.py --config configs/simple_config.yaml \
-    --sample_n 10000
-```
+### 5\. Pre-cómputo de Caché de Features
 
-### 5. Feature Caching (Optional but Recommended)
-
-Pre-compute multimodal features to accelerate training:
+(Opcional pero muy recomendado) Pre-calcula las features multimodales para acelerar drásticamente el entrenamiento.
 
 ```bash
-# Full feature caching
 python scripts/precompute_cache.py --config configs/simple_config.yaml
-
-# Test mode (process only 100 items)
-python scripts/precompute_cache.py --config configs/simple_config.yaml --test
-
-# Force recomputation of existing cache
-python scripts/precompute_cache.py --config configs/simple_config.yaml --force
-
-# Limit number of items processed
-python scripts/precompute_cache.py --config configs/simple_config.yaml --max_items 5000
 ```
 
-### 6. Cache Management
+### 6\. Entrenamiento
 
-Manage feature caches for different model combinations:
-
-```bash
-# List available caches
-python scripts/cache.py list
-
-# Show statistics for specific model combination
-python scripts/cache.py stats resnet_sentence-bert
-
-# Clear cache for specific model combination
-python scripts/cache.py clear resnet_sentence-bert
-
-# Clear all caches (with confirmation)
-python scripts/cache.py clear --all
-```
-
-### 7. Training
-
-Train the multimodal recommender system:
+Entrena el recomendador multimodal.
 
 ```bash
 python scripts/train.py --config configs/simple_config.yaml --device cuda
 ```
 
-Advanced training options:
-```bash
-python scripts/train.py --config configs/simple_config.yaml \
-    --device cuda \
-    --use_wandb \
-    --wandb_project "MyProject" \
-    --wandb_run_name "experiment_1" \
-    --resume path/to/checkpoint.pth \
-    --verbose
-```
+Puedes habilitar el seguimiento con Weights & Biases añadiendo los flags `--use_wandb` y `--wandb_project "MiProyecto"`.
 
-### 8. Checkpoint Management
+### 7\. Evaluación
 
-Manage model-specific checkpoint organization:
+Evalúa el modelo entrenado sobre el conjunto de test.
 
 ```bash
-# List all checkpoints and their organization status
-python scripts/checkpoint_manager.py list --checkpoint-dir models/checkpoints
-
-# Automatically organize existing checkpoints by model combination
-python scripts/checkpoint_manager.py organize --checkpoint-dir models/checkpoints
-
-# Preview organization changes without moving files
-python scripts/checkpoint_manager.py organize --checkpoint-dir models/checkpoints --dry-run
-
-# Manually organize checkpoints with unknown model combinations
-python scripts/checkpoint_manager.py organize-manual --checkpoint-dir models/checkpoints
-
-# Create JSON summary of checkpoint organization
-python scripts/checkpoint_manager.py info --checkpoint-dir models/checkpoints
+python scripts/evaluate.py --config configs/simple_config.yaml --recommender_type multimodal --eval_task retrieval
 ```
 
-### 9. Evaluation
-
-Evaluate trained models on test data:
+El script también permite evaluar baselines:
 
 ```bash
-python scripts/evaluate.py --config configs/simple_config.yaml \
-    --test_data data/splits/test.csv \
-    --eval_task retrieval \
-    --recommender_type multimodal
+# Evaluar baseline de popularidad
+python scripts/evaluate.py --config configs/simple_config.yaml --recommender_type popularity
 ```
 
-Advanced evaluation options:
-```bash
-python scripts/evaluate.py --config configs/simple_config.yaml \
-    --test_data data/splits/test.csv \
-    --train_data data/splits/train.csv \
-    --eval_task retrieval \
-    --recommender_type multimodal \
-    --checkpoint_name best_model.pth \
-    --use_sampling \
-    --num_negatives 100 \
-    --sampling_strategy random \
-    --save_predictions user_predictions.json \
-    --warmup_recommender_cache \
-    --use_parallel \
-    --num_workers 4
-```
+**Ejemplo de Salida de Evaluación:**
 
-Evaluation task options:
-- `retrieval`: Top-K retrieval evaluation
-- `ranking`: Ranking quality evaluation
+| Métrica               | Valor   |
+| --------------------- | ------- |
+| avg\_precision\_at\_k    | 0.1234  |
+| avg\_recall\_at\_k       | 0.2345  |
+| avg\_f1\_at\_k           | 0.1618  |
+| avg\_hit\_rate\_at\_k     | 0.6789  |
+| avg\_ndcg\_at\_k         | 0.4567  |
+| avg\_mrr               | 0.3890  |
 
-Recommender types:
-- `multimodal`: Trained multimodal model
-- `random`: Random baseline
-- `popularity`: Popularity-based baseline
-- `item_knn`: Item-based collaborative filtering
-- `user_knn`: User-based collaborative filtering
+### 8\. Generación de Recomendaciones
 
-### 10. Generate Recommendations
-
-Generate recommendations for specific users:
+Genera una lista de recomendaciones para usuarios específicos.
 
 ```bash
-python scripts/generate_recommendations.py --config configs/simple_config.yaml \
-    --users user_123 user_456 \
-    --output recommendations.json
+python scripts/generate_recommendations.py --config configs/simple_config.yaml --users user_123 user_456
 ```
 
-Advanced recommendation generation:
+## Uso como Librería
+
+Además de usar los scripts, puedes importar las clases principales del recomendador en tu propio código.
+
+```python
+import torch
+from src.config import Config
+from src.data.dataset import MultimodalDataset
+from src.inference.recommender import Recommender
+from src.models.multimodal import MultimodalRecommender as Model
+
+# 1. Cargar configuración
+config = Config.from_yaml('configs/simple_config.yaml')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# 2. Cargar el modelo entrenado
+# (Asegúrate de haber entrenado un modelo primero)
+model = Model(
+    n_users=1000, # Reemplazar con el número real de tu dataset
+    n_items=5000, # Reemplazar con el número real de tu dataset
+    num_numerical_features=len(config.data.numerical_features_cols),
+    embedding_dim=config.model.embedding_dim,
+    vision_model_name=config.model.vision_model,
+    language_model_name=config.model.language_model
+).to(device)
+
+checkpoint_path = config.get_model_checkpoint_path('best_model.pth')
+model.load_state_dict(torch.load(checkpoint_path, map_location=device)['model_state_dict'])
+
+# 3. Cargar el dataset (necesario para los encoders y el preprocesamiento de ítems)
+# Asume que los datos ya han sido preprocesados
+dataset = ... # Cargar el dataset de la misma forma que en los scripts
+
+# 4. Inicializar el recomendador de inferencia
+recommender = Recommender(model, dataset, device)
+
+# 5. Generar recomendaciones
+user_id = 'un_id_de_usuario'
+top_k = 10
+recommendations = recommender.get_recommendations(user_id, top_k)
+
+print(f"Recomendaciones para {user_id}: {recommendations}")
+```
+
+## Gestión Avanzada
+
+### Gestión de Caché
+
+El script `scripts/cache.py` te permite inspeccionar y limpiar las cachés de features.
+
 ```bash
-python scripts/generate_recommendations.py --config configs/simple_config.yaml \
-    --sample_users 10 \
-    --use_diversity \
-    --output diverse_recommendations.json \
-    --device cuda
+# Listar todas las cachés de features disponibles
+python scripts/cache.py list
+
+# Ver estadísticas de una caché específica
+python scripts/cache.py stats resnet_sentence-bert
+
+# Limpiar la caché de una combinación de modelos
+python scripts/cache.py clear resnet_sentence-bert
 ```
 
-Alternative user specification methods:
-```bash
-# From file (one user ID per line)
-python scripts/generate_recommendations.py --config configs/simple_config.yaml \
-    --user_file user_list.txt
+### Gestión de Checkpoints
 
-# Random sampling from available users
-python scripts/generate_recommendations.py --config configs/simple_config.yaml \
-    --sample_users 50
-```
-
-### 11. Extract Encoders (If Needed)
-
-Extract user and item encoders from training data:
+El script `scripts/checkpoint_manager.py` ayuda a organizar los checkpoints guardados.
 
 ```bash
-python scripts/extract_encoders.py --config configs/simple_config.yaml
+# Listar todos los checkpoints y su estado de organización
+python scripts/checkpoint_manager.py list
+
+# Organizar automáticamente los checkpoints en directorios por modelo
+python scripts/checkpoint_manager.py organize
 ```
 
-## Project Structure
+## Estructura del Proyecto
 
 ```
 multimodal-recommender/
-├── configs/              # Configuration files
-├── scripts/              # Executable scripts for training, evaluation, etc.
-├── src/                  # Source code
-│   ├── config.py        # Configuration management
-│   ├── data/            # Dataset and preprocessing modules
-│   ├── models/          # Model architectures
-│   ├── training/        # Training logic
-│   ├── evaluation/      # Evaluation framework
-│   └── inference/       # Recommendation generation
-├── data/                # Data directories (created during setup)
-├── models/              # Model checkpoints
-│   └── checkpoints/     # Organized by model combination
-│       ├── encoders/    # Shared user/item encoders
-│       ├── resnet_sentence-bert/    # Model-specific checkpoints
-│       └── clip_mpnet/              # Model-specific checkpoints
-├── cache/               # Feature caches (organized by model)
-│   ├── resnet_sentence-bert/
-│   └── clip_mpnet/
-└── results/             # Evaluation results and figures
+├── configs/              # Archivos de configuración YAML
+├── data/                 # Datos crudos, procesados y splits
+├── docs/                 # Documentación adicional
+├── models/               # Checkpoints de modelos guardados
+├── results/              # Resultados de evaluación y logs
+├── scripts/              # Scripts ejecutables (train, evaluate, etc.)
+├── src/                  # Código fuente del framework
+│   ├── config.py         # Gestión de configuración
+│   ├── data/             # Módulos de datos y preprocesamiento
+│   ├── evaluation/       # Módulos de métricas y tareas de evaluación
+│   ├── inference/        # Lógica para generar recomendaciones
+│   ├── models/           # Arquitecturas de los modelos
+│   └── training/         # Lógica de entrenamiento
+├── tests/                # Pruebas unitarias e de integración
+└── requirements.txt      # Dependencias de Python
 ```
 
-## Checkpoint Organization
 
-The system organizes checkpoints by model combination to support experimentation with different architectures:
-
-- **Model-specific directories**: `checkpoints/{vision_model}_{language_model}/` contain .pth files
-- **Shared encoders**: `checkpoints/encoders/` contains user_encoder.pkl and item_encoder.pkl
-- **Backward compatibility**: System automatically finds checkpoints in old organization
-
-## Configuration Options
-
-The system supports extensive configuration through YAML files:
-
-- **Model parameters**: Architecture choices, embedding dimensions, fusion strategies
-- **Training settings**: Batch size, learning rate, optimizer configuration
-- **Data processing**: Feature normalization, text augmentation, image compression
-- **Evaluation options**: Metrics, negative sampling strategies, baseline comparisons
-
-### Example Configurations
-
-Basic configuration (`configs/simple_config.yaml`):
-```yaml
-model:
-  vision_model: resnet
-  language_model: sentence-bert
-  embedding_dim: 64
-  use_contrastive: true
-
-training:
-  batch_size: 64
-  learning_rate: 0.001
-  epochs: 30
-
-data:
-  numerical_features_cols:
-    - view_number
-    - comment_number
-    - thumbup_number
-```
-
-Advanced configuration (`configs/advanced_config.yaml`) includes additional options for:
-- Advanced model architecture parameters
-- Detailed training configurations
-- Comprehensive data processing settings
-- Extensive evaluation options
-
-## Performance Considerations
-
-- Use `scripts/precompute_cache.py` to pre-compute features before training
-- Enable feature caching to speed up data loading
-- Adjust batch size based on GPU memory
-- Use negative sampling for efficient evaluation on large datasets
-- Configure numerical features to match your dataset
-
-## Requirements
-
-- Python 3.7+
-- PyTorch 2.2.1+
-- Transformers 4.47.1+
-- CUDA-capable GPU (recommended)
-
-See `requirements.txt` for complete dependencies.
-
-## License
-
-This project is provided as-is for research and educational purposes.
