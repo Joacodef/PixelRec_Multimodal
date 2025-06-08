@@ -27,8 +27,8 @@ def augment_text(text: str, augmentation_type: str = 'random_delete', delete_pro
 
     if augmentation_type == 'random_delete':
         augmented_words = [word for word in words if random.random() > delete_prob]
-        if not augmented_words:
-            return text
+        
+        # If augmented_words is empty, this correctly returns an empty string.
         return " ".join(augmented_words)
 
     elif augmentation_type == 'random_swap':

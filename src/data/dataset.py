@@ -76,13 +76,21 @@ class MultimodalDataset(Dataset):
                 use_disk=cache_to_disk
             )
 
+        # Fit user encoder on all users in the interaction data
+        self.user_encoder.fit(self.interactions['user_id'].astype(str))
+        # Fit item encoder on the entire item catalog to ensure all items are known for negative sampling
+        self.item_encoder.fit(self.item_info_df_original['item_id'].astype(str))
+        
         if not self.interactions.empty:
-            self.interactions['user_idx'] = self.user_encoder.fit_transform(self.interactions['user_id'].astype(str))
-            self.interactions['item_idx'] = self.item_encoder.fit_transform(self.interactions['item_id'].astype(str))
+            # Transform the interaction data using the globally fitted encoders
+            self.interactions['user_idx'] = self.user_encoder.transform(self.interactions['user_id'].astype(str))
+            self.interactions['item_idx'] = self.item_encoder.transform(self.interactions['item_id'].astype(str))
             self.n_users = len(self.user_encoder.classes_)
             self.n_items = len(self.item_encoder.classes_)
         else:
-            self.n_users, self.n_items = 0, 0
+            self.n_users = 0
+            self.n_items = 0
+        # --- END OF FIX ---
 
         if create_negative_samples:
             self.all_samples = self._create_samples_with_negatives()
@@ -195,10 +203,8 @@ class MultimodalDataset(Dataset):
         except FileNotFoundError:
             image = Image.new("RGB", (224, 224), color="grey")
         
-        # FIX 3: Explicitly specify the dtype to torch.tensor() to prevent inference errors in the CI environment.
         processed_np = self.image_processor(images=[image], return_tensors="np")['pixel_values']
         
-        # The image processor returns float32 data. We create a torch.float32 tensor.
         return torch.tensor(processed_np, dtype=torch.float32).squeeze(0)
 
     def _create_samples_with_negatives(self) -> pd.DataFrame:
