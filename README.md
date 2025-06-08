@@ -82,8 +82,8 @@ python scripts/evaluate.py --config configs/simple_config.yaml --device cuda
 
 ### Prerequisites
 
-  - Python 3.7+
-  - PyTorch 2.2.1+
+  - Python 3.11+
+  - PyTorch 2.2.6+
   - Transformers 4.47.1+
   - A CUDA-capable GPU is recommended for fast training.
 
