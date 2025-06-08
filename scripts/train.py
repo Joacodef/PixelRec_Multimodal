@@ -256,7 +256,7 @@ def main():
         model_config = config.model
         training_config = config.training
 
-        # FIX: Store the original list of numerical features before validation
+        # Store the original list of numerical features before validation
         original_numerical_features_from_config = data_config.numerical_features_cols.copy()
         
         print(f"Configuration loaded successfully:")
@@ -325,7 +325,6 @@ def main():
         item_info_df_full = pd.read_csv(data_config.processed_item_info_path)
         interactions_df_full = pd.read_csv(data_config.processed_interactions_path)
         
-        # CRITICAL FIX: Validate and update numerical features based on actual data
         print(f"\n📊 VALIDATING NUMERICAL FEATURES:")
         print(f"   Original config numerical features: {data_config.numerical_features_cols}")
         

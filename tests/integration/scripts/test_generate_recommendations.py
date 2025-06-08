@@ -40,7 +40,7 @@ class TestGenerateRecommendationsScript(unittest.TestCase):
 
         # --- Create Dummy Data and Files ---
 
-        # 1. Dummy "processed" item info - FIX: Added more items
+        # 1. Dummy "processed" item info
         self.item_info_df = pd.DataFrame({
             'item_id': ['item1', 'item2', 'item3', 'item4', 'item5', 'item6'],
             'title': ['Title 1', 'Title 2', 'Title 3', 'Title 4', 'Title 5', 'Title 6'],
@@ -52,7 +52,7 @@ class TestGenerateRecommendationsScript(unittest.TestCase):
         self.processed_item_info_path = self.processed_data_dir / "item_info.csv"
         self.item_info_df.to_csv(self.processed_item_info_path, index=False)
 
-        # 2. Dummy "processed" interactions - FIX: User history is now smaller than total items
+        # 2. Dummy "processed" interactions 
         self.interactions_df = pd.DataFrame({
             'user_id': ['u1', 'u1', 'u2', 'u2', 'u3', 'u3'],
             'item_id': ['item1', 'item2', 'item1', 'item3', 'item5', 'item6']

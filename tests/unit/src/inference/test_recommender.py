@@ -104,7 +104,7 @@ class TestRecommender(unittest.TestCase):
             'u1',
             top_k=5,
             candidates=candidate_items,
-            filter_seen=False # This is the fix.
+            filter_seen=False
         )
         rec_ids = [r[0] for r in recs]
         

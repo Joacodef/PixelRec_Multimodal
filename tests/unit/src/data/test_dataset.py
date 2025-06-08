@@ -232,5 +232,60 @@ class TestMultimodalDataset(unittest.TestCase):
             processed_text = mocked_tokenizer.call_args[0][0]
             self.assertEqual(processed_text, "")
 
+    def test_data_integrity_and_missing_values(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
+        """
+        This test checks for multiple common data issues at once:
+        1. An interaction exists for an item_id ('item_missing_info') that is NOT in the item_info dataframe.
+        2. An item ('item_missing_text') is missing its 'title' (will be NaN).
+        3. An item ('item_nan_numeric') has a NaN value in a numerical column.
+        """
+        # 1. Create more complex data with known issues
+        faulty_item_info = pd.DataFrame({
+            'item_id': ['item1', 'item_missing_text', 'item_nan_numeric'],
+            'title': ['Good Title', np.nan, 'NaN Numeric Title'], # Item with missing title
+            'tag': ['A', 'B', 'C'],
+            'description': ['Desc 1', 'Desc 2', 'Desc 3'],
+            'view_number': [100, 200, np.nan], # Item with NaN in numerical feature
+            'comment_number': [10, 20, 5]
+        })
+
+        faulty_interactions = pd.DataFrame({
+            'user_id': ['u1', 'u2', 'u3', 'u4'],
+            'item_id': [
+                'item1',
+                'item_missing_text',
+                'item_nan_numeric',
+                'item_missing_info' # This item does not exist in faulty_item_info
+            ]
+        })
+
+        # 2. Initialize the dataset
+        dataset = MultimodalDataset(
+            interactions_df=faulty_interactions,
+            item_info_df=faulty_item_info,
+            image_folder=str(self.image_dir),
+            numerical_feat_cols=['view_number', 'comment_number'],
+            create_negative_samples=False
+        )
+
+        # 3. Perform assertions
+        # The dataset should drop the interaction for 'item_missing_info', resulting in 3 valid samples.
+        self.assertEqual(len(dataset), 3)
+
+        # Test the item with missing text ('item_missing_text')
+        # The dataset should not crash and should process the available text.
+        idx_missing_text = dataset.all_samples[dataset.all_samples['item_id'] == 'item_missing_text'].index[0]
+        sample_missing_text = dataset[idx_missing_text]
+        self.assertIn('text_input_ids', sample_missing_text) # Should still produce text tensors
+
+        # Test the item with a NaN numerical feature ('item_nan_numeric')
+        # The dataset's _process_item_features should handle np.nan_to_num.
+        idx_nan_numeric = dataset.all_samples[dataset.all_samples['item_id'] == 'item_nan_numeric'].index[0]
+        sample_nan_numeric = dataset[idx_nan_numeric]
+        # Check that the numerical features tensor does not contain NaN
+        self.assertFalse(torch.isnan(sample_nan_numeric['numerical_features']).any())
+        
+        self.assertNotIn('item_missing_info', dataset.all_samples['item_id'].values)
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

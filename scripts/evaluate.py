@@ -53,9 +53,7 @@ except ImportError:
 
 
 def find_model_checkpoint(config: Config, checkpoint_name: str = 'best_model.pth') -> Path:
-    """
-    Find model checkpoint using new organization with fallback to old structure
-    
+    """    
     Args:
         config: Configuration object
         checkpoint_name: Name of checkpoint file to find
@@ -120,7 +118,7 @@ def find_encoders(config: Config) -> Path:
     Raises:
         FileNotFoundError: If encoders are not found
     """
-    # Try shared encoders directory first (new structure)
+    # Try shared encoders directory first
     shared_encoders_path = Path(config.checkpoint_dir) / 'encoders'
     
     if shared_encoders_path.exists():
@@ -250,7 +248,6 @@ def main():
 
     print("Creating dataset instance for global encoders...")
     
-    # --- ROBUST SCALER AND FEATURE LOADING ---
     numerical_scaler = None
     # Start with columns from config as a fallback
     numerical_features_for_dataset = config_obj.data.numerical_features_cols
@@ -272,7 +269,6 @@ def main():
             print(f"  → Warning: Scaler file not found at {scaler_path}. Numerical features will not be scaled.")
     
     print(f"✅ Using the following {len(numerical_features_for_dataset)} numerical features for dataset: {numerical_features_for_dataset}")
-    # --- END OF ROBUST SCALER LOADING ---
 
 
     effective_image_folder = config_obj.data.image_folder

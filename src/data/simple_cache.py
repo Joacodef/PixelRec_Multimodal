@@ -58,9 +58,6 @@ class SimpleFeatureCache:
 
         if self.use_disk:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            # print(f"SimpleFeatureCache: Using disk cache at {self.cache_dir}") # For debugging
-        # else:
-            # print(f"SimpleFeatureCache: Memory-only cache (max {max_memory_items} items) for {cache_name}") # For debugging
 
     def __getstate__(self) -> Dict[str, Any]:
         # Exclude lock for pickling

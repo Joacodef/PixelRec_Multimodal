@@ -585,7 +585,7 @@ class TestMultimodalRecommender(unittest.TestCase):
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
-        # FIX: Set the model to evaluation mode to disable dropout and freeze batch norm
+        # Set the model to evaluation mode to disable dropout and freeze batch norm
         model1.eval()
 
         # Get a prediction with original model
@@ -607,7 +607,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         ).to(self.device)
 
         model2.load_state_dict(state_dict)
-        # FIX: Also set the second model to evaluation mode
+        # Also set the second model to evaluation mode
         model2.eval()
 
         # Get prediction with loaded model

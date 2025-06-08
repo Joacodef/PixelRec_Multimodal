@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 class BaselineRecommender:
-    """Base class for baseline recommenders - Fixed to handle string IDs consistently"""
+    """Base class for baseline recommenders"""
     
     def __init__(
         self, 
@@ -110,7 +110,7 @@ class BaselineRecommender:
 
 
 class RandomRecommender(BaselineRecommender):
-    """Random baseline recommender - Fixed to return string IDs"""
+    """Random baseline recommender """
     
     def __init__(
         self, 
@@ -174,7 +174,7 @@ class RandomRecommender(BaselineRecommender):
 
 
 class PopularityRecommender(BaselineRecommender):
-    """Popularity-based baseline recommender - Fixed to return string IDs"""
+    """Popularity-based baseline recommender"""
     
     def __init__(
         self, 
@@ -251,7 +251,7 @@ class PopularityRecommender(BaselineRecommender):
 
 
 class ItemKNNRecommender(BaselineRecommender):
-    """Item-based collaborative filtering recommender - Fixed to return string IDs"""
+    """Item-based collaborative filtering recommender"""
     
     def __init__(
         self, 
@@ -368,7 +368,7 @@ class ItemKNNRecommender(BaselineRecommender):
                         continue
                     recommendations.append((item_id_cand_str, float(scores[item_idx_cand])))
         
-        # FIXED: Added missing return statement and sorting
+        # Added missing return statement and sorting
         recommendations.sort(key=lambda x: x[1], reverse=True)
         return recommendations[:top_k]
         
@@ -407,7 +407,7 @@ class ItemKNNRecommender(BaselineRecommender):
 
 
 class UserKNNRecommender(BaselineRecommender):
-    """User-based collaborative filtering recommender - Fixed to return string IDs"""
+    """User-based collaborative filtering recommender"""
     
     def __init__(
         self, 

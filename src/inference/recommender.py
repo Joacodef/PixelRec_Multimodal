@@ -1,7 +1,4 @@
 # src/inference/recommender.py
-"""
-Fixed multimodal recommender for inference with consistent string ID handling
-"""
 import torch
 import pandas as pd
 import numpy as np
@@ -14,7 +11,7 @@ from ..data.dataset import MultimodalDataset
 
 class Recommender:
     """
-    Fixed multimodal recommender for inference with consistent string ID handling
+    Multimodal recommender for inference with consistent string ID handling
     """
 
     def __init__(self, model: torch.nn.Module, dataset: MultimodalDataset, device: torch.device,

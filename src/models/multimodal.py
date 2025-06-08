@@ -389,7 +389,7 @@ class MultimodalRecommender(nn.Module):
         clip_text_input_ids: Optional[torch.Tensor] = None, 
         clip_text_attention_mask: Optional[torch.Tensor] = None, 
         return_embeddings: bool = False,
-        debug_this_batch: bool = False # Add this argument for targeted debugging
+        debug_this_batch: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         
         def check_tensor(tensor: torch.Tensor, name: str):
@@ -459,7 +459,6 @@ class MultimodalRecommender(nn.Module):
         
 
         if return_embeddings:
-            # FIX: Normalize the features before returning them for contrastive loss.
             if vision_features_for_contrastive_loss is not None:
                 vision_features_for_contrastive_loss = F.normalize(vision_features_for_contrastive_loss, p=2, dim=-1)
             if text_features_for_contrastive_loss is not None:

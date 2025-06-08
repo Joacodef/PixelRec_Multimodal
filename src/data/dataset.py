@@ -46,6 +46,17 @@ class MultimodalDataset(Dataset):
         self.item_info = item_info_df.set_index('item_id')
         self.image_folder = image_folder
 
+        # This prevents the "unseen label" error during encoder transformation.
+        valid_item_ids = set(self.item_info_df_original['item_id'].astype(str))
+        original_interaction_count = len(self.interactions)
+        self.interactions = self.interactions[
+            self.interactions['item_id'].astype(str).isin(valid_item_ids)
+        ].reset_index(drop=True)
+        
+        if len(self.interactions) < original_interaction_count:
+            print(f"INFO: Dropped {original_interaction_count - len(self.interactions)} interactions "
+                  "that had no corresponding item metadata.")
+
         if numerical_feat_cols is not None:
             self.numerical_feat_cols = numerical_feat_cols
         else:
@@ -90,7 +101,6 @@ class MultimodalDataset(Dataset):
         else:
             self.n_users = 0
             self.n_items = 0
-        # --- END OF FIX ---
 
         if create_negative_samples:
             self.all_samples = self._create_samples_with_negatives()

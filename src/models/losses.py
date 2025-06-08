@@ -114,7 +114,6 @@ class MultimodalRecommenderLoss(nn.Module):
         Returns:
             Dictionary with total loss and individual components.
         """
-        # --- FIX: Check for non-finite predictions before passing to loss ---
         if not torch.isfinite(predictions).all():
             nan_loss = torch.tensor(float('nan'), device=predictions.device)
             return {

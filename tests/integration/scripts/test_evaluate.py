@@ -85,7 +85,7 @@ class TestEvaluateScript(unittest.TestCase):
             pickle.dump({'scaler': scaler, 'columns': self.numerical_cols}, f)
 
         # 6. Dummy Model and Checkpoint
-        # FIX: Ensure the model used to create the checkpoint has the SAME architecture
+        # Ensure the model used to create the checkpoint has the SAME architecture
         # as the one defined in the test YAML config file.
         self.model = MultimodalRecommender(
             n_users=len(self.user_encoder.classes_),

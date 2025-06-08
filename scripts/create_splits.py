@@ -69,7 +69,6 @@ def create_splits(config_path: str, sample_n: Optional[int] = None): # Added sam
     interactions_df = pd.read_csv(config.data.processed_interactions_path)
     original_total_interactions = len(interactions_df) # Store original size for metadata
 
-    # --- New Sampling Logic ---
     if sample_n is not None:
         if sample_n > 0 and sample_n <= len(interactions_df):
             print(f"Sampling {sample_n} interactions from the dataset (original size: {len(interactions_df)})...")
@@ -79,7 +78,6 @@ def create_splits(config_path: str, sample_n: Optional[int] = None): # Added sam
             print(f"Warning: Requested sample_n ({sample_n}) is larger than the dataset size ({len(interactions_df)}). Using the full dataset.")
         else:
             print("Warning: Invalid sample_n value. Using the full dataset.")
-    # --- End of New Sampling Logic ---
     
     # Ensure the output directory for splits exists.
     output_path = Path(config.data.split_data_path)
@@ -160,10 +158,10 @@ def create_splits(config_path: str, sample_n: Optional[int] = None): # Added sam
     metadata = {
         "creation_date": pd.Timestamp.now().isoformat(),
         "config_file": config_path,
-        "original_total_interactions_before_sampling": original_total_interactions, # New metadata field
-        "requested_sample_n": sample_n if sample_n is not None else "Not Sampled", # New metadata field
-        "interactions_after_sampling_before_filtering": len(interactions_df) if sample_n is not None else original_total_interactions, # New metadata field
-        "total_interactions_after_activity_filtering": len(interactions_df), # Updated meaning: after sampling (if any) AND activity filtering
+        "original_total_interactions_before_sampling": original_total_interactions, 
+        "requested_sample_n": sample_n if sample_n is not None else "Not Sampled", 
+        "interactions_after_sampling_before_filtering": len(interactions_df) if sample_n is not None else original_total_interactions, 
+        "total_interactions_after_activity_filtering": len(interactions_df),
         "train_size": len(train_df),
         "val_size": len(val_df),
         "test_size": len(test_df),

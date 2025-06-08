@@ -76,7 +76,7 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         return list(self.test_data['item_id'].unique())
         
     def _sample_negatives(self, user_id: str, positive_items: List[str]) -> List[str]:
-        """Sample negative items for evaluation - Fixed negative sampling logic"""
+        """Sample negative items for evaluation"""
         all_items = self._get_all_item_ids()
         positive_items_set = set(str(item) for item in positive_items)
         

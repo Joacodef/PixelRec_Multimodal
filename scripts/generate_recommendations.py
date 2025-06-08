@@ -119,7 +119,7 @@ def load_model_and_data(config: Config, device: torch.device):
         contrastive_temperature=config.model.contrastive_temperature
     ).to(device)
     
-    # FIX: Use the new robust find_model_checkpoint function
+    # Use the new robust find_model_checkpoint function
     checkpoint_path = find_model_checkpoint(config)
 
     checkpoint = torch.load(checkpoint_path, map_location=device)

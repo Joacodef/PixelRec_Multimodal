@@ -83,7 +83,7 @@ def precompute_features_cache(config_path: str, force_recompute: bool = False, m
         print(f"  Loading numerical scaler from {scaler_path}")
         with open(scaler_path, 'rb') as f:
             scaler_data = pickle.load(f)
-            # FIX: Extract the scaler object from the dictionary
+            # Extract the scaler object from the dictionary
             if isinstance(scaler_data, dict) and 'scaler' in scaler_data:
                 numerical_scaler = scaler_data['scaler']
                 print("  → Extracted scaler object from saved dictionary.")

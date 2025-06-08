@@ -52,7 +52,6 @@ class TestPreprocessData(unittest.TestCase):
             'item_id': ['item1', 'item2', 'item3', 'item4', 'item5', 'item_corrupted', 'item_small'],
             'title': ['A Good Title', 'Another Title', 'Title 3', 'Title 4', 'Title 5', 'Corrupted', 'Small'],
             'tag': ['TagA', 'TagB', 'TagA', 'TagC', 'TagB', 'TagD', 'TagE'],
-            # FIX: Changed 'HTML <p>Description</p>' to just '<p>Description</p>'
             'description': ['<p>Description</p>', 'Desc 2', 'Desc 3', 'Desc 4', 'Desc 5', 'Desc 6', 'Desc 7'],
             'view_number': [100, 200, 50, 300, 10, np.nan, 500],
             'comment_number': [10, 20, 5, 30, 1, 5, 50],
