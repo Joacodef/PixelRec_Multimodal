@@ -229,7 +229,7 @@ class Trainer:
                     validation_performed_this_epoch = False
             else:
                 print(f"Epoch {self.epoch+1}: Validation skipped (no validation data).")
-                val_metrics = {'total_loss': np.nan, 'bce_loss': np.nan, 'accuracy': 0.0, 'contrastive_loss': np.nan} 
+                val_metrics = {'total_loss': np.nan, 'bce_loss': np.nan, 'accuracy': 0.0, 'f1_score': 0.0, 'contrastive_loss': np.nan} 
                 val_losses.append(np.nan)
 
             # Logs metrics to Weights & Biases if enabled.
@@ -282,6 +282,7 @@ class Trainer:
         
         total_loss_val, bce_loss_val, contrastive_loss_val = 0.0, 0.0, 0.0
         correct_preds, total_samples, valid_batches = 0, 0, 0
+        tp, fp, fn = 0, 0, 0
         
         progress_bar = tqdm(train_loader, desc=f"Epoch {self.epoch+1} - Training", leave=False)
 
@@ -335,6 +336,9 @@ class Trainer:
                 if output.size() == batch['label'].size():
                     predictions = (output > 0.5).float()
                     correct_preds += (predictions == batch['label']).sum().item()
+                    tp += ((predictions == 1) & (batch['label'] == 1)).sum().item()
+                    fp += ((predictions == 1) & (batch['label'] == 0)).sum().item()
+                    fn += ((predictions == 0) & (batch['label'] == 1)).sum().item()
             else:
                 print(f"WARNING: Skipping backward pass for batch_idx {batch_idx} due to non-finite loss (NaN or Inf).")
 
@@ -342,7 +346,7 @@ class Trainer:
 
             # Updates the progress bar with the current loss and accuracy.
             current_loss_display = loss_dict['total'].item() if torch.isfinite(loss_dict['total']) else float('nan')
-            current_accuracy = correct_preds / valid_batches if valid_batches > 0 else 0
+            current_accuracy = correct_preds / total_samples if total_samples > 0 else 0
             progress_bar.set_postfix({'loss': f"{current_loss_display:.4f}", 'acc': f"{current_accuracy:.4f}"})
         
         # Calculates the average metrics for the entire epoch.
@@ -350,12 +354,19 @@ class Trainer:
         avg_bce_loss = bce_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_contrastive_loss = contrastive_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0.0
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
         
         return {
             'total_loss': avg_total_loss,
             'bce_loss': avg_bce_loss,
             'contrastive_loss': avg_contrastive_loss,
-            'accuracy': avg_accuracy
+            'accuracy': avg_accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score
         }
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
@@ -375,6 +386,7 @@ class Trainer:
         
         total_loss_val, bce_loss_val, contrastive_loss_val_val = 0.0, 0.0, 0.0
         correct_preds, total_samples, valid_batches = 0, 0, 0
+        tp, fp, fn = 0, 0, 0
 
         progress_bar_val = tqdm(val_loader, desc=f"Epoch {self.epoch+1} - Validation", leave=False)
 
@@ -419,6 +431,9 @@ class Trainer:
                     if output_val.size() == batch['label'].size():
                         predictions = (output_val > 0.5).float()
                         correct_preds += (predictions == batch['label']).sum().item()
+                        tp += ((predictions == 1) & (batch['label'] == 1)).sum().item()
+                        fp += ((predictions == 1) & (batch['label'] == 0)).sum().item()
+                        fn += ((predictions == 0) & (batch['label'] == 1)).sum().item()
 
                 total_samples += batch['label'].size(0)
         
@@ -426,12 +441,19 @@ class Trainer:
         avg_bce_loss = bce_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_contrastive_loss = contrastive_loss_val_val / valid_batches if valid_batches > 0 else float('nan')
         avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0.0
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
         
         return {
             'total_loss': avg_total_loss,
             'bce_loss': avg_bce_loss,
             'contrastive_loss': avg_contrastive_loss,
-            'accuracy': avg_accuracy
+            'accuracy': avg_accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score
         }
 
     def _batch_to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -504,15 +526,16 @@ class Trainer:
 
         print(f"\nEpoch {current_epoch+1}/{total_epochs}")
         print(f"Train Loss: {train_metrics['total_loss']:.4f} (BCE: {train_metrics['bce_loss']:.4f}, Contrastive: {train_contrastive_loss:.4f})")
-        print(f"Train Acc: {train_metrics['accuracy']:.4f}")
+        print(f"Train Acc: {train_metrics['accuracy']:.4f} | Train F1: {train_metrics['f1_score']:.4f}")
         
         val_loss_str = f"{val_metrics['total_loss']:.4f}" if not np.isnan(val_metrics['total_loss']) else "N/A"
         val_bce_str = f"{val_metrics.get('bce_loss', np.nan):.4f}" if not np.isnan(val_metrics.get('bce_loss', np.nan)) else "N/A"
         val_contrastive_str = f"{val_contrastive_loss:.4f}" if not np.isnan(val_contrastive_loss) else "N/A"
         val_acc_str = f"{val_metrics['accuracy']:.4f}" if not np.isnan(val_metrics['accuracy']) else "N/A"
+        val_f1_str = f"{val_metrics.get('f1_score', np.nan):.4f}" if not np.isnan(val_metrics.get('f1_score', np.nan)) else "N/A"
 
         print(f"Val Loss: {val_loss_str} (BCE: {val_bce_str}, Contrastive: {val_contrastive_str})")
-        print(f"Val Acc: {val_acc_str}")
+        print(f"Val Acc: {val_acc_str} | Val F1: {val_f1_str}")
         
         current_lr = self.get_learning_rate()
         print(f"Learning Rate: {current_lr:.6f}")

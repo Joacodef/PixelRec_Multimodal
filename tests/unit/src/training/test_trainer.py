@@ -93,12 +93,16 @@ class TestTrainer(unittest.TestCase):
         self.optimizer.step.assert_called_once()
         self.assertIn('total_loss', train_metrics)
         self.assertIn('accuracy', train_metrics)
+        self.assertIn('f1_score', train_metrics)
+        self.assertIn('precision', train_metrics)
+        self.assertIn('recall', train_metrics)
 
         self.mock_model.eval()
         val_metrics = self.trainer._validate_epoch(self.val_loader)
         
         self.assertIn('total_loss', val_metrics)
         self.assertIn('accuracy', val_metrics)
+        self.assertIn('f1_score', val_metrics)
         
     def test_save_and_load_checkpoint(self):
         """Tests that saving and loading a checkpoint works correctly."""

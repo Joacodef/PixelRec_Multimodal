@@ -8,15 +8,15 @@ model:
   embedding_dim: 64
   
   # Pre-trained model freezing
-  freeze_vision: false               # Freeze vision model weights
-  freeze_language: false              # Freeze language model weights
+  freeze_vision: true               # Freeze vision model weights
+  freeze_language: true              # Freeze language model weights
   
   # Contrastive learning (advanced)
-  use_contrastive: true
+  use_contrastive: false
   contrastive_temperature: 0.07     # Temperature for contrastive loss
   
   # Regularization
-  dropout_rate: 0.5                 # Dropout rate for regularization
+  dropout_rate: 0.3                 # Dropout rate for regularization
   
   # Attention mechanism (advanced)
   num_attention_heads: 8            # Number of attention heads
@@ -38,7 +38,7 @@ training:
   # Basic training parameters
   batch_size: 32
   epochs: 5
-  learning_rate: 0.00001
+  learning_rate: 0.001
   weight_decay: 0.01               # L2 regularization
   patience: 10                     # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
@@ -72,10 +72,10 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_tiny
-  train_data_path: data/splits/split_tiny/train.csv
-  val_data_path: data/splits/split_tiny/val.csv
-  test_data_path: data/splits/split_tiny/test.csv
+  split_data_path: data/splits/split_small
+  train_data_path: data/splits/split_small/train.csv
+  val_data_path: data/splits/split_small/val.csv
+  test_data_path: data/splits/split_small/test.csv
   
   # Cache configuration
   cache_config:
@@ -100,7 +100,7 @@ data:
   
   # Text augmentation (experimental)
   text_augmentation:
-    enabled: true                  # Enable text augmentation during training
+    enabled: false                  # Enable text augmentation during training
     augmentation_type: random_delete  # Options: random_delete, random_swap, none
     delete_prob: 0.05              # Probability of deleting words
     swap_prob: 0.05                # Probability of swapping adjacent words
@@ -108,10 +108,10 @@ data:
   # Offline image compression (advanced)
   offline_image_compression:
     enabled: true
-    compress_if_kb_larger_than: 500
-    target_quality: 85
-    resize_if_pixels_larger_than: [2048, 2048]
-    resize_target_longest_edge: 1024
+    compress_if_kb_larger_than: 300
+    target_quality: 90
+    resize_if_pixels_larger_than: [1024, 1024]
+    resize_target_longest_edge: 512
   
   # Offline image validation (advanced)
   offline_image_validation:
