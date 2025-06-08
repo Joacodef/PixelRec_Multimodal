@@ -25,27 +25,23 @@ class Trainer:
         device: torch.device,
         checkpoint_dir: str = 'models/checkpoints',
         use_contrastive: bool = True,
-        model_config: Optional[object] = None  # NEW: Add model_config parameter
+        model_config: Optional[object] = None
     ):
         self.model = model
         self.device = device
         self.base_checkpoint_dir = Path(checkpoint_dir)
         self.model_config = model_config
         
-        # Create model-specific checkpoint directory for .pth files
         if model_config and hasattr(model_config, 'vision_model') and hasattr(model_config, 'language_model'):
             model_combo = f"{model_config.vision_model}_{model_config.language_model}"
             self.model_checkpoint_dir = self.base_checkpoint_dir / model_combo
         else:
-            # Fallback to base directory if no model config provided
             self.model_checkpoint_dir = self.base_checkpoint_dir
             if model_config is None:
                 print("Warning: No model config provided to Trainer. Using base checkpoint directory.")
         
-        # Shared encoders directory (remains in base checkpoint_dir)
         self.encoders_dir = self.base_checkpoint_dir / 'encoders'
         
-        # Create directories
         self.model_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.encoders_dir.mkdir(parents=True, exist_ok=True)
         
@@ -143,12 +139,12 @@ class Trainer:
             validation_performed_this_epoch = False
             if val_loader is not None and len(val_loader) > 0:
                 val_metrics = self._validate_epoch(val_loader)
-                if 'total_loss' in val_metrics: # Ensure key exists
+                if 'total_loss' in val_metrics:
                     val_losses.append(val_metrics['total_loss'])
                     validation_performed_this_epoch = True
-                else: # Should not happen if _validate_epoch returns correctly
+                else:
                     val_losses.append(np.nan)
-                    validation_performed_this_epoch = False # Treat as not performed if loss is missing
+                    validation_performed_this_epoch = False
             else:
                 print(f"Epoch {self.epoch+1}: Validation skipped (no validation data).")
                 val_metrics = {'total_loss': np.nan, 'bce_loss': np.nan, 'accuracy': 0.0, 'contrastive_loss': np.nan} 
@@ -166,12 +162,9 @@ class Trainer:
             if validation_performed_this_epoch and not np.isnan(val_metrics['total_loss']):
                 if self._check_early_stopping(val_metrics['total_loss'], patience):
                     print(f"Early stopping at epoch {self.epoch+1}")
-                    # Save the latest state before stopping
                     self.save_checkpoint('last_model.pth')
                     break 
             
-            # Save the latest checkpoint at the end of every epoch.
-            # This overwrites the file each time, ensuring 'last_model.pth' is always the most recent.
             self.save_checkpoint('last_model.pth')
             
             self._print_epoch_summary(self.epoch, epochs, train_metrics, val_metrics)
@@ -184,34 +177,28 @@ class Trainer:
         optimizer: optim.Optimizer,
         gradient_clip: float
     ) -> Dict[str, float]:
-        self.model.train() # Sets the model to training mode.
+        self.model.train()
         
-        total_loss_val, bce_loss_val, contrastive_loss_val = 0, 0, 0
-        correct_preds, total_samples = 0, 0
-        # Wraps train_loader with tqdm for a progress bar.
+        total_loss_val, bce_loss_val, contrastive_loss_val = 0.0, 0.0, 0.0
+        correct_preds, total_samples, valid_batches = 0, 0, 0
+        
         progress_bar = tqdm(train_loader, desc=f"Epoch {self.epoch+1} - Training", leave=False)
 
         for batch_idx, batch in enumerate(progress_bar):
-            optimizer.zero_grad() # Clears old gradients.
-            batch = self._batch_to_device(batch) # Moves batch data to the configured device.
+            optimizer.zero_grad()
+            batch = self._batch_to_device(batch)
             
-            # Prepares arguments for the model's forward pass from the batch data.
             model_call_args = {
                 'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
                 'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                 'numerical_features': batch['numerical_features'],
             }
            
-            # model_call_args['debug_this_batch'] = True # or model_call_args_val
-            
-            # Adds CLIP-specific text inputs if they are present in the batch.
             if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
             if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
 
-            # --- Existing model call logic ---
             vision_features_for_loss = None
             text_features_for_loss = None
-            output_before_squeeze = None # Initialize
 
             if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                 model_call_args['return_embeddings'] = True
@@ -220,11 +207,9 @@ class Trainer:
             else:
                 model_call_args['return_embeddings'] = False
                 output_before_squeeze = self.model(**model_call_args)
-            # --- End of existing model call logic ---           
             
-            output = output_before_squeeze.squeeze() # The squeeze operation           
+            output = output_before_squeeze.squeeze(-1)
             
-            # Calculates loss using the criterion.
             loss_dict = self.criterion(
                 output, batch['label'], 
                 vision_features_for_loss,
@@ -232,42 +217,31 @@ class Trainer:
                 self.model.temperature if hasattr(self.model, 'temperature') else None
             )
             
-            # Backpropagation if total loss is finite, otherwise skip to prevent further errors.
             if torch.isfinite(loss_dict['total']):
                 loss_dict['total'].backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip) # Clips gradients.
-                optimizer.step() # Updates model parameters.
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip)
+                optimizer.step()
+                
+                total_loss_val += loss_dict['total'].item()
+                bce_loss_val += loss_dict['bce'].item()
+                contrastive_loss_val += loss_dict.get('contrastive', torch.tensor(0.0)).item()
+                valid_batches += 1
+
+                if output.size() == batch['label'].size():
+                    predictions = (output > 0.5).float()
+                    correct_preds += (predictions == batch['label']).sum().item()
             else:
                 print(f"WARNING: Skipping backward pass for batch_idx {batch_idx} due to non-finite loss (NaN or Inf).")
 
-
-            # Accumulates loss values (only if finite).
-            if torch.isfinite(loss_dict['total']): total_loss_val += loss_dict['total'].item()
-            if torch.isfinite(loss_dict['bce']): bce_loss_val += loss_dict['bce'].item()
-            # Uses .get() for contrastive loss.
-            if torch.isfinite(loss_dict.get('contrastive', torch.tensor(0.0))):
-                contrastive_loss_val += loss_dict.get('contrastive', torch.tensor(0.0)).item()
-            
-            # Ensures output and label tensors are at least 1D for accuracy calculation.
-            if output.ndim == 0: output = output.unsqueeze(0)
-            if batch['label'].ndim == 0: batch['label'] = batch['label'].unsqueeze(0)
-            
-            # Calculates prediction accuracy for finite outputs.
-            if output.size() == batch['label'].size() and torch.isfinite(output).all():
-                predictions = (output > 0.5).float()
-                correct_preds += (predictions == batch['label']).sum().item()
             total_samples += batch['label'].size(0)
 
-            # Updates the progress bar with current loss and accuracy.
             current_loss_display = loss_dict['total'].item() if torch.isfinite(loss_dict['total']) else float('nan')
-            current_accuracy = correct_preds / total_samples if total_samples > 0 else 0
+            current_accuracy = correct_preds / valid_batches if valid_batches > 0 else 0
             progress_bar.set_postfix({'loss': f"{current_loss_display:.4f}", 'acc': f"{current_accuracy:.4f}"})
-
-        # Calculates average metrics over the training epoch.
-        len_train_loader = len(train_loader) if train_loader else 0
-        avg_total_loss = total_loss_val / len_train_loader if len_train_loader > 0 else float('nan') # Use NaN if no valid batches
-        avg_bce_loss = bce_loss_val / len_train_loader if len_train_loader > 0 else float('nan')
-        avg_contrastive_loss = contrastive_loss_val / len_train_loader if len_train_loader > 0 else float('nan')
+        
+        avg_total_loss = total_loss_val / valid_batches if valid_batches > 0 else float('nan')
+        avg_bce_loss = bce_loss_val / valid_batches if valid_batches > 0 else float('nan')
+        avg_contrastive_loss = contrastive_loss_val / valid_batches if valid_batches > 0 else float('nan')
         avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0.0
         
         return {
@@ -278,35 +252,28 @@ class Trainer:
         }
 
     def _validate_epoch(self, val_loader: DataLoader) -> Dict[str, float]:
-        self.model.eval() # Sets the model to evaluation mode.
-        total_loss_val, bce_loss_val, contrastive_loss_val_val = 0, 0, 0
-        correct_preds, total_samples = 0, 0
+        self.model.eval()
+        
+        total_loss_val, bce_loss_val, contrastive_loss_val_val = 0.0, 0.0, 0.0
+        correct_preds, total_samples, valid_batches = 0, 0, 0
 
-        # Wrap val_loader with tqdm for a progress bar.
         progress_bar_val = tqdm(val_loader, desc=f"Epoch {self.epoch+1} - Validation", leave=False)
 
-        with torch.no_grad(): # Disables gradient calculations during validation.
+        with torch.no_grad():
             for batch_idx, batch in enumerate(progress_bar_val):
-                batch = self._batch_to_device(batch) # Moves batch data to the configured device.
+                batch = self._batch_to_device(batch)
                 
-                # Prepares arguments for the model's forward pass from the batch data.
                 model_call_args_val = {
                     'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
                     'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
                     'numerical_features': batch['numerical_features'],
                 }
-                # When preparing model_call_args_val for validation
-               
-                # model_call_args_val['debug_this_batch'] = True
-
-                # Adds CLIP-specific text inputs if they are present in the batch.
+                
                 if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
                 
-                vision_features_for_loss_val = None
-                text_features_for_loss_val = None
+                vision_features_for_loss_val, text_features_for_loss_val = None, None
 
-                # Calls the model's forward pass.
                 if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
                     model_call_args_val['return_embeddings'] = True
                     output_tuple_val = self.model(**model_call_args_val)
@@ -315,33 +282,8 @@ class Trainer:
                     model_call_args_val['return_embeddings'] = False
                     output_val = self.model(**model_call_args_val)
 
-                output_val = output_val.squeeze() # Removes dimensions of size 1 from the output.
+                output_val = output_val.squeeze(-1)
 
-                # +++ START DIAGNOSTIC BLOCK +++
-                # Checks for NaN or Inf values in the model's output before passing to loss.
-                has_nan = torch.isnan(output_val).any()
-                has_inf = torch.isinf(output_val).any()
-
-                if has_nan or has_inf:
-                    print(f"  Problematic batch (idx {batch_idx}) details:")
-                    if 'user_idx' in batch:
-                        print(f"    User indices (first 5): {batch['user_idx'][:5].tolist()}")
-                    if 'item_idx' in batch:
-                        print(f"    Item indices (first 5): {batch['item_idx'][:5].tolist()}")
-                    print(f"\nWARNING: NaN or Inf detected in VALIDATION output_val at batch_idx {batch_idx}!")
-                    print(f"  output_val contains NaN: {has_nan.item()}")
-                    print(f"  output_val contains Inf: {has_inf.item()}")
-                    # It's helpful to see the range of finite values if some parts are problematic
-                    finite_values = output_val[torch.isfinite(output_val)]
-                    if finite_values.numel() > 0:
-                        print(f"  Finite values in output_val - min: {finite_values.min().item()}, max: {finite_values.max().item()}, mean: {finite_values.mean().item()}")
-                    else:
-                        print("  output_val contains no finite values (all NaN/Inf).")
-                    # Consider printing a few problematic values from output_val if needed for more detail
-                    # For example: print(output_val[torch.isnan(output_val) | torch.isinf(output_val)])
-                # +++ END DIAGNOSTIC BLOCK +++
-
-                # Calculates loss using the criterion (e.g., MultimodalRecommenderLoss).
                 loss_dict_val = self.criterion(
                     output_val, batch['label'], 
                     vision_features_for_loss_val,
@@ -349,28 +291,22 @@ class Trainer:
                     self.model.temperature if hasattr(self.model, 'temperature') else None
                 )
                 
-                # Accumulates loss values.
-                total_loss_val += loss_dict_val['total'].item()
-                bce_loss_val += loss_dict_val['bce'].item()
-                # Uses .get() for contrastive loss as it might be absent if not use_contrastive.
-                contrastive_loss_val_val += loss_dict_val.get('contrastive', torch.tensor(0.0)).item()
+                if torch.isfinite(loss_dict_val['total']):
+                    total_loss_val += loss_dict_val['total'].item()
+                    bce_loss_val += loss_dict_val['bce'].item()
+                    contrastive_loss_val_val += loss_dict_val.get('contrastive', torch.tensor(0.0)).item()
+                    valid_batches += 1
 
-                # Ensures output and label tensors are at least 1D for consistent processing.
-                if output_val.ndim == 0: output_val = output_val.unsqueeze(0)
-                if batch['label'].ndim == 0: batch['label'] = batch['label'].unsqueeze(0)
+                    if output_val.size() == batch['label'].size():
+                        predictions = (output_val > 0.5).float()
+                        correct_preds += (predictions == batch['label']).sum().item()
 
-                # Calculates prediction accuracy.
-                if output_val.size() == batch['label'].size():
-                    predictions = (output_val > 0.5).float() # Converts probabilities to binary predictions.
-                    correct_preds += (predictions == batch['label']).sum().item()
                 total_samples += batch['label'].size(0)
         
-        # Calculates average metrics over the validation epoch.
-        len_val_loader = len(val_loader) if val_loader else 0 # Handles case of empty val_loader.
-        avg_total_loss = total_loss_val / len_val_loader if len_val_loader > 0 else 0
-        avg_bce_loss = bce_loss_val / len_val_loader if len_val_loader > 0 else 0
-        avg_contrastive_loss = contrastive_loss_val_val / len_val_loader if len_val_loader > 0 else 0
-        avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0
+        avg_total_loss = total_loss_val / valid_batches if valid_batches > 0 else float('nan')
+        avg_bce_loss = bce_loss_val / valid_batches if valid_batches > 0 else float('nan')
+        avg_contrastive_loss = contrastive_loss_val_val / valid_batches if valid_batches > 0 else float('nan')
+        avg_accuracy = correct_preds / total_samples if total_samples > 0 else 0.0
         
         return {
             'total_loss': avg_total_loss,
@@ -378,7 +314,6 @@ class Trainer:
             'contrastive_loss': avg_contrastive_loss,
             'accuracy': avg_accuracy
         }
-
 
     def _batch_to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
@@ -417,7 +352,7 @@ class Trainer:
         print(f"Train Acc: {train_metrics['accuracy']:.4f}")
         
         val_loss_str = f"{val_metrics['total_loss']:.4f}" if not np.isnan(val_metrics['total_loss']) else "N/A"
-        val_bce_str = f"{val_metrics.get('bce_loss', np.nan):.4f}" if not np.isnan(val_metrics.get('bce_loss', np.nan)) else "N/A" # Added .get for safety
+        val_bce_str = f"{val_metrics.get('bce_loss', np.nan):.4f}" if not np.isnan(val_metrics.get('bce_loss', np.nan)) else "N/A"
         val_contrastive_str = f"{val_contrastive_loss:.4f}" if not np.isnan(val_contrastive_loss) else "N/A"
         val_acc_str = f"{val_metrics['accuracy']:.4f}" if not np.isnan(val_metrics['accuracy']) else "N/A"
 
@@ -432,27 +367,24 @@ class Trainer:
         checkpoint = {'epoch': self.epoch, 'model_state_dict': self.model.state_dict(), 'best_val_loss': self.best_val_loss}
         if self.optimizer: checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
         if self.scheduler: checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
-        # BUG FIX: Use the correct model-specific checkpoint directory
         path = self.model_checkpoint_dir / filename
         torch.save(checkpoint, path)
         if is_best:
             print(f"Saved best model checkpoint to {path}")
             try:
-                # We only save the 'best_model.pth' as a special artifact to W&B to avoid clutter
                 if wandb.run is not None: wandb.save(str(path))
             except Exception as e: print(f"Warning: Failed to save checkpoint to wandb: {e}")
 
     def load_checkpoint(self, filename: str):
-        # Correctly load from the model-specific directory
         path = self.model_checkpoint_dir / filename
         if not path.exists(): 
             print(f"Warning: Checkpoint file not found at {path}"); return
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.epoch = checkpoint.get('epoch', 0) # Get epoch for resuming
+        self.epoch = checkpoint.get('epoch', 0)
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         if self.optimizer and 'optimizer_state_dict' in checkpoint:
-            try: # Add try-except for optimizer loading
+            try:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 print(f"Loaded optimizer state from checkpoint.")
             except Exception as e:
@@ -461,12 +393,12 @@ class Trainer:
             print(f"Warning: Optimizer state found in checkpoint, but trainer's optimizer is not initialized.")
         
         if self.scheduler and 'scheduler_state_dict' in checkpoint:
-            try: # Add try-except for scheduler loading
+            try:
                 self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
                 print(f"Loaded scheduler state from checkpoint.")
             except Exception as e:
                 print(f"Warning: Could not load scheduler state: {e}. Scheduler may not resume correctly.")
-        print(f"Loaded checkpoint from {path} (epoch {self.epoch})") # Resuming from self.epoch, so next epoch will be self.epoch + 1
+        print(f"Loaded checkpoint from {path} (epoch {self.epoch})")
 
     def get_learning_rate(self) -> float:
         if self.optimizer is None: return 0.0
@@ -474,9 +406,7 @@ class Trainer:
         return 0.0
 
     def get_model_checkpoint_dir(self) -> Path:
-        """Get the model-specific checkpoint directory"""
         return self.model_checkpoint_dir
 
     def get_encoders_dir(self) -> Path:
-        """Get the shared encoders directory"""
         return self.encoders_dir

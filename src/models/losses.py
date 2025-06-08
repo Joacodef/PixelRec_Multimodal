@@ -114,18 +114,20 @@ class MultimodalRecommenderLoss(nn.Module):
         Returns:
             Dictionary with total loss and individual components.
         """
-        # Define a small epsilon for numerical stability with BCELoss.
+        # --- FIX: Check for non-finite predictions before passing to loss ---
+        if not torch.isfinite(predictions).all():
+            nan_loss = torch.tensor(float('nan'), device=predictions.device)
+            return {
+                'total': nan_loss,
+                'bce': nan_loss,
+                'contrastive': torch.tensor(0.0, device=predictions.device)
+            }
+
         epsilon = 1e-7
-        # Clamp predictions to the range [epsilon, 1.0 - epsilon]
-        # to prevent values slightly outside [0,1] due to floating point issues.
         clamped_predictions = torch.clamp(predictions, min=epsilon, max=1.0 - epsilon)
         
-        # Binary cross entropy loss using the clamped predictions.
         bce_loss = self.bce_loss(clamped_predictions, labels)
         
-        # Contrastive loss (if applicable).
-        # The CUDA error was likely triggered by BCELoss, but reported here due to async execution.
-        # This line itself is unlikely the source of the 'input_val' assert.
         contrastive_loss_value = torch.tensor(0.0, device=predictions.device)
         if self.use_contrastive and vision_features is not None and text_features is not None:
             contrastive_loss_value = self.contrastive_loss(
@@ -134,7 +136,6 @@ class MultimodalRecommenderLoss(nn.Module):
                 temperature
             )
         
-        # Total loss calculation.
         total_loss = (
             self.bce_weight * bce_loss + 
             self.contrastive_weight * contrastive_loss_value
@@ -143,5 +144,5 @@ class MultimodalRecommenderLoss(nn.Module):
         return {
             'total': total_loss,
             'bce': bce_loss,
-            'contrastive': contrastive_loss_value # Ensure this key matches what trainer expects
+            'contrastive': contrastive_loss_value
         }
