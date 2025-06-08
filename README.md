@@ -7,7 +7,7 @@
 <br>
 
 A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
-
+This repo is specially made to work with the [PixelRec dataset](https://github.com/westlake-repl/PixelRec). 
 
 
 ---
@@ -67,18 +67,25 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. Preprocess the sample data
+# 3. Download PixelRec data
+Choose a sample of your preference at [PixelRec](https://github.com/westlake-repl/PixelRec).
+It is recommended to save the images with the following structure inside data/raw:
+-images/  (all images in their original format)
+-interactions/interactions_sample.csv  (the csv with columns item_id,user_id,timestamp)
+-item_info/item_info_sample.csv (the csv with metadata of the images)
+
+# 4. Preprocess the sample data
 # (This will clean, validate, and prepare the data in data/raw/)
 python scripts/preprocess_data.py --config configs/simple_config.yaml
 
-# 4. Create the train/validation/test splits
+# 5. Create the train/validation/test splits
 python scripts/create_splits.py --config configs/simple_config.yaml
 
-# 5. Train the model
+# 6. Train the model
 # (Use --device cpu if you don't have a CUDA-compatible GPU)
 python scripts/train.py --config configs/simple_config.yaml --device cuda
 
-# 6. Evaluate the trained model
+# 7. Evaluate the trained model
 python scripts/evaluate.py --config configs/simple_config.yaml --device cuda
 ````
 
