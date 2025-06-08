@@ -1,7 +1,16 @@
-# scripts/train.py - Final corrected version
 #!/usr/bin/env python
 """
-Training script for the simplified multimodal recommender system with dynamic numerical features
+Main training script for the multimodal recommender system.
+
+This script orchestrates the entire model training process, including:
+- Loading and validating configurations.
+- Initializing logging with Weights & Biases.
+- Setting up the computation device (CPU or GPU).
+- Loading datasets and performing data integrity checks.
+- Handling numerical feature scaling.
+- Initializing the model, optimizer, and learning rate scheduler.
+- Running the training and validation loops.
+- Saving model checkpoints and training metadata.
 """
 import argparse
 import sys
@@ -18,7 +27,7 @@ import time
 from datetime import datetime
 from typing import List, Optional
 
-# Add parent directory to path
+# Add the project's root directory to the Python path to enable imports from the 'src' folder.
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config, TextAugmentationConfig
@@ -27,11 +36,12 @@ from src.models.multimodal import MultimodalRecommender
 from src.training.trainer import Trainer
 from src.data.processors import NumericalProcessor
 
-# Use simplified cache instead of old cache system
+# Use the feature cache system.
 try:
     from src.data.simple_cache import SimpleFeatureCache
 except ImportError:
-    # Create a minimal fallback cache if the file doesn't exist
+    # If the main cache class cannot be imported, create a minimal fallback class.
+    # This ensures the script can run with a basic in-memory cache if the primary implementation is unavailable.
     class SimpleFeatureCache:
         def __init__(self, *args, **kwargs):
             self.cache = {}
@@ -48,7 +58,14 @@ except ImportError:
 
 
 def print_progress_header(step_num: int, title: str, total_steps: int = 13):
-    """Print a standardized progress header"""
+    """
+    Prints a standardized header for a step in the training process.
+
+    Args:
+        step_num (int): The current step number.
+        title (str): The title of the current step.
+        total_steps (int): The total number of steps in the process.
+    """
     print(f"\n{'='*60}")
     print(f"STEP {step_num}/{total_steps}: {title.upper()}")
     print(f"{'='*60}")
@@ -56,7 +73,13 @@ def print_progress_header(step_num: int, title: str, total_steps: int = 13):
 
 
 def print_progress_footer(start_time: float, additional_info: str = ""):
-    """Print a standardized progress footer with timing"""
+    """
+    Prints a standardized footer for a completed step, including its duration.
+
+    Args:
+        start_time (float): The timestamp (from time.time()) when the step began.
+        additional_info (str, optional): Extra information to display. Defaults to "".
+    """
     elapsed = time.time() - start_time
     print(f"✓ Completed in {elapsed:.2f}s")
     if additional_info:
@@ -65,7 +88,7 @@ def print_progress_footer(start_time: float, additional_info: str = ""):
 
 
 def print_system_info():
-    """Print system information"""
+    """Prints key information about the system and libraries being used."""
     print("SYSTEM INFORMATION")
     print("-" * 30)
     print(f"PyTorch version: {torch.__version__}")
@@ -79,14 +102,14 @@ def print_system_info():
 
 def validate_numerical_features(item_info_df: pd.DataFrame, config_numerical_cols: List[str]) -> List[str]:
     """
-    Validate and filter numerical feature columns to ensure they exist in the data
-    
+    Validate and filter numerical feature columns to ensure they exist in the data.
+
     Args:
-        item_info_df: DataFrame containing item information
-        config_numerical_cols: List of numerical columns from config
-        
+        item_info_df (pd.DataFrame): DataFrame containing item information.
+        config_numerical_cols (List[str]): List of numerical columns from config.
+
     Returns:
-        List of valid numerical columns that exist in the DataFrame
+        List[str]: A list of valid numerical columns that exist in the DataFrame.
     """
     available_cols = list(item_info_df.columns)
     valid_cols = []
@@ -115,7 +138,18 @@ def validate_numerical_features(item_info_df: pd.DataFrame, config_numerical_col
 
 
 def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
-    """Fit numerical scaler with progress"""
+    """
+    Fits a numerical scaler to the provided data and saves it to a file.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the numerical data.
+        numerical_cols (List[str]): A list of column names to use for fitting the scaler.
+        method (str): The scaling method to use (e.g., 'standardization').
+        scaler_path (Path): The file path where the fitted scaler will be saved.
+
+    Returns:
+        A fitted scaler object from scikit-learn.
+    """
     print(f"  → Fitting {method} scaler on {len(df)} samples...")
     processor = NumericalProcessor()
     processor.fit_scaler(df, numerical_cols, method)
@@ -125,7 +159,15 @@ def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
 
 
 def load_numerical_scaler(scaler_path):
-    """Load numerical scaler with progress"""
+    """
+    Loads a pre-fitted numerical scaler from a file.
+
+    Args:
+        scaler_path (Path): The file path of the saved scaler.
+
+    Returns:
+        The loaded scikit-learn scaler object.
+    """
     print(f"  → Loading scaler from {scaler_path}")
     processor = NumericalProcessor()
     processor.load_scaler(scaler_path)
@@ -133,15 +175,26 @@ def load_numerical_scaler(scaler_path):
 
 
 def validate_data_integrity(interactions_df, item_info_df):
-    """Validate data integrity and print statistics"""
+    """
+    Performs integrity checks on the interaction and item dataframes and prints a summary.
+
+    Checks for shape, unique counts, and the overlap of items between the two dataframes.
+
+    Args:
+        interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
+        item_info_df (pd.DataFrame): The DataFrame of item metadata.
+
+    Returns:
+        dict: A dictionary containing key statistics about the data.
+    """
     print("DATA INTEGRITY CHECK")
     print("-" * 30)
     
-    # Check for missing values
+    # Check for missing values and dataframe shapes.
     print(f"Interactions shape: {interactions_df.shape}")
     print(f"Item info shape: {item_info_df.shape}")
     
-    # Check unique counts
+    # Check unique counts of users and items.
     n_unique_users = interactions_df['user_id'].nunique()
     n_unique_items_interactions = interactions_df['item_id'].nunique()
     n_unique_items_info = item_info_df['item_id'].nunique()
@@ -150,7 +203,7 @@ def validate_data_integrity(interactions_df, item_info_df):
     print(f"Unique items in interactions: {n_unique_items_interactions:,}")
     print(f"Unique items in item_info: {n_unique_items_info:,}")
     
-    # Check overlap
+    # Check for overlap between items in metadata and items in interaction data.
     items_with_info = set(item_info_df['item_id'].astype(str))
     items_in_interactions = set(interactions_df['item_id'].astype(str))
     overlap = len(items_with_info & items_in_interactions)
@@ -169,11 +222,24 @@ def validate_data_integrity(interactions_df, item_info_df):
 
 
 def create_data_loaders_with_progress(train_dataset, val_dataset, training_config):
-    """Create data loaders with progress monitoring"""
+    """
+    Creates and configures DataLoader instances for training and validation.
+
+    Optimizes the number of workers and sets other performance-related parameters.
+
+    Args:
+        train_dataset (Dataset): The training dataset.
+        val_dataset (Dataset): The validation dataset.
+        training_config (TrainingConfig): The configuration object for training parameters.
+
+    Returns:
+        Tuple[DataLoader, Optional[DataLoader]]: A tuple containing the training
+        DataLoader and the validation DataLoader (or None if no validation data).
+    """
     print("DATALOADER CONFIGURATION")
     print("-" * 30)
     
-    # Optimize num_workers based on system
+    # Determine the optimal number of workers based on system capabilities.
     optimal_workers = min(training_config.num_workers, os.cpu_count(), 8)
     if optimal_workers != training_config.num_workers:
         print(f"  → Adjusting workers from {training_config.num_workers} to {optimal_workers} (system optimal)")
@@ -221,9 +287,26 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
 
 
 def main():
-    """Main function for training the multimodal recommender system with dynamic numerical features."""
+    """
+    Main function to execute the full training pipeline for the multimodal recommender.
+
+    The pipeline consists of the following steps:
+    1.  Parse command-line arguments.
+    2.  Load model, data, and training configurations from a YAML file.
+    3.  Initialize Weights & Biases for experiment tracking (optional).
+    4.  Set up the computation device (CPU or GPU).
+    5.  Load the processed item and interaction data.
+    6.  Validate that the numerical features specified in the config exist in the data.
+    7.  Initialize the feature cache system for faster data loading.
+    8.  Fit or load the numerical feature scaler.
+    9.  Create dataset instances for fitting encoders and for training/validation splits.
+    10. Instantiate the multimodal recommender model.
+    11. Initialize the Trainer, which manages the training loop, optimization, and checkpointing.
+    12. Run the training process.
+    13. Save final model, metadata, and configuration files.
+    """
     
-    # Parse arguments
+    # Parse command-line arguments.
     parser = argparse.ArgumentParser(description='Train multimodal recommender with dynamic numerical features')
     parser.add_argument('--config', type=str, default='configs/simple_config.yaml', help='Path to configuration file')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
@@ -235,7 +318,7 @@ def main():
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
 
-    # Print header
+    # Print a header for the training run.
     print("🚀 MULTIMODAL RECOMMENDER TRAINING (DYNAMIC NUMERICAL FEATURES)")
     print("=" * 80)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -243,11 +326,11 @@ def main():
     print(f"Device: {args.device}")
     print("=" * 80)
     
-    # Print system info
+    # Display system information.
     print_system_info()
 
     try:
-        # STEP 1: Load configuration
+        # STEP 1: Load configuration from the specified YAML file.
         print_progress_header(1, "Loading Configuration")
         step_start = time.time()
         
@@ -256,7 +339,7 @@ def main():
         model_config = config.model
         training_config = config.training
 
-        # Store the original list of numerical features before validation
+        # Store the original list of numerical features before validation to keep a record.
         original_numerical_features_from_config = data_config.numerical_features_cols.copy()
         
         print(f"Configuration loaded successfully:")
@@ -270,7 +353,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 2: Initialize Weights & Biases
+        # STEP 2: Initialize Weights & Biases for experiment tracking if enabled.
         print_progress_header(2, "Initializing Weights & Biases")
         step_start = time.time()
         
@@ -298,7 +381,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 3: Setup device
+        # STEP 3: Set up the computation device (CPU or GPU).
         print_progress_header(3, "Setting Up Device")
         step_start = time.time()
         
@@ -308,13 +391,13 @@ def main():
         if device.type == 'cuda':
             print(f"  → GPU: {torch.cuda.get_device_name(0)}")
             print(f"  → Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-            # Clear cache
+            # Clear any residual memory in the GPU cache.
             torch.cuda.empty_cache()
             print("  → GPU cache cleared")
         
         print_progress_footer(step_start)
 
-        # STEP 4: Load processed data and validate numerical features
+        # STEP 4: Load processed data and validate numerical features against the data.
         print_progress_header(4, "Loading and Validating Data")
         step_start = time.time()
         
@@ -328,13 +411,13 @@ def main():
         print(f"\n📊 VALIDATING NUMERICAL FEATURES:")
         print(f"   Original config numerical features: {data_config.numerical_features_cols}")
         
-        # Validate numerical features against actual data columns
+        # Ensure that the numerical columns specified in the config exist in the loaded data.
         valid_numerical_features = validate_numerical_features(
             item_info_df_full, 
             data_config.numerical_features_cols
         )
         
-        # Update the config with valid numerical features
+        # Update the configuration object to use only the validated columns.
         data_config.numerical_features_cols = valid_numerical_features
         print(f"   ✅ Final numerical features to use: {valid_numerical_features}")
         print(f"   📏 Number of numerical features: {len(valid_numerical_features)}")
@@ -343,7 +426,7 @@ def main():
         
         print_progress_footer(step_start, f"Loaded {len(item_info_df_full):,} items, {len(interactions_df_full):,} interactions")
 
-        # STEP 5: Initialize feature cache
+        # STEP 5: Initialize the feature caching system.
         print_progress_header(5, "Initializing Feature Cache")
         step_start = time.time()
         
@@ -352,14 +435,13 @@ def main():
         effective_cache_dir = None
         
         if cache_config.enabled:
-            # Auto-generate model-specific cache directory
+            # Automatically generate a model-specific subdirectory for the cache to avoid conflicts.
             cache_name = f"{model_config.vision_model}_{model_config.language_model}"
             auto_cache_dir = f"cache/{cache_name}"
             
-            # Use config cache_directory or auto-generated one
+            # Use the directory from the config file, or the auto-generated one if the config uses the default 'cache'.
             effective_cache_dir = cache_config.cache_directory
             if cache_config.cache_directory == 'cache':
-                # Default config path, use model-specific instead
                 effective_cache_dir = auto_cache_dir
             
             print("Cache configuration:")
@@ -369,11 +451,11 @@ def main():
             print(f"  → Use disk: {cache_config.use_disk}")
             print(f"  → Model combination: {model_config.vision_model} + {model_config.language_model}")
             
-            # Create cache directory
+            # Create the cache directory on disk if it doesn't exist.
             cache_dir = Path(effective_cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Check if cache exists and show stats
+            # Check for existing cache files and report statistics.
             existing_files = list(cache_dir.glob("*.pt"))
             if existing_files:
                 total_size = sum(f.stat().st_size for f in existing_files) / (1024*1024)
@@ -397,7 +479,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 6: Handle numerical scaler with dynamic features
+        # STEP 6: Handle numerical feature scaling based on the configuration.
         print_progress_header(6, "Processing Numerical Scaler")
         step_start = time.time()
         
@@ -420,7 +502,7 @@ def main():
                     scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
                     numerical_scaler = fit_numerical_scaler(
                         item_info_df_full, 
-                        valid_numerical_features,  # Use validated features
+                        valid_numerical_features,
                         data_config.numerical_normalization_method, 
                         scaler_path_obj
                     )
@@ -429,7 +511,7 @@ def main():
                 scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
                 numerical_scaler = fit_numerical_scaler(
                     item_info_df_full, 
-                    valid_numerical_features,  # Use validated features
+                    valid_numerical_features,
                     data_config.numerical_normalization_method, 
                     scaler_path_obj
                 )
@@ -438,7 +520,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 7: Determine image folder
+        # STEP 7: Determine which image folder to use (raw or processed).
         print_progress_header(7, "Configuring Image Processing")
         step_start = time.time()
         
@@ -452,7 +534,7 @@ def main():
         else:
             print(f"Using original images: {effective_image_folder}")
         
-        # Check if image folder exists
+        # Verify that the selected image folder exists.
         if os.path.exists(effective_image_folder):
             image_count = len([f for f in os.listdir(effective_image_folder) 
                              if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
@@ -462,7 +544,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 8: Create dataset for encoder fitting with validated numerical features
+        # STEP 8: Create a dataset instance from the full data to fit user/item encoders globally.
         print_progress_header(8, "Creating Dataset for Encoder Fitting")
         step_start = time.time()
         
@@ -478,13 +560,11 @@ def main():
             language_model_name=model_config.language_model,
             create_negative_samples=False,
             negative_sampling_ratio=0,
-            # Use validated numerical features
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,  # Use the effective cache directory
+            cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk,
-            # Other parameters with validated numerical features
-            numerical_feat_cols=valid_numerical_features,  # Use validated features
+            numerical_feat_cols=valid_numerical_features,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False
@@ -497,7 +577,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 9: Load pre-split data
+        # STEP 9: Load pre-generated training and validation data splits.
         print_progress_header(9, "Loading Pre-Split Training Data")
         step_start = time.time()
         
@@ -508,7 +588,7 @@ def main():
         train_interactions_df = pd.read_csv(data_config.train_data_path)
         val_interactions_df = pd.read_csv(data_config.val_data_path)
 
-        # Filter item_info_df_full to only include items present in the loaded interactions
+        # Filter the main item metadata to only include items that are in the train/val splits.
         all_item_ids_in_splits = pd.concat([
             train_interactions_df['item_id'], 
             val_interactions_df['item_id']
@@ -526,7 +606,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 10: Create training datasets with validated numerical features
+        # STEP 10: Create the final Dataset objects for training and validation.
         print_progress_header(10, "Creating Training Datasets")
         step_start = time.time()
         
@@ -542,18 +622,17 @@ def main():
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
             text_augmentation_config=data_config.text_augmentation,
-            numerical_feat_cols=valid_numerical_features,  # Use validated features
+            numerical_feat_cols=valid_numerical_features,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=True,
-            # Simplified cache parameters with model-specific directory
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
             cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk
         )
         
-        # Assign globally fitted encoders
+        # Assign the globally fitted encoders to the training dataset.
         train_dataset.user_encoder = full_dataset_for_encoders.user_encoder
         train_dataset.item_encoder = full_dataset_for_encoders.item_encoder
         train_dataset.n_users = full_dataset_for_encoders.n_users
@@ -568,19 +647,18 @@ def main():
             language_model_name=model_config.language_model,
             create_negative_samples=True,
             negative_sampling_ratio=data_config.negative_sampling_ratio,
-            text_augmentation_config=TextAugmentationConfig(enabled=False),  # No augmentation for validation
-            numerical_feat_cols=valid_numerical_features,  # Use validated features
+            text_augmentation_config=TextAugmentationConfig(enabled=False),
+            numerical_feat_cols=valid_numerical_features,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False,
-            # Simplified cache parameters with model-specific directory
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
             cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk
         )
         
-        # Assign globally fitted encoders
+        # Assign the globally fitted encoders to the validation dataset.
         val_dataset.user_encoder = full_dataset_for_encoders.user_encoder
         val_dataset.item_encoder = full_dataset_for_encoders.item_encoder
         val_dataset.n_users = full_dataset_for_encoders.n_users
@@ -594,7 +672,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # STEP 11: Create data loaders
+        # STEP 11: Create DataLoaders for batching.
         print_progress_header(11, "Creating Data Loaders")
         step_start = time.time()
         
@@ -604,7 +682,7 @@ def main():
         
         print_progress_footer(step_start)
 
-        # Save encoders before training
+        # Save the fitted encoders to disk for later use in inference or evaluation.
         print("Saving encoders...")
         encoders_dir = Path(config.checkpoint_dir) / 'encoders'
         encoders_dir.mkdir(parents=True, exist_ok=True)
@@ -615,7 +693,7 @@ def main():
             pickle.dump(full_dataset_for_encoders.item_encoder, f)
         print(f"  → Encoders saved to {encoders_dir}")
 
-        # STEP 12: Initialize model with correct number of numerical features
+        # STEP 12: Initialize the model with the correct number of features.
         print_progress_header(12, "Initializing Model", total_steps=13)
         step_start = time.time()
         
@@ -632,7 +710,7 @@ def main():
         print(f"  → Language model: {model_config.language_model}")
         print(f"  → Use contrastive: {model_config.use_contrastive}")
         
-        # Display checkpoint organization
+        # Define and display the directory structure for saving checkpoints.
         model_combo = f"{model_config.vision_model}_{model_config.language_model}"
         model_checkpoint_dir = Path(config.checkpoint_dir) / model_combo
         shared_encoders_dir = Path(config.checkpoint_dir) / 'encoders'
@@ -646,7 +724,7 @@ def main():
         model_params = {
             'n_users': full_dataset_for_encoders.n_users,
             'n_items': full_dataset_for_encoders.n_items,
-            'num_numerical_features': num_numerical_features,  # Use validated count
+            'num_numerical_features': num_numerical_features,
             'embedding_dim': model_config.embedding_dim,
             'vision_model_name': model_config.vision_model,
             'language_model_name': model_config.language_model,
@@ -667,7 +745,7 @@ def main():
         
         model = MultimodalRecommender(**model_params).to(device)
 
-        # Print model statistics
+        # Print statistics about the instantiated model.
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
@@ -679,17 +757,17 @@ def main():
         
         print_progress_footer(step_start, f"Model ready with {trainable_params:,} trainable parameters")
 
-        # STEP 13: Initialize trainer and start training
+        # STEP 13: Initialize the Trainer and start the training process.
         print_progress_header(13, "Starting Training", total_steps=13)
         step_start = time.time()
         
-        # Initialize trainer with model config for checkpoint organization
+        # The Trainer requires the model configuration to correctly manage model-specific checkpoint paths.
         trainer = Trainer(
             model=model, 
             device=device, 
             checkpoint_dir=config.checkpoint_dir, 
             use_contrastive=model_config.use_contrastive,
-            model_config=model_config  # Pass model config for checkpoint paths
+            model_config=model_config
         )
         trainer.criterion.contrastive_weight = training_config.contrastive_weight
         trainer.criterion.bce_weight = training_config.bce_weight
@@ -705,12 +783,12 @@ def main():
         print(f"  → Contrastive weight: {training_config.contrastive_weight}")
         print(f"  → BCE weight: {training_config.bce_weight}")
 
-        # Resume from checkpoint if specified
+        # If a checkpoint path is provided, resume training from that state.
         if args.resume:
             print(f"\nResuming from checkpoint: {args.resume}")
             trainer.load_checkpoint(args.resume)
 
-        # Save encoders before training (in shared directory)
+        # Save encoders to a shared directory before starting the training loop.
         print("Saving encoders to shared directory...")
         encoders_dir = trainer.get_encoders_dir()
         
@@ -723,13 +801,13 @@ def main():
         print(f"\n🚀 Starting training...")
         print("=" * 60)
 
-        # Save updated configuration with validated numerical features
+        # Save the final, validated configuration used for this run.
         print("Saving updated configuration with validated numerical features...")
         updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
         config.to_yaml(str(updated_config_path))
         print(f"✓ Updated configuration saved to {updated_config_path}")
 
-        # Prepare training parameters
+        # Assemble the dictionary of parameters for the training loop.
         training_params = {
             'train_loader': train_loader,
             'val_loader': val_loader,
@@ -749,12 +827,12 @@ def main():
             'lr_scheduler_min_lr': training_config.lr_scheduler_min_lr
         }
         
-        # Start training
+        # Execute the training loop.
         training_start_time = time.time()
         train_losses, val_losses = trainer.train(**training_params)
         training_time = time.time() - training_start_time
 
-        # Save training metadata with validated numerical features
+        # Save a metadata file summarizing the training run.
         training_metadata = {
             'training_completed': True,
             'completion_time': datetime.now().isoformat(),
@@ -793,7 +871,7 @@ def main():
             json.dump(training_metadata, f, indent=2, default=str)
         print(f"✓ Training metadata saved to {metadata_path}")
 
-        # Save the effective configuration with validated numerical features
+        # Save the final configuration file.
         config_save_path = Path(config.results_dir) / 'training_run_config.yaml'
         config.to_yaml(str(config_save_path))
         print(f"✓ Configuration saved to {config_save_path}")
@@ -807,7 +885,7 @@ def main():
             except Exception as e:
                 print(f"⚠️  Failed to save files to wandb: {e}")
 
-        # Print final summary
+        # Print a final summary of the training run.
         print("\n" + "=" * 80)
         print("🎉 TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 80)
@@ -824,7 +902,7 @@ def main():
         print(f"🤖 Model checkpoint: {model_checkpoint_dir}/best_model.pth")
         print(f"🔄 Encoders: {encoders_dir}")
         
-        # Performance recommendations
+        # Provide recommendations based on performance metrics.
         print(f"\n💡 Performance Notes:")
         if training_time > 0:
             samples_per_second = (len(train_dataset) * len(train_losses)) / training_time
@@ -848,7 +926,7 @@ def main():
         print("\n⚠️  Training interrupted by user")
         print("Saving current state...")
         
-        # Save emergency checkpoint if trainer exists
+        # Save an emergency checkpoint if the training is interrupted.
         if 'trainer' in locals():
             try:
                 trainer.save_checkpoint('interrupted_model.pth')
@@ -856,7 +934,7 @@ def main():
             except Exception as e:
                 print(f"❌ Failed to save emergency checkpoint: {e}")
         
-        # Save partial results if available
+        # Save any partial results that were generated before the interruption.
         if 'train_losses' in locals() and train_losses:
             try:
                 partial_results = {
@@ -887,7 +965,7 @@ def main():
         import traceback
         traceback.print_exc()
         
-        # Save error information
+        # Log error information to a file for debugging.
         try:
             error_info = {
                 'error_occurred': True,
@@ -912,7 +990,7 @@ def main():
         raise
         
     finally:
-        # Cleanup and finish wandb
+        # Finalize the Weights & Biases run.
         if args.use_wandb and wandb.run is not None:
             print("Finishing wandb run...")
             try:
@@ -921,7 +999,7 @@ def main():
             except Exception as e:
                 print(f"⚠️  Warning during wandb cleanup: {e}")
         
-        # Clear GPU cache
+        # Clear GPU cache at the end of the script.
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             print("✓ GPU cache cleared")
