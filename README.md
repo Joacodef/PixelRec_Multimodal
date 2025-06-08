@@ -8,6 +8,8 @@
 
 A PyTorch-based framework for building multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations.
 
+Please, check the docs folder if you need more information.
+
 ---
 
 ## Table of Contents
@@ -158,6 +160,12 @@ Train the multimodal recommender.
 
 ```bash
 python scripts/train.py --config configs/simple_config.yaml --device cuda
+```
+
+Or resume training (will automatically search in models/checkpoints/<vision_model>_<text_model>/).
+
+```bash
+python scripts/train.py --config configs/simple_config.yaml --resume last_checkpoint.pth
 ```
 
 You can enable Weights & Biases tracking by adding the `--use_wandb` and `--wandb_project "MyProject"` flags.
