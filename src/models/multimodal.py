@@ -178,21 +178,25 @@ class MultimodalRecommender(nn.Module):
             )
         
         # Numerical projection
-        if self.projection_hidden_dim:
-            self.numerical_projection = nn.Sequential(
-                nn.Linear(self.num_numerical_features, self.projection_hidden_dim), # Use self.num_numerical_features
-                activation,
-                nn.Dropout(self.dropout_rate),
-                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
+        if self.num_numerical_features > 0:
+            # Numerical projection
+            if self.projection_hidden_dim:
+                self.numerical_projection = nn.Sequential(
+                    nn.Linear(self.num_numerical_features, self.projection_hidden_dim), # Use self.num_numerical_features
+                    activation,
+                    nn.Dropout(self.dropout_rate),
+                    nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
+            else:
+                self.numerical_projection = nn.Sequential(
+                    nn.Linear(self.num_numerical_features, self.embedding_dim), # Use self.num_numerical_features
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
         else:
-            self.numerical_projection = nn.Sequential(
-                nn.Linear(self.num_numerical_features, self.embedding_dim), # Use self.num_numerical_features
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
+            self.numerical_projection = None
 
         if self.use_contrastive:
             self.vision_contrastive_projection = nn.Linear(
@@ -417,7 +421,11 @@ class MultimodalRecommender(nn.Module):
         raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
         projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
 
-        projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
+        if self.numerical_projection is not None and self.num_numerical_features > 0:
+            projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
+        else:
+            # Create a zero tensor as a placeholder to maintain consistent dimensions
+            projected_numerical_emb_main_task = torch.zeros(batch_size, self.embedding_dim, device=user_idx.device)
 
         # Features for Contrastive Loss
         vision_features_for_contrastive_loss = None
