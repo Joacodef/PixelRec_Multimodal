@@ -5,7 +5,7 @@ model:
   model_class: pretrained           # Options: 'pretrained' (only option for now)
   vision_model: resnet              # Options: clip, resnet, dino, convnext
   language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
-  embedding_dim: 64
+  embedding_dim: 512
   
   # Pre-trained model freezing
   freeze_vision: true               # Freeze vision model weights
@@ -23,7 +23,7 @@ model:
   attention_dropout: 0.1            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [1024, 512, 256, 128]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
@@ -36,9 +36,9 @@ model:
 
 training:
   # Basic training parameters
-  batch_size: 32
-  epochs: 5
-  learning_rate: 0.001
+  batch_size: 128
+  epochs: 100
+  learning_rate: 0.0001
   weight_decay: 0.01               # L2 regularization
   patience: 10                     # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
@@ -80,21 +80,21 @@ data:
   # Cache configuration
   cache_config:
     enabled: true
-    max_memory_items: 1500
+    max_memory_items: 500
     cache_directory: 'cache'
     use_disk: true
   
   # Data preprocessing (advanced)
   negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
   
-  # Numerical features (advanced) - at least one must be present
+  # Numerical features (advanced)
   numerical_features_cols:
-    #- view_number
-    #- comment_number
+    - view_number
+    - comment_number
     #- thumbup_number
     #- share_number
     #- coin_number
-    - favorite_number
+    #- favorite_number
     #- barrage_number
   numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
   
@@ -108,7 +108,7 @@ data:
   # Offline image compression (advanced)
   offline_image_compression:
     enabled: true
-    compress_if_kb_larger_than: 300
+    compress_if_kb_larger_than: 500
     target_quality: 90
     resize_if_pixels_larger_than: [1024, 1024]
     resize_target_longest_edge: 512
