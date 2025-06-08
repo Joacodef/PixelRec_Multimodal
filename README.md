@@ -3,7 +3,6 @@
 <div align="center">
     <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python Version">
     <img src="https://img.shields.io/badge/PyTorch-2.6+-ee4c2c.svg" alt="PyTorch Version">
-    <img src="WORKFLOW_URL/badge.svg" alt="CI Status">
 </div>
 <br>
 
