@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import (
     AutoModel,
     AutoModelForImageClassification,
@@ -418,11 +419,11 @@ class MultimodalRecommender(nn.Module):
 
         projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
 
-        # Features for Contrastive Loss (only if return_embeddings is True)
+        # Features for Contrastive Loss
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
 
-        if return_embeddings and self.use_contrastive: 
+        if self.use_contrastive: 
             if hasattr(self, 'vision_contrastive_projection'):
                 vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
             
@@ -450,6 +451,12 @@ class MultimodalRecommender(nn.Module):
         
 
         if return_embeddings:
+            # FIX: Normalize the features before returning them for contrastive loss.
+            if vision_features_for_contrastive_loss is not None:
+                vision_features_for_contrastive_loss = F.normalize(vision_features_for_contrastive_loss, p=2, dim=-1)
+            if text_features_for_contrastive_loss is not None:
+                text_features_for_contrastive_loss = F.normalize(text_features_for_contrastive_loss, p=2, dim=-1)
+            
             return output, vision_features_for_contrastive_loss, text_features_for_contrastive_loss, projected_vision_emb_main_task
         
         return output

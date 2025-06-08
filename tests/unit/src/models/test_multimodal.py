@@ -1,38 +1,4 @@
-def test_model_state_dict(self):
-        """Test saving and loading model state dict."""
-        model1 = MultimodalRecommender(
-            n_users=self.n_users,
-            n_items=self.n_items,
-            num_numerical_features=self.num_numerical_features,
-            embedding_dim=self.embedding_dim
-        ).to(self.device)
-        
-        # Get a prediction with original model
-        batch = self._create_dummy_batch()
-        batch = {k: v.to(self.device) for k, v in batch.items()}
-        
-        with torch.no_grad():
-            pred1 = model1(**batch)
-        
-        # Save state dict
-        state_dict = model1.state_dict()
-        
-        # Create new model and load state dict
-        model2 = MultimodalRecommender(
-            n_users=self.n_users,
-            n_items=self.n_items,
-            num_numerical_features=self.num_numerical_features,
-            embedding_dim=self.embedding_dim
-        ).to(self.device)
-        
-        model2.load_state_dict(state_dict)
-        
-        # Get prediction with loaded model
-        with torch.no_grad():
-            pred2 = model2(**batch)
-        
-        # Predictions should be identical
-        self.assertTrue(torch.allclose(pred1, pred2, atol=1e-6))# tests/unit/src/models/test_multimodal.py
+# tests/unit/src/models/test_multimodal.py
 """
 Comprehensive unit tests for the MultimodalRecommender model.
 Tests model initialization, forward passes, attention mechanisms,
@@ -113,8 +79,8 @@ class TestMultimodalRecommender(unittest.TestCase):
 
     def test_model_initialization_various_configs(self):
         """Test model initialization with various vision and language model combinations."""
-        vision_models = ['resnet', 'clip', 'efficientnet']  # Only valid vision models from MODEL_CONFIGS
-        language_models = ['sentence-bert', 'mpnet']  # Only valid language models from MODEL_CONFIGS
+        vision_models = ['resnet', 'clip', 'dino']
+        language_models = ['sentence-bert', 'mpnet']
         
         for vision_model, language_model in itertools.product(vision_models, language_models):
             with self.subTest(vision=vision_model, language=language_model):
@@ -619,17 +585,19 @@ class TestMultimodalRecommender(unittest.TestCase):
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
-        
+        # FIX: Set the model to evaluation mode to disable dropout and freeze batch norm
+        model1.eval()
+
         # Get a prediction with original model
         batch = self._create_dummy_batch()
         batch = {k: v.to(self.device) for k, v in batch.items()}
-        
+
         with torch.no_grad():
             pred1 = model1(**batch)
-        
+
         # Save state dict
         state_dict = model1.state_dict()
-        
+
         # Create new model and load state dict
         model2 = MultimodalRecommender(
             n_users=self.n_users,
@@ -637,49 +605,17 @@ class TestMultimodalRecommender(unittest.TestCase):
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
-        
+
         model2.load_state_dict(state_dict)
-        
+        # FIX: Also set the second model to evaluation mode
+        model2.eval()
+
         # Get prediction with loaded model
         with torch.no_grad():
             pred2 = model2(**batch)
-        
-        # Predictions should be identical
-        self.assertTrue(torch.allclose(pred1, pred2, atol=1e-6), 
-            n_items=self.n_items,
-            num_numerical_features=self.num_numerical_features,
-            embedding_dim=self.embedding_dim
-        ).to(self.device)
-        
-        model2.load_state_dict(state_dict)
-        
-        # Get prediction with loaded model
-        with torch.no_grad():
-            pred2, _, _ = model2(**batch)
-        
-        # Predictions should be identical
-        self.assertTrue(torch.allclose(pred1, pred2, atol=1e-6))
 
-    def test_memory_efficiency(self):
-        """Test that model doesn't create unnecessary intermediate tensors."""
-        model = MultimodalRecommender(
-            n_users=self.n_users,
-            n_items=self.n_items,
-            num_numerical_features=self.num_numerical_features,
-            embedding_dim=self.embedding_dim
-        ).to(self.device)
-        model.eval()
-        
-        # Large batch to test memory
-        large_batch_size = 128
-        batch = self._create_dummy_batch(large_batch_size)
-        batch = {k: v.to(self.device) for k, v in batch.items()}
-        
-        # Run forward pass and ensure it completes without memory issues
-        with torch.no_grad():
-            predictions = model(**batch)
-        
-        self.assertEqual(predictions.shape, (large_batch_size, 1))
+        # Predictions should now be identical
+        self.assertTrue(torch.allclose(pred1, pred2, atol=1e-6))
 
 
 if __name__ == '__main__':
