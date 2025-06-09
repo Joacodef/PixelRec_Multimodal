@@ -2,11 +2,10 @@
 """Model architectures and components"""
 
 from .multimodal import MultimodalRecommender, PretrainedMultimodalRecommender
-from .losses import ContrastiveLoss, BPRLoss, MultimodalRecommenderLoss
+from .losses import ContrastiveLoss, MultimodalRecommenderLoss
 
 __all__ = [
     'MultimodalRecommender',
     'ContrastiveLoss',
-    'BPRLoss',
     'MultimodalRecommenderLoss'
 ]

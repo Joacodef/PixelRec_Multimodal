@@ -2,8 +2,7 @@
 
 model:
   # Basic model selection
-  model_class: pretrained           # Options: 'pretrained' (only option for now)
-  vision_model: resnet              # Options: clip, resnet, dino, convnext
+  vision_model: clip                # Options: clip, resnet, dino, convnext
   language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
   embedding_dim: 512
   
@@ -12,7 +11,7 @@ model:
   freeze_language: true              # Freeze language model weights
   
   # Contrastive learning (advanced)
-  use_contrastive: false
+  use_contrastive: true
   contrastive_temperature: 0.07     # Temperature for contrastive loss
   
   # Regularization
@@ -63,8 +62,8 @@ training:
 
 data:
   # Data paths
-  item_info_path: data/raw/item_info/item_info_sample.csv
-  interactions_path: data/raw/interactions/interactions_sample.csv
+  item_info_path: data/raw/item_info/Pixel200K.csv
+  interactions_path: data/raw/interactions/Pixel200K.csv
   image_folder: data/raw/images
   processed_item_info_path: data/processed/item_info.csv
   processed_interactions_path: data/processed/interactions.csv
@@ -91,11 +90,11 @@ data:
   numerical_features_cols:
     - view_number
     - comment_number
-    #- thumbup_number
-    #- share_number
-    #- coin_number
-    #- favorite_number
-    #- barrage_number
+    - thumbup_number
+    - share_number
+    - coin_number
+    - favorite_number
+    - barrage_number
   numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
 
   categorical_features_cols: ['tag']

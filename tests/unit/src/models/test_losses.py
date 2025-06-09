@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from src.models.losses import (
     ContrastiveLoss,
-    BPRLoss,
     MultimodalRecommenderLoss
 )
 
@@ -63,44 +62,6 @@ class TestContrastiveLoss(unittest.TestCase):
         # Since this happens in both i2t and t2i directions, the final loss is ~1/temperature.
         expected_loss = 1 / self.loss_fn.temperature
         self.assertAlmostEqual(loss.item(), expected_loss, places=1)
-
-
-class TestBPRLoss(unittest.TestCase):
-    """Test cases for the BPRLoss class."""
-
-    def setUp(self):
-        """Set up the loss function."""
-        self.loss_fn = BPRLoss()
-
-    def test_well_ranked_pair(self):
-        """
-        Tests the loss when positive scores are much higher than negative scores.
-        The loss should be close to zero.
-        """
-        positive_scores = torch.tensor([10.0, 9.0])
-        negative_scores = torch.tensor([-10.0, -9.0])
-        loss = self.loss_fn(positive_scores, negative_scores)
-        self.assertAlmostEqual(loss.item(), 0.0, places=4)
-
-    def test_poorly_ranked_pair(self):
-        """
-        Tests the loss when negative scores are much higher than positive scores.
-        The loss should be a large positive value.
-        """
-        positive_scores = torch.tensor([-10.0, -9.0])
-        negative_scores = torch.tensor([10.0, 9.0])
-        loss = self.loss_fn(positive_scores, negative_scores)
-        self.assertGreater(loss.item(), 15.0)
-
-    def test_equally_ranked_pair(self):
-        """
-        Tests the loss when positive and negative scores are equal.
-        The loss should be exactly log(2).
-        """
-        scores = torch.tensor([5.0, 0.0, -5.0])
-        loss = self.loss_fn(scores, scores)
-        expected_loss = np.log(2)
-        self.assertAlmostEqual(loss.item(), expected_loss, places=6)
 
 
 class TestMultimodalRecommenderLoss(unittest.TestCase):

@@ -79,39 +79,6 @@ class ContrastiveLoss(nn.Module):
         return (loss_i2t + loss_t2i) / 2
 
 
-class BPRLoss(nn.Module):
-    """
-    Implements the Bayesian Personalized Ranking (BPR) loss function.
-
-    BPR loss is a pairwise ranking loss that encourages the model to score a
-    positive (interacted-with) item higher than a randomly sampled negative
-    (not interacted-with) item for a given user.
-    """
-
-    def __init__(self):
-        """Initializes the BPRLoss module."""
-        super(BPRLoss, self).__init__()
-
-    def forward(
-        self,
-        positive_scores: torch.Tensor,
-        negative_scores: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Computes the BPR loss.
-
-        Args:
-            positive_scores (torch.Tensor): The model's scores for positive items.
-            negative_scores (torch.Tensor): The model's scores for negative items.
-
-        Returns:
-            torch.Tensor: A scalar tensor representing the computed BPR loss.
-        """
-        # The loss is calculated as the negative log-likelihood of the sigmoid
-        # of the difference between positive and negative item scores.
-        return -torch.mean(torch.log(torch.sigmoid(positive_scores - negative_scores)))
-
-
 class MultimodalRecommenderLoss(nn.Module):
     """
     A combined loss function for the multimodal recommender system.
