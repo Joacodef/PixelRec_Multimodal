@@ -36,7 +36,7 @@ model:
 training:
   # Basic training parameters
   batch_size: 128
-  epochs: 100
+  epochs: 200
   learning_rate: 0.00001
   weight_decay: 0.1               # L2 regularization
   patience: 10                     # Early stopping patience
@@ -71,10 +71,10 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_small
-  train_data_path: data/splits/split_small/train.csv
-  val_data_path: data/splits/split_small/val.csv
-  test_data_path: data/splits/split_small/test.csv
+  split_data_path: data/splits/split_200K
+  train_data_path: data/splits/split_200K/train.csv
+  val_data_path: data/splits/split_200K/val.csv
+  test_data_path: data/splits/split_200K/test.csv
   
   # Cache configuration
   cache_config:
