@@ -76,6 +76,7 @@ class TestImageAugmentationTraining(unittest.TestCase):
             'item_id': item_ids,
             'title': [f'Title {i}' for i in range(num_items)],
             'description': [f'Desc {i}' for i in range(num_items)],
+            'tag': [f'tag{i % 4}' for i in range(num_items)],
             'view_number': np.random.randint(100, 1000, num_items),
             'comment_number': np.random.randint(0, 100, num_items),
         }).to_csv(self.raw_dir / "item_info" / "item_info_sample.csv", index=False)
@@ -113,6 +114,7 @@ class TestImageAugmentationTraining(unittest.TestCase):
                 'val_data_path': str(self.splits_dir / "val.csv"),
                 'test_data_path': str(self.splits_dir / "test.csv"),
                 'numerical_features_cols': ['view_number', 'comment_number'],
+                'categorical_features_cols': ['tag'],
                 'splitting': { 'min_interactions_per_user': 1, 'min_interactions_per_item': 1 },
                 'image_augmentation': {'enabled': True, 'brightness': 0.2, 'contrast': 0.2},
                 'cache_config': {'enabled': False},

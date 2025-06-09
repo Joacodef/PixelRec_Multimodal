@@ -28,6 +28,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         # Basic model parameters
         self.n_users = 100
         self.n_items = 50
+        self.n_tags = 20
         self.num_numerical_features = 5
         self.embedding_dim = 128
         self.batch_size = 8
@@ -47,6 +48,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         batch = {
             'user_idx': torch.randint(0, self.n_users, (batch_size,)),
             'item_idx': torch.randint(0, self.n_items, (batch_size,)),
+            'tag_idx': torch.randint(0, self.n_tags, (batch_size,)),
             'image': torch.randn(batch_size, 3, 224, 224),
             'text_input_ids': torch.randint(0, 1000, (batch_size, 128)),
             'text_attention_mask': torch.ones(batch_size, 128),
@@ -65,6 +67,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         )
@@ -74,6 +77,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         self.assertEqual(model.num_numerical_features, self.num_numerical_features)
         self.assertIsInstance(model.user_embedding, nn.Embedding)
         self.assertIsInstance(model.item_embedding, nn.Embedding)
+        self.assertIsInstance(model.tag_embedding, nn.Embedding)
         self.assertIsInstance(model.attention, nn.MultiheadAttention)
         self.assertIsInstance(model.fusion, nn.Sequential)
 
@@ -87,6 +91,7 @@ class TestMultimodalRecommender(unittest.TestCase):
                 model = MultimodalRecommender(
                     n_users=self.n_users,
                     n_items=self.n_items,
+                    n_tags=self.n_tags,
                     num_numerical_features=self.num_numerical_features,
                     embedding_dim=self.embedding_dim,
                     vision_model_name=vision_model,
@@ -129,6 +134,7 @@ class TestMultimodalRecommender(unittest.TestCase):
                 model = MultimodalRecommender(
                     n_users=self.n_users,
                     n_items=self.n_items,
+                    n_tags=self.n_tags,
                     num_numerical_features=self.num_numerical_features,
                     embedding_dim=self.embedding_dim,
                     **config
@@ -148,6 +154,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -190,6 +197,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -212,6 +220,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             vision_model_name='clip',
@@ -246,14 +255,15 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             num_attention_heads=4
         ).to(self.device)
         
         # Create inputs for attention
-        batch_size = 4
-        seq_len = 5  # user, item, vision, language, numerical
+        batch_size = 4        
+        seq_len = 6  # user, item, tag, vision, language, numerical
         
         # Create attention input
         attention_input = torch.randn(seq_len, batch_size, self.embedding_dim).to(self.device)
@@ -281,6 +291,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             fusion_hidden_dims=[256, 128, 64],
@@ -288,9 +299,9 @@ class TestMultimodalRecommender(unittest.TestCase):
             use_batch_norm=True
         ).to(self.device)
         
-        # Create concatenated features (5 * embedding_dim)
+        # Create concatenated features (6 * embedding_dim)
         batch_size = 8
-        concat_features = torch.randn(batch_size, 5 * self.embedding_dim).to(self.device)
+        concat_features = torch.randn(batch_size, 6 * self.embedding_dim).to(self.device)
         
         # Pass through fusion network
         with torch.no_grad():
@@ -305,6 +316,7 @@ class TestMultimodalRecommender(unittest.TestCase):
                 model_act = MultimodalRecommender(
                     n_users=self.n_users,
                     n_items=self.n_items,
+                    n_tags=self.n_tags,
                     num_numerical_features=self.num_numerical_features,
                     embedding_dim=self.embedding_dim,
                     fusion_activation=activation
@@ -319,6 +331,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             freeze_vision=False,
@@ -339,6 +352,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         # Check gradients exist for key components
         self.assertIsNotNone(model.user_embedding.weight.grad)
         self.assertIsNotNone(model.item_embedding.weight.grad)
+        self.assertIsNotNone(model.tag_embedding.weight.grad)
         
         # Check gradients for numerical projection (it's a Sequential module)
         # Get the first linear layer in the sequential module
@@ -359,6 +373,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model_frozen = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             freeze_vision=True,
@@ -375,6 +390,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model_unfrozen = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             freeze_vision=False,
@@ -394,6 +410,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
             vision_model_name='clip',
@@ -434,6 +451,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         )
@@ -477,6 +495,7 @@ class TestMultimodalRecommender(unittest.TestCase):
                 model = MultimodalRecommender(
                     n_users=self.n_users,
                     n_items=self.n_items,
+                    n_tags=self.n_tags,
                     num_numerical_features=self.num_numerical_features,
                     embedding_dim=embed_dim,
                     **{k: v for k, v in config.items() if k != 'embedding_dim'}
@@ -510,6 +529,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model_no_numerical = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=0,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -536,6 +556,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model_many_numerical = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=many_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -552,6 +573,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -582,6 +604,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model1 = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)
@@ -602,6 +625,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         model2 = MultimodalRecommender(
             n_users=self.n_users,
             n_items=self.n_items,
+            n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim
         ).to(self.device)

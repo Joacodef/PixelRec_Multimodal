@@ -51,6 +51,7 @@ class TestTrainer(unittest.TestCase):
                 'text_input_ids': torch.zeros(1, 128, dtype=torch.long),
                 'text_attention_mask': torch.zeros(1, 128, dtype=torch.long),
                 'numerical_features': torch.randn(1, 10),
+                'tag_idx': torch.randint(0, 10, (1,), dtype=torch.long),
                 'clip_text_input_ids': torch.zeros(1, 77, dtype=torch.long),
                 'clip_text_attention_mask': torch.zeros(1, 77, dtype=torch.long),
             }

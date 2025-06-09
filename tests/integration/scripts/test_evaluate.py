@@ -99,6 +99,7 @@ data:
   image_folder: {self.image_dir.as_posix()}
   scaler_path: {self.scaler_path.as_posix()}
   numerical_features_cols: {self.numerical_cols}
+  categorical_features_cols: ['tag']
   cache_config:
     enabled: false
 recommendation:
@@ -108,17 +109,16 @@ results_dir: {self.results_dir.as_posix()}
 """
         self.config_path.write_text(config_content)
         
-        # ** FIX **: Instantiate the dummy model using all relevant parameters from the config
-        # to ensure the architecture matches the one loaded by the script.
         config = Config.from_yaml(str(self.config_path))
         model_for_checkpoint = MultimodalRecommender(
             n_users=len(self.user_encoder.classes_),
             n_items=len(self.item_encoder.classes_),
+            n_tags=self.item_info_df['tag'].nunique(),
             num_numerical_features=len(self.numerical_cols),
             embedding_dim=config.model.embedding_dim,
             vision_model_name=config.model.vision_model,
             language_model_name=config.model.language_model,
-            use_contrastive=config.model.use_contrastive
+            use_contrastive=config.model.use_contrastive,
         )
         self.checkpoint_path = self.model_specific_checkpoint_dir / "best_model.pth"
         torch.save({'model_state_dict': model_for_checkpoint.state_dict()}, self.checkpoint_path)
@@ -178,7 +178,6 @@ results_dir: {self.results_dir.as_posix()}
             '--num_workers', '0'
         ]
         
-        # This should now pass because setUp creates a compatible checkpoint
         evaluate_main()
         
         output_file = self.results_dir / 'evaluation_results.json'

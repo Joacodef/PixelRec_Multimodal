@@ -565,6 +565,7 @@ def main(cli_args: Optional[List[str]] = None):
             cache_dir=effective_cache_dir,
             cache_to_disk=cache_config.use_disk,
             numerical_feat_cols=valid_numerical_features,
+            categorical_feat_cols=data_config.categorical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False
@@ -627,6 +628,7 @@ def main(cli_args: Optional[List[str]] = None):
             text_augmentation_config=data_config.text_augmentation,
             image_augmentation_config=data_config.image_augmentation,
             numerical_feat_cols=valid_numerical_features,
+            categorical_feat_cols=data_config.categorical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=True,
@@ -653,6 +655,7 @@ def main(cli_args: Optional[List[str]] = None):
             negative_sampling_ratio=data_config.negative_sampling_ratio,
             text_augmentation_config=TextAugmentationConfig(enabled=False),
             numerical_feat_cols=valid_numerical_features,
+            categorical_feat_cols=data_config.categorical_features_cols,
             numerical_normalization_method=data_config.numerical_normalization_method,
             numerical_scaler=numerical_scaler,
             is_train_mode=False,
@@ -745,7 +748,7 @@ def main(cli_args: Optional[List[str]] = None):
             'projection_hidden_dim': model_config.projection_hidden_dim,
             'final_activation': model_config.final_activation,
             'init_method': model_config.init_method,
-            'contrastive_temperature': model_config.contrastive_temperature,
+            'contrastive_temperature': model_config.contrastive_temperature
         }
         
         model = MultimodalRecommender(**model_params).to(device)

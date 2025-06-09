@@ -99,6 +99,10 @@ class MultimodalRecommender(nn.Module):
         """
         super(MultimodalRecommender, self).__init__()
         
+        self.n_users = n_users
+        self.n_items = n_items
+        self.n_tags = n_tags
+
         self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
         self.language_config = MODEL_CONFIGS['language'][language_model_name]
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
@@ -121,7 +125,7 @@ class MultimodalRecommender(nn.Module):
         self.contrastive_temperature = contrastive_temperature
 
         # Passes n_tags to the embedding initialization method.
-        self._init_embeddings(n_users, n_items, n_tags)
+        self._init_embeddings()
         self._init_vision_model(vision_model_name, freeze_vision)
         self._init_language_model(language_model_name, freeze_language)
         self._init_projection_layers()
@@ -159,7 +163,7 @@ class MultimodalRecommender(nn.Module):
         self.tag_embedding = nn.Embedding(self.n_tags, self.embedding_dim)
         
         # Retrieves the configured weight initialization method.
-        init_method = self.config.model.init_method
+        init_method = self.init_method.lower()
 
         # Apply the configured weight initialization method to all embedding layers.
         if init_method == 'xavier_uniform':

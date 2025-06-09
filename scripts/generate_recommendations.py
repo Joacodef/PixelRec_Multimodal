@@ -103,6 +103,7 @@ def load_model_and_data(config: Config, device: torch.device):
         language_model_name=config.model.language_model,
         create_negative_samples=False,
         numerical_feat_cols=config.data.numerical_features_cols,
+        categorical_feat_cols=config.data.categorical_features_cols,
         numerical_normalization_method=config.data.numerical_normalization_method,
         cache_features=config.data.cache_config.enabled,
         cache_max_items=config.data.cache_config.max_memory_items,
@@ -126,7 +127,7 @@ def load_model_and_data(config: Config, device: torch.device):
     model = PretrainedMultimodalRecommender(
         n_users=dataset.n_users,
         n_items=dataset.n_items,
-        n_tags=dataset.n_tags,
+        n_tags=dataset.n_tags if hasattr(dataset, 'n_tags') else 0,
         num_numerical_features=len(config.data.numerical_features_cols),
         embedding_dim=config.model.embedding_dim,
         vision_model_name=config.model.vision_model,

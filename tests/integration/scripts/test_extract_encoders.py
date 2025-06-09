@@ -13,7 +13,7 @@ from sklearn.preprocessing import LabelEncoder
 # Add parent directory to path to import the script and src modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
-from scripts.extract_encoders import extract_encoders
+from scripts.extract_encoders import main as extract_encoders
 
 class TestExtractEncoders(unittest.TestCase):
     """Test cases for the encoder extraction functionality."""
@@ -36,8 +36,10 @@ class TestExtractEncoders(unittest.TestCase):
         # --- Create Dummy Data ---
 
         # 1. Dummy "processed" item_info.csv
+        # Add a 'tag' column to the dummy DataFrame
         self.item_info_df = pd.DataFrame({
             'item_id': ['item_a', 'item_b', 'item_c'],
+            'tag': ['tag1', 'tag2', 'tag1'] 
         })
         self.processed_item_info_path = self.processed_data_dir / "item_info.csv"
         self.item_info_df.to_csv(self.processed_item_info_path, index=False)

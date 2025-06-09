@@ -97,6 +97,8 @@ data:
     #- favorite_number
     #- barrage_number
   numerical_normalization_method: standardization  # Options: standardization, min_max, log1p, none
+
+  categorical_features_cols: ['tag']
   
   # Image augmentation settings
   image_augmentation:

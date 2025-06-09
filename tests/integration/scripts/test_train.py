@@ -124,11 +124,15 @@ results_dir: {self.results_dir.as_posix()}
         n_users = full_interactions_df['user_id'].nunique()
         n_items = full_item_info_df['item_id'].nunique()
         
+        # Calculate n_tags from the test data
+        n_tags = full_item_info_df['tag'].nunique()
+
         # We must use the validated numerical features count for model instantiation
         num_numerical_features = 2 # 'view_number' and 'comment_number'
 
         initial_model = MultimodalRecommender(
             n_users=n_users, n_items=n_items,
+            n_tags=n_tags,
             num_numerical_features=num_numerical_features,
             embedding_dim=config.model.embedding_dim,
             vision_model_name=config.model.vision_model,
@@ -167,6 +171,7 @@ results_dir: {self.results_dir.as_posix()}
         # This now uses the correct n_users and n_items, preventing the size mismatch
         final_model = MultimodalRecommender(
             n_users=n_users, n_items=n_items,
+            n_tags=n_tags,
             num_numerical_features=num_numerical_features,
             embedding_dim=config.model.embedding_dim,
             vision_model_name=config.model.vision_model,

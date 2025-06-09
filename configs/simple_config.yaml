@@ -45,6 +45,8 @@ data:
     - favorite_number
     - barrage_number
 
+  categorical_features_cols: ['tag']
+  
 recommendation:
   top_k: 50                         # Number of recommendations to generate
 

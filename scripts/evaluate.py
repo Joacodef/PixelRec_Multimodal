@@ -314,6 +314,7 @@ def main():
         cache_dir=cache_config.cache_directory,
         cache_to_disk=cache_config.use_disk,
         numerical_feat_cols=numerical_features_for_dataset,
+        categorical_feat_cols=config_obj.data.categorical_features_cols,
         numerical_normalization_method=config_obj.data.numerical_normalization_method,
         numerical_scaler=numerical_scaler
     )

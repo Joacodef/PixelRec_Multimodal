@@ -79,6 +79,7 @@ class TestGenerateRecommendationsScript(unittest.TestCase):
         self.model = MultimodalRecommender(
             n_users=len(self.user_encoder.classes_),
             n_items=len(self.item_encoder.classes_),
+            n_tags=len(self.item_info_df['tag'].unique()),
             num_numerical_features=len(self.numerical_cols),
             embedding_dim=8,
             vision_model_name='resnet',

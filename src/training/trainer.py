@@ -408,18 +408,18 @@ class Trainer:
                     'numerical_features': batch['numerical_features'],
                 }
                     
-                if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
-                if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
+                if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
+                if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
                 
                 vision_features_for_loss_val, text_features_for_loss_val = None, None
 
                 if hasattr(self.model, 'use_contrastive') and self.model.use_contrastive:
-                    model_call_args_val['return_embeddings'] = True
-                    output_tuple_val = self.model(**model_call_args_val)
+                    model_call_args['return_embeddings'] = True
+                    output_tuple_val = self.model(**model_call_args)
                     output_val, vision_features_for_loss_val, text_features_for_loss_val, _ = output_tuple_val
                 else:
-                    model_call_args_val['return_embeddings'] = False
-                    output_val = self.model(**model_call_args_val)
+                    model_call_args['return_embeddings'] = False
+                    output_val = self.model(**model_call_args)
 
                 output_val = output_val.squeeze(-1)
 

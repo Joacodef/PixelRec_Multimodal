@@ -64,7 +64,6 @@ def main(config_path: str):
         language_model_name='sentence-bert',
         create_negative_samples=False,
         cache_features=False,
-        # CHANGED: Pass the categorical features config to enable tag encoding.
         categorical_feat_cols=data_config.categorical_features_cols
     )
     
