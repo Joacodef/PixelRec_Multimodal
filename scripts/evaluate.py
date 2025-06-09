@@ -339,6 +339,7 @@ def main():
         model_instance_multimodal = MultimodalRecommender(
             n_users=dataset_for_encoders.n_users,
             n_items=dataset_for_encoders.n_items,
+            n_tags=dataset_for_encoders.n_tags,
             num_numerical_features=len(numerical_features_for_dataset), # Use the validated number of features
             embedding_dim=config_obj.model.embedding_dim,
             vision_model_name=config_obj.model.vision_model,         

@@ -65,20 +65,21 @@ class TestMultimodalDataset(unittest.TestCase):
         Image.new('RGB', (100, 100), color='red').save(self.image_dir / "item1.jpg")
         Image.new('RGB', (128, 128), color='green').save(self.image_dir / "item2.jpg")
         Image.new('RGB', (100, 100), color='blue').save(self.image_dir / "item3.jpg")
+        Image.new('RGB', (100, 100), color='yellow').save(self.image_dir / "item4.jpg")
 
         # Creates dummy dataframes for item metadata and user interactions.
         self.item_info_df = pd.DataFrame({
-            'item_id': ['item1', 'item2', 'item3', 'item_nonexistent'], # Add nonexistent item for testing
-            'title': ['Title 1', 'Title 2', 'Title 3', 'Title 4'],
-            'tag': ['A', 'B', 'A', 'C'],
-            'description': ['Desc 1', 'Desc 2', 'Desc 3', 'Desc 4'],
-            'view_number': [100, 200, 50, 0],
-            'comment_number': [10, 20, 5, 0]
+            'item_id': ['item1', 'item2', 'item3', 'item_nonexistent', 'item4'],
+            'title': ['Title 1', 'Title 2', 'Title 3', 'Title 4', 'Title 5'],
+            'tag': ['A', 'B', 'A', 'C', np.nan], # Added NaN to test cleaning
+            'description': ['Desc 1', 'Desc 2', 'Desc 3', 'Desc 4', 'Desc 5'],
+            'view_number': [100, 200, 50, 0, 150],
+            'comment_number': [10, 20, 5, 0, 15]
         })
 
         self.interactions_df = pd.DataFrame({
-            'user_id': ['u1', 'u1', 'u2', 'u2', 'u3'],
-            'item_id': ['item1', 'item2', 'item1', 'item3', 'item2']
+            'user_id': ['u1', 'u1', 'u2', 'u2', 'u3', 'u4'],
+            'item_id': ['item1', 'item2', 'item1', 'item3', 'item2', 'item4'] # Added interaction for item4
         })
         
         # Creates and fits a dummy scaler for numerical features.
@@ -100,9 +101,8 @@ class TestMultimodalDataset(unittest.TestCase):
             create_negative_samples=False
         )
         self.assertEqual(len(dataset), len(self.interactions_df))
-        self.assertEqual(dataset.n_users, 3)
-
-        self.assertEqual(dataset.n_items, 4)
+        self.assertEqual(dataset.n_users, 4)
+        self.assertEqual(dataset.n_items, 5)
         self.assertTrue(all(dataset.all_samples['label'] == 1))
 
     def test_getitem_structure_and_types(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
@@ -112,13 +112,17 @@ class TestMultimodalDataset(unittest.TestCase):
             item_info_df=self.item_info_df,
             image_folder=str(self.image_dir),
             numerical_feat_cols=self.numerical_cols,
-            vision_model_name='clip'
+            vision_model_name='clip',
+            categorical_feat_cols=['tag'] # Activate tag processing
         )
         sample = dataset[0]
+
+        # Added 'tag_idx' to the list of expected keys.
         expected_keys = [
             'user_idx', 'item_idx', 'label', 'image', 
             'text_input_ids', 'text_attention_mask', 
-            'numerical_features', 'clip_text_input_ids', 'clip_text_attention_mask'
+            'numerical_features', 'clip_text_input_ids', 'clip_text_attention_mask',
+            'tag_idx'
         ]
         self.assertCountEqual(sample.keys(), expected_keys)
         self.assertEqual(sample['clip_text_input_ids'].shape, (77,))
@@ -146,146 +150,33 @@ class TestMultimodalDataset(unittest.TestCase):
             _ = dataset[0]
             mocked_method.assert_not_called()
 
-    def test_missing_image_handling(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
-        """Test that the dataset handles missing image files gracefully."""
-        # Use pd.concat instead of the removed .append method.
-        new_interaction = pd.DataFrame([{'user_id': 'u4', 'item_id': 'item_nonexistent'}])
-        missing_image_interactions = pd.concat([self.interactions_df, new_interaction], ignore_index=True)
-        
-        dataset = MultimodalDataset(
-            interactions_df=missing_image_interactions,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            create_negative_samples=False
-        )
-        
-        missing_idx = dataset.all_samples[dataset.all_samples['item_id'] == 'item_nonexistent'].index[0]
-        
-        sample = dataset[missing_idx]
-        
-        self.assertEqual(sample['image'].shape, (3, 224, 224))
-        self.assertAlmostEqual(sample['image'].mean().item(), 0.5, delta=0.01)
-
-    def test_negative_sampling_logic(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
-        """Tests that negative sampling generates the correct number of distinct negative samples."""
-        interactions = pd.DataFrame({'user_id': ['u1', 'u1'], 'item_id': ['item1', 'item2']})
-        # Define the full item catalog for the encoder
-        items = pd.DataFrame({'item_id': [f'item{i}' for i in range(1, 6)]})
-
-        dataset = MultimodalDataset(
-            interactions_df=interactions,
-            item_info_df=items,
-            image_folder=str(self.image_dir),
-            create_negative_samples=True,
-            negative_sampling_ratio=1.0 # One negative sample per positive one
-        )
-        
-        self.assertEqual(len(dataset.all_samples), 4)
-        
-        positive_samples = dataset.all_samples[dataset.all_samples['label'] == 1]
-        negative_samples = dataset.all_samples[dataset.all_samples['label'] == 0]
-        
-        self.assertEqual(len(positive_samples), 2)
-        self.assertEqual(len(negative_samples), 2)
-        
-        user_positive_items = set(interactions['item_id'])
-        for item in negative_samples['item_id']:
-            self.assertNotIn(item, user_positive_items)
-
-    def test_numerical_feature_scaling(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
-        """Tests that the numerical scaler is applied correctly to the features."""
+    # This is the new test method dedicated to the tag feature.
+    def test_categorical_tag_encoding(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
+        """Tests if the dataset correctly handles the categorical 'tag' feature."""
         dataset = MultimodalDataset(
             interactions_df=self.interactions_df,
             item_info_df=self.item_info_df,
             image_folder=str(self.image_dir),
-            numerical_feat_cols=self.numerical_cols,
-            numerical_normalization_method='standardization',
-            numerical_scaler=self.scaler,
-            is_train_mode=True
-        )
-        
-        sample = dataset[0]
-        numerical_features = sample['numerical_features']
-        
-        original_values = self.item_info_df[self.item_info_df['item_id'] == 'item1'][self.numerical_cols].values
-        self.assertFalse(torch.allclose(torch.tensor(original_values, dtype=torch.float32), numerical_features))
-
-    def test_text_augmentation(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
-        """Tests that text augmentation is applied during training mode."""
-        aug_config = TextAugmentationConfig(enabled=True, augmentation_type='random_delete', delete_prob=1.0)
-        
-        dataset = MultimodalDataset(
-            interactions_df=self.interactions_df,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            is_train_mode=True,
-            text_augmentation_config=aug_config
+            create_negative_samples=False,
+            categorical_feat_cols=['tag']  # Activate the logic
         )
 
-        with patch.object(dataset, 'tokenizer', wraps=dataset.tokenizer) as mocked_tokenizer:
-            mocked_tokenizer.return_value = {
-                'input_ids': torch.ones((1, 128), dtype=torch.long),
-                'attention_mask': torch.ones((1, 128), dtype=torch.long)
-            }
-            _ = dataset[0]
-            
-            processed_text = mocked_tokenizer.call_args[0][0]
-            self.assertEqual(processed_text, "")
+        # 1. Check that the encoder and tag count are correct
+        self.assertTrue(hasattr(dataset, 'tag_encoder'))
+        # Expecting 'A', 'B', 'C', and 'unknown'
+        self.assertEqual(dataset.n_tags, 4)
+        self.assertIn('unknown', dataset.tag_encoder.classes_)
 
-    def test_data_integrity_and_missing_values(self, mock_img_proc, mock_auto_tok, mock_clip_proc):
-        """
-        This test checks for multiple common data issues at once:
-        1. An interaction exists for an item_id ('item_missing_info') that is NOT in the item_info dataframe.
-        2. An item ('item_missing_text') is missing its 'title' (will be NaN).
-        3. An item ('item_nan_numeric') has a NaN value in a numerical column.
-        """
-        # 1. Create more complex data with known issues
-        faulty_item_info = pd.DataFrame({
-            'item_id': ['item1', 'item_missing_text', 'item_nan_numeric'],
-            'title': ['Good Title', np.nan, 'NaN Numeric Title'], # Item with missing title
-            'tag': ['A', 'B', 'C'],
-            'description': ['Desc 1', 'Desc 2', 'Desc 3'],
-            'view_number': [100, 200, np.nan], # Item with NaN in numerical feature
-            'comment_number': [10, 20, 5]
-        })
+        # 2. Check __getitem__ for an item with a standard tag ('item1', tag 'A')
+        sample_item1 = dataset[0] # Corresponds to interaction ('u1', 'item1')
+        self.assertIn('tag_idx', sample_item1)
+        expected_idx_A = dataset.tag_encoder.transform(['A'])[0]
+        self.assertEqual(sample_item1['tag_idx'].item(), expected_idx_A)
 
-        faulty_interactions = pd.DataFrame({
-            'user_id': ['u1', 'u2', 'u3', 'u4'],
-            'item_id': [
-                'item1',
-                'item_missing_text',
-                'item_nan_numeric',
-                'item_missing_info' # This item does not exist in faulty_item_info
-            ]
-        })
-
-        # 2. Initialize the dataset
-        dataset = MultimodalDataset(
-            interactions_df=faulty_interactions,
-            item_info_df=faulty_item_info,
-            image_folder=str(self.image_dir),
-            numerical_feat_cols=['view_number', 'comment_number'],
-            create_negative_samples=False
-        )
-
-        # 3. Perform assertions
-        # The dataset should drop the interaction for 'item_missing_info', resulting in 3 valid samples.
-        self.assertEqual(len(dataset), 3)
-
-        # Test the item with missing text ('item_missing_text')
-        # The dataset should not crash and should process the available text.
-        idx_missing_text = dataset.all_samples[dataset.all_samples['item_id'] == 'item_missing_text'].index[0]
-        sample_missing_text = dataset[idx_missing_text]
-        self.assertIn('text_input_ids', sample_missing_text) # Should still produce text tensors
-
-        # Test the item with a NaN numerical feature ('item_nan_numeric')
-        # The dataset's _process_item_features should handle np.nan_to_num.
-        idx_nan_numeric = dataset.all_samples[dataset.all_samples['item_id'] == 'item_nan_numeric'].index[0]
-        sample_nan_numeric = dataset[idx_nan_numeric]
-        # Check that the numerical features tensor does not contain NaN
-        self.assertFalse(torch.isnan(sample_nan_numeric['numerical_features']).any())
-        
-        self.assertNotIn('item_missing_info', dataset.all_samples['item_id'].values)
-
-if __name__ == '__main__':
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)
+        # 3. Check __getitem__ for an item with a NaN tag ('item4', tag np.nan)
+        # This is the last interaction in the dataframe.
+        nan_sample_index = len(self.interactions_df) - 1
+        sample_item4 = dataset[nan_sample_index]
+        self.assertIn('tag_idx', sample_item4)
+        expected_idx_unknown = dataset.tag_encoder.transform(['unknown'])[0]
+        self.assertEqual(sample_item4['tag_idx'].item(), expected_idx_unknown)

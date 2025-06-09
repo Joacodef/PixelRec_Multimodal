@@ -133,18 +133,6 @@ class TextAugmentationConfig:
     swap_prob: float = 0.1
 
 @dataclass
-class ImageValidationConfig:
-    """Configures the validation rules for images during offline preprocessing."""
-    # If True, attempts to identify and filter out corrupted or unreadable image files.
-    check_corrupted: bool = True
-    # The minimum allowed width for an image in pixels.
-    min_width: int = 64
-    # The minimum allowed height for an image in pixels.
-    min_height: int = 64
-    # A list of valid image file extensions to consider during processing.
-    allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
-
-@dataclass
 class ImageAugmentationConfig:
     """Configuration for image augmentation during training"""
     enabled: bool = False
@@ -153,11 +141,11 @@ class ImageAugmentationConfig:
     saturation: float = 0.2
     hue: float = 0.1
     random_crop: bool = True
-    crop_scale: List[float] = field(default_factory=lambda: [0.8, 1.0])  # Use List instead of tuple
+    crop_scale: List[float] = field(default_factory=lambda: [0.8, 1.0])
     horizontal_flip: bool = True
     rotation_degrees: float = 10
     gaussian_blur: bool = True
-    blur_kernel_size: List[int] = field(default_factory=lambda: [5, 9])  # Use List instead of tuple
+    blur_kernel_size: List[int] = field(default_factory=lambda: [5, 9])
     gaussian_noise: bool = False
     noise_std: float = 0.01
 
@@ -174,6 +162,20 @@ class ImageAugmentationConfig:
         if self.random_crop and (not (0 < self.crop_scale[0] <= self.crop_scale[1] <= 1.0)):
             raise ValueError("Invalid crop_scale. Must be [min, max] with 0 < min <= max <= 1.0.")
 
+# --- START OF REORDERING ---
+# These classes are now defined BEFORE DataConfig, which uses them.
+
+@dataclass
+class ImageValidationConfig:
+    """Configures the validation rules for images during offline preprocessing."""
+    # If True, attempts to identify and filter out corrupted or unreadable image files.
+    check_corrupted: bool = True
+    # The minimum allowed width for an image in pixels.
+    min_width: int = 64
+    # The minimum allowed height for an image in pixels.
+    min_height: int = 64
+    # A list of valid image file extensions to consider during processing.
+    allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
 
 @dataclass
 class OfflineTextCleaningConfig:
@@ -217,6 +219,8 @@ class OfflineImageCompressionConfig:
     # When resizing, the longest edge of the image will be scaled down to this size in pixels.
     resize_target_longest_edge: Optional[int] = 1024
 
+# --- END OF REORDERING ---
+
 @dataclass
 class DataConfig:
     """Consolidates all data-related configurations."""
@@ -255,6 +259,8 @@ class DataConfig:
         'view_number', 'comment_number', 'thumbup_number',
         'share_number', 'coin_number', 'favorite_number', 'barrage_number'
     ])
+    # A list of column names in the item metadata to be used as categorical features.
+    categorical_features_cols: List[str] = field(default_factory=lambda: ['tag'])
     
     # Nested configuration for text augmentation.
     text_augmentation: TextAugmentationConfig = field(default_factory=TextAugmentationConfig)

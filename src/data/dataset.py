@@ -45,6 +45,7 @@ class MultimodalDataset(Dataset):
         language_model_name: str = 'sentence-bert',
         create_negative_samples: bool = True,
         numerical_feat_cols: Optional[List[str]] = None,
+        categorical_feat_cols: Optional[List[str]] = None,
         cache_features: bool = True,
         cache_max_items: int = 1000,
         cache_dir: Optional[str] = None,
@@ -62,6 +63,7 @@ class MultimodalDataset(Dataset):
             language_model_name (str): The key for the language model configuration.
             create_negative_samples (bool): If True, generates negative samples for training.
             numerical_feat_cols (Optional[List[str]]): A list of column names for numerical features.
+            categorical_feat_cols (Optional[List[str]]): A list of column names for categorical features.
             cache_features (bool): If True, enables the feature caching system.
             cache_max_items (int): The maximum number of items for the in-memory cache.
             cache_dir (Optional[str]): The base directory for the feature cache.
@@ -92,6 +94,9 @@ class MultimodalDataset(Dataset):
                 'view_number', 'comment_number', 'thumbup_number',
                 'share_number', 'coin_number', 'favorite_number', 'barrage_number'
             ]
+        
+        # Sets the categorical feature columns to use.
+        self.categorical_feat_cols = categorical_feat_cols if categorical_feat_cols is not None else []
 
         # Sets up other configuration parameters from kwargs.
         self.negative_sampling_ratio = float(kwargs.get('negative_sampling_ratio', 1.0))
@@ -121,6 +126,17 @@ class MultimodalDataset(Dataset):
         # Fits encoders on the entire user and item catalogs to ensure consistency.
         self.user_encoder.fit(self.interactions['user_id'].astype(str))
         self.item_encoder.fit(self.item_info_df_original['item_id'].astype(str))
+
+        # Handle categorical features like 'tag'
+        for col in self.categorical_feat_cols:
+            if col == 'tag':
+                # Fill missing tags with a placeholder and fit encoder
+                self.item_info_df_original[col] = self.item_info_df_original[col].fillna('unknown')
+                self.item_info[col] = self.item_info[col].fillna('unknown')
+                
+                self.tag_encoder = LabelEncoder()
+                self.tag_encoder.fit(self.item_info_df_original[col])
+                self.n_tags = len(self.tag_encoder.classes_)
         
         # Transforms interaction data to numerical indices.
         if not self.interactions.empty:
@@ -215,6 +231,7 @@ class MultimodalDataset(Dataset):
                 'text_input_ids': torch.zeros(dummy_len, dtype=torch.long),
                 'text_attention_mask': torch.zeros(dummy_len, dtype=torch.long),
                 'numerical_features': torch.zeros(len(self.numerical_feat_cols)),
+                'tag_idx': torch.zeros(1, dtype=torch.long),
             }
             if self.clip_tokenizer_for_contrastive:
                 features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
@@ -273,6 +290,12 @@ class MultimodalDataset(Dataset):
                 'text_attention_mask': text_tokens['attention_mask'].squeeze(0),
                 'numerical_features': torch.tensor(numerical_features_np.flatten(), dtype=torch.float32)
             }
+
+            # Process categorical features
+            if 'tag' in self.categorical_feat_cols:
+                tag = item_row.get('tag', 'unknown')
+                tag_idx = self.tag_encoder.transform([tag])[0]
+                features['tag_idx'] = torch.tensor(tag_idx, dtype=torch.long)
 
             if self.clip_tokenizer_for_contrastive:
                 clip_tokens = self.clip_tokenizer_for_contrastive(text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt')

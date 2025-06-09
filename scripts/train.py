@@ -728,6 +728,7 @@ def main(cli_args: Optional[List[str]] = None):
         model_params = {
             'n_users': full_dataset_for_encoders.n_users,
             'n_items': full_dataset_for_encoders.n_items,
+            'n_tags': full_dataset_for_encoders.n_tags,
             'num_numerical_features': num_numerical_features,
             'embedding_dim': model_config.embedding_dim,
             'vision_model_name': model_config.vision_model,

@@ -126,6 +126,7 @@ def load_model_and_data(config: Config, device: torch.device):
     model = PretrainedMultimodalRecommender(
         n_users=dataset.n_users,
         n_items=dataset.n_items,
+        n_tags=dataset.n_tags,
         num_numerical_features=len(config.data.numerical_features_cols),
         embedding_dim=config.model.embedding_dim,
         vision_model_name=config.model.vision_model,

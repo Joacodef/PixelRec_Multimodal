@@ -186,10 +186,15 @@ class PreprocessingPipeline:
         Returns:
             The item metadata DataFrame with cleaned text columns.
         """
+        # First, handle missing values and ensure string type for the 'tag' column.
+        if 'tag' in item_info_df.columns:
+            print("Cleaning 'tag' column: Filling NaN with 'unknown'.")
+            item_info_df['tag'] = item_info_df['tag'].fillna('unknown').astype(str)
+        
+        # Then, apply general text cleaning (lowercase, etc.) to all text columns.
         return self.text_processor.clean_dataframe_text_columns(
             item_info_df, self.text_columns
         )
-    
     def _process_images(self, item_info_df: pd.DataFrame) -> set:
         """
         Processes and validates all images corresponding to the items.

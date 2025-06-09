@@ -23,6 +23,10 @@ from typing import Optional, Tuple, Union, List
 from ..config import MODEL_CONFIGS
 
 
+from typing import List, Optional
+from src.config import MODEL_CONFIGS
+import torch.nn as nn
+
 class MultimodalRecommender(nn.Module):
     """
     A multimodal recommender model that fuses embeddings from multiple sources.
@@ -38,6 +42,7 @@ class MultimodalRecommender(nn.Module):
         self,
         n_users: int,
         n_items: int,
+        n_tags: int,
         num_numerical_features: int,
         embedding_dim: int = 128,
         vision_model_name: str = 'clip',
@@ -63,6 +68,7 @@ class MultimodalRecommender(nn.Module):
         Args:
             n_users (int): The total number of unique users in the dataset.
             n_items (int): The total number of unique items in the dataset.
+            n_tags (int): The total number of unique tags in the dataset.
             num_numerical_features (int): The number of numerical features
                                           associated with each item.
             embedding_dim (int): The dimensionality of the latent space for all
@@ -114,7 +120,8 @@ class MultimodalRecommender(nn.Module):
         self.init_method = init_method
         self.contrastive_temperature = contrastive_temperature
 
-        self._init_embeddings(n_users, n_items)
+        # Passes n_tags to the embedding initialization method.
+        self._init_embeddings(n_users, n_items, n_tags)
         self._init_vision_model(vision_model_name, freeze_vision)
         self._init_language_model(language_model_name, freeze_language)
         self._init_projection_layers()
@@ -139,36 +146,43 @@ class MultimodalRecommender(nn.Module):
         }
         return activations.get(activation_name.lower(), nn.ReLU())
 
-    def _init_embeddings(self, n_users: int, n_items: int):
+    def _init_embeddings(self):
         """
-        Initializes the user and item embedding layers.
+        Initializes the user, item, and tag embedding layers.
 
         This method creates the embedding layers and applies a specified weight
         initialization method for better training stability.
-
-        Args:
-            n_users (int): The total number of unique users.
-            n_items (int): The total number of unique items.
         """
-        self.user_embedding = nn.Embedding(n_users, self.embedding_dim)
-        self.item_embedding = nn.Embedding(n_items, self.embedding_dim)
+        # Initializes the embedding layers for users, items, and the new tag feature.
+        self.user_embedding = nn.Embedding(self.n_users, self.embedding_dim)
+        self.item_embedding = nn.Embedding(self.n_items, self.embedding_dim)
+        self.tag_embedding = nn.Embedding(self.n_tags, self.embedding_dim)
         
-        # Apply the configured weight initialization method.
-        if self.init_method == 'xavier_uniform':
+        # Retrieves the configured weight initialization method.
+        init_method = self.config.model.init_method
+
+        # Apply the configured weight initialization method to all embedding layers.
+        if init_method == 'xavier_uniform':
             nn.init.xavier_uniform_(self.user_embedding.weight)
             nn.init.xavier_uniform_(self.item_embedding.weight)
-        elif self.init_method == 'xavier_normal':
+            nn.init.xavier_uniform_(self.tag_embedding.weight)
+        elif init_method == 'xavier_normal':
             nn.init.xavier_normal_(self.user_embedding.weight)
             nn.init.xavier_normal_(self.item_embedding.weight)
-        elif self.init_method == 'kaiming_uniform':
+            nn.init.xavier_normal_(self.tag_embedding.weight)
+        elif init_method == 'kaiming_uniform':
             nn.init.kaiming_uniform_(self.user_embedding.weight, nonlinearity='relu')
             nn.init.kaiming_uniform_(self.item_embedding.weight, nonlinearity='relu')
-        elif self.init_method == 'kaiming_normal':
+            nn.init.kaiming_uniform_(self.tag_embedding.weight, nonlinearity='relu')
+        elif init_method == 'kaiming_normal':
             nn.init.kaiming_normal_(self.user_embedding.weight, nonlinearity='relu')
             nn.init.kaiming_normal_(self.item_embedding.weight, nonlinearity='relu')
+            nn.init.kaiming_normal_(self.tag_embedding.weight, nonlinearity='relu')
         else:
+            # Defaults to xavier_uniform if the specified method is not recognized.
             nn.init.xavier_uniform_(self.user_embedding.weight)
             nn.init.xavier_uniform_(self.item_embedding.weight)
+            nn.init.xavier_uniform_(self.tag_embedding.weight)
 
     def _init_vision_model(self, model_key: str, freeze: bool):
         """
@@ -308,7 +322,7 @@ class MultimodalRecommender(nn.Module):
         fusion_layers = []
         
         # The input to the MLP is the concatenated output of the attention layer.
-        input_dim = self.embedding_dim * 5
+        input_dim = self.embedding_dim * 6
         
         for i, hidden_dim in enumerate(self.fusion_hidden_dims):
             fusion_layers.append(nn.Linear(input_dim, hidden_dim))
@@ -431,32 +445,50 @@ class MultimodalRecommender(nn.Module):
         return None
 
     def _apply_attention_fusion(
-        self, user_emb: torch.Tensor, item_emb: torch.Tensor, vision_emb: torch.Tensor,
-        language_emb: torch.Tensor, numerical_emb: torch.Tensor, batch_size: int
+            self,
+            user_emb: torch.Tensor,
+            item_emb: torch.Tensor,
+            tag_emb: torch.Tensor,
+            vision_emb: torch.Tensor,
+            language_emb: torch.Tensor,
+            numerical_emb: torch.Tensor,
+            batch_size: int
     ) -> torch.Tensor:
         """
         Applies self-attention to fuse different feature embeddings.
 
         Args:
-            user_emb, item_emb, vision_emb, language_emb, numerical_emb: The
+            user_emb, item_emb, tag_emb, vision_emb, language_emb, numerical_emb: The
                 embedding tensors for each modality.
             batch_size (int): The number of samples in the batch.
 
         Returns:
             torch.Tensor: The concatenated, attention-fused feature tensor.
         """
-        features_stacked = torch.stack([user_emb, item_emb, vision_emb, language_emb, numerical_emb], dim=0)
+        # Stacks the embeddings for all modalities, including the new tag embedding.
+        features_stacked = torch.stack([
+            user_emb, item_emb, tag_emb, vision_emb, language_emb, numerical_emb
+        ], dim=0)
+        
+        # Applies the self-attention mechanism to the stacked features.
         attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
+        
+        # Reshapes the output for the final fusion network.
         return attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
 
     def forward(
-        self, user_idx: torch.Tensor, item_idx: torch.Tensor, image: torch.Tensor,
-        text_input_ids: torch.Tensor, text_attention_mask: torch.Tensor,
-        numerical_features: torch.Tensor,
-        clip_text_input_ids: Optional[torch.Tensor] = None, 
-        clip_text_attention_mask: Optional[torch.Tensor] = None, 
-        return_embeddings: bool = False,
-        debug_this_batch: bool = False
+            self,
+            user_idx: torch.Tensor,
+            item_idx: torch.Tensor,
+            tag_idx: torch.Tensor,
+            image: torch.Tensor,
+            text_input_ids: torch.Tensor,
+            text_attention_mask: torch.Tensor,
+            numerical_features: torch.Tensor,
+            clip_text_input_ids: Optional[torch.Tensor] = None,
+            clip_text_attention_mask: Optional[torch.Tensor] = None,
+            return_embeddings: bool = False,
+            debug_this_batch: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
         Defines the main forward pass of the model.
@@ -464,6 +496,7 @@ class MultimodalRecommender(nn.Module):
         Args:
             user_idx (torch.Tensor): Tensor of user indices.
             item_idx (torch.Tensor): Tensor of item indices.
+            tag_idx (torch.Tensor): Tensor of tag indices.
             image (torch.Tensor): Tensor of item images.
             text_input_ids (torch.Tensor): Tensor of tokenized text input IDs.
             text_attention_mask (torch.Tensor): Tensor of text attention masks.
@@ -471,7 +504,7 @@ class MultimodalRecommender(nn.Module):
             clip_text_input_ids (Optional[torch.Tensor]): Optional text inputs for CLIP.
             clip_text_attention_mask (Optional[torch.Tensor]): Optional attention masks for CLIP.
             return_embeddings (bool): If True, returns intermediate embeddings
-                                      along with the final prediction.
+                                    along with the final prediction.
 
         Returns:
             Union[torch.Tensor, Tuple]: Either the final prediction tensor or a
@@ -483,6 +516,7 @@ class MultimodalRecommender(nn.Module):
         # Generate base embeddings.
         user_emb = self.user_embedding(user_idx)
         item_emb = self.item_embedding(item_idx)
+        tag_emb = self.tag_embedding(tag_idx)
 
         # Extract and project features from each modality.
         raw_vision_output = self._get_vision_features(image)
@@ -495,6 +529,7 @@ class MultimodalRecommender(nn.Module):
         else:
             projected_numerical_emb_main_task = torch.zeros(batch_size, self.embedding_dim, device=user_idx.device)
         
+
         # Generate features specifically for the contrastive loss objective.
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
@@ -509,8 +544,9 @@ class MultimodalRecommender(nn.Module):
                     text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
         
         # Stack all features and apply attention-based fusion.
+        # The new tag_emb is added to the stack of features.
         features_stacked = torch.stack([
-            user_emb, item_emb, 
+            user_emb, item_emb, tag_emb,
             projected_vision_emb_main_task,
             projected_language_emb_main_task, 
             projected_numerical_emb_main_task

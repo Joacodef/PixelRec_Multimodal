@@ -291,8 +291,12 @@ class Trainer:
             batch = self._batch_to_device(batch)
             
             model_call_args = {
-                'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
-                'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
+                'user_idx': batch['user_idx'],
+                'item_idx': batch['item_idx'],
+                'tag_idx': batch['tag_idx'],
+                'image': batch['image'],
+                'text_input_ids': batch['text_input_ids'],
+                'text_attention_mask': batch['text_attention_mask'],
                 'numerical_features': batch['numerical_features'],
             }
            
@@ -394,12 +398,16 @@ class Trainer:
             for batch_idx, batch in enumerate(progress_bar_val):
                 batch = self._batch_to_device(batch)
                 
-                model_call_args_val = {
-                    'user_idx': batch['user_idx'], 'item_idx': batch['item_idx'], 'image': batch['image'],
-                    'text_input_ids': batch['text_input_ids'], 'text_attention_mask': batch['text_attention_mask'],
+                model_call_args = {
+                    'user_idx': batch['user_idx'],
+                    'item_idx': batch['item_idx'],
+                    'tag_idx': batch['tag_idx'],
+                    'image': batch['image'],
+                    'text_input_ids': batch['text_input_ids'],
+                    'text_attention_mask': batch['text_attention_mask'],
                     'numerical_features': batch['numerical_features'],
                 }
-                
+                    
                 if 'clip_text_input_ids' in batch: model_call_args_val['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args_val['clip_text_attention_mask'] = batch['clip_text_attention_mask']
                 

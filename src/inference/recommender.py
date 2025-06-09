@@ -243,7 +243,7 @@ class Recommender:
             # Repeats the user tensor to match the batch size for item processing.
             user_batch = user_tensor.repeat(batch_size, 1).squeeze()
             if user_batch.dim() == 0: # Handles the edge case where batch_size is 1, repeat might not expand dimensions.
-                 user_batch = user_tensor 
+                user_batch = user_tensor 
 
             # Initializes lists to accumulate prepared item data for the batch.
             item_idx_tensors_list = [] # Stores integer indices for model input.
@@ -251,6 +251,7 @@ class Recommender:
             text_input_ids_list = []
             text_attention_masks_list = []
             numerical_features_list = []
+            tag_idx_list = [] # CHANGED: Added list for tag indices.
             
             # Initializes lists for CLIP-specific text inputs, if applicable to the model.
             clip_text_input_ids_list = []
@@ -282,6 +283,10 @@ class Recommender:
                 text_input_ids_list.append(item_features['text_input_ids'])
                 text_attention_masks_list.append(item_features['text_attention_mask'])
                 numerical_features_list.append(item_features['numerical_features'])
+                
+                # CHANGED: Added logic to append tag index.
+                if 'tag_idx' in item_features:
+                    tag_idx_list.append(item_features['tag_idx'])
 
                 # Appends CLIP-specific inputs if they are present in the item features.
                 if 'clip_text_input_ids' in item_features and 'clip_text_attention_mask' in item_features:
@@ -302,6 +307,9 @@ class Recommender:
             text_masks_batch = torch.stack(text_attention_masks_list).to(self.device)
             numerical_batch = torch.stack(numerical_features_list).to(self.device)
             
+            # CHANGED: Stack the tag indices into a tensor.
+            tag_idx_batch = torch.stack(tag_idx_list).to(self.device) if tag_idx_list else None
+            
             # Prepares the dictionary of inputs for the model's forward pass.
             model_input_dict = {
                 'user_idx': user_batch,
@@ -312,6 +320,10 @@ class Recommender:
                 'numerical_features': numerical_batch,
                 'return_embeddings': False # Indicates that only scores are needed from the model.
             }
+
+            # CHANGED: Add tag_idx to the model input dictionary.
+            if tag_idx_batch is not None:
+                model_input_dict['tag_idx'] = tag_idx_batch
 
             # Adds CLIP-specific inputs to the model dictionary if they were collected.
             if clip_text_input_ids_list and clip_text_attention_masks_list:
