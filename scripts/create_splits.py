@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import sys
 
+# Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.config import Config
@@ -27,14 +28,13 @@ def main(config_path: str):
         print(f"Error: Processed interactions file not found at {cfg.data.processed_interactions_path}")
         return
 
-    # Initialize DataFilter
+    # Initialize DataFilter and apply activity filtering
     data_filter = DataFilter()
     min_user_interactions = cfg.data.splitting.min_interactions_per_user
     min_item_interactions = cfg.data.splitting.min_interactions_per_item
     
     print("Filtering data by minimum interactions...")
-    # Use the DataFilter instance as a callable function
-    filtered_df = data_filter(
+    filtered_df = data_filter.filter_by_activity(
         interactions_df,
         min_user_interactions=min_user_interactions,
         min_item_interactions=min_item_interactions
@@ -44,7 +44,37 @@ def main(config_path: str):
         print("No data left after filtering. Please check your interaction thresholds.")
         return
 
-    # Prepare and execute the split
+    # If stratification is requested on a column not in the interactions DataFrame,
+    # attempt to merge it from the item metadata (item_info.csv).
+    stratify_col = cfg.data.splitting.stratify_by
+    if stratify_col and stratify_col not in filtered_df.columns:
+        print(f"Stratification column '{stratify_col}' not in interactions, attempting to merge from item info.")
+        try:
+            item_info_path = Path(cfg.data.processed_item_info_path)
+            if not item_info_path.exists():
+                raise FileNotFoundError(f"Processed item info file not found at {item_info_path}")
+
+            item_info_df = pd.read_csv(item_info_path)
+            
+            if stratify_col in item_info_df.columns:
+                # Select only the item ID and the stratification column for the merge
+                item_info_subset = item_info_df[['item_id', stratify_col]]
+                
+                # Perform a left merge to add the stratification column to the interactions
+                filtered_df = pd.merge(filtered_df, item_info_subset, on='item_id', how='left')
+                print(f"Successfully merged '{stratify_col}' from item info for stratification.")
+
+                # Check for any interactions that did not have a corresponding item
+                if filtered_df[stratify_col].isnull().any():
+                    print(f"Warning: Null values are present in '{stratify_col}' after merge.")
+            else:
+                print(f"Warning: Stratification column '{stratify_col}' not in '{item_info_path}'. Proceeding without stratification.")
+                cfg.data.splitting.stratify_by = None
+        except (FileNotFoundError, Exception) as e:
+            print(f"Warning: Could not merge stratification column '{stratify_col}' due to an error: {e}. Proceeding without stratification.")
+            cfg.data.splitting.stratify_by = None
+
+    # Prepare parameters and execute the data split
     split_params = {
         'split_strategy': cfg.data.splitting.strategy,
         'random_state': cfg.data.splitting.random_state,
@@ -58,7 +88,7 @@ def main(config_path: str):
     
     splits = create_robust_splits(filtered_df, **split_params)
 
-    # Save the splits
+    # Save the generated splits to CSV files
     output_dir = Path(cfg.data.split_data_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     splitter = DataSplitter(random_state=cfg.data.splitting.random_state)
