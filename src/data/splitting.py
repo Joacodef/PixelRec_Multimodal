@@ -3,13 +3,14 @@
 Provides a collection of data splitting strategies tailored for recommender systems.
 
 This module contains the DataSplitter class, which implements various methods
-for dividing interaction data into training and validation sets. Each strategy
-serves a different evaluation purpose, from evaluating performance on new users
-and items (cold-start) to simulating a production environment with temporal splits.
+for dividing interaction data into training, validation, and test sets. Each
+strategy serves a different evaluation purpose, from evaluating performance on
+new users and items (cold-start) to simulating a production environment with
+temporal splits.
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, List, Optional, Literal
+from typing import Dict, Tuple, List, Optional, Literal, Union
 from sklearn.model_selection import train_test_split
 import random
 from collections import defaultdict
@@ -36,6 +37,76 @@ class DataSplitter:
         np.random.seed(random_state)
         random.seed(random_state)
     
+    def stratified_temporal_split(
+        self,
+        interactions_df: pd.DataFrame,
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+        timestamp_col: str = 'timestamp',
+        stratify_by: Optional[str] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Splits data chronologically, then stratifies future interactions.
+
+        This method first performs a temporal split to ensure the training set
+        contains older data. It then splits the newer interactions into
+        validation and test sets, stratified by a specified column (e.g., 'tag')
+        to maintain distribution. It also ensures that all users in the
+        validation and test sets are present in the training set.
+
+        Args:
+            interactions_df (pd.DataFrame): The interactions DataFrame.
+            train_ratio (float): The proportion of data for the training set.
+            val_ratio (float): The proportion of data for the validation set.
+            test_ratio (float): The proportion of data for the test set.
+            timestamp_col (str): The name of the timestamp column.
+            stratify_by (Optional[str]): The column to stratify the validation
+                                         and test sets by.
+
+        Returns:
+            A tuple containing the training, validation, and test DataFrames.
+        """
+        if timestamp_col not in interactions_df.columns:
+            raise ValueError(f"Timestamp column '{timestamp_col}' not found.")
+        if stratify_by and stratify_by not in interactions_df.columns:
+            raise ValueError(f"Stratification column '{stratify_by}' not found.")
+
+        # Step 1: Chronological split
+        sorted_df = interactions_df.sort_values(by=timestamp_col).reset_index(drop=True)
+        train_end_idx = int(len(sorted_df) * train_ratio)
+        train_df = sorted_df.iloc[:train_end_idx]
+        future_interactions = sorted_df.iloc[train_end_idx:]
+
+        # Step 2: Ensure user overlap
+        train_users = set(train_df['user_id'].unique())
+        future_interactions = future_interactions[future_interactions['user_id'].isin(train_users)]
+        
+        if future_interactions.empty:
+            raise ValueError("No interactions left for validation/test after ensuring user overlap.")
+
+        # Step 3: Stratified split of future interactions
+        test_size = test_ratio / (val_ratio + test_ratio)
+        
+        stratify_col_data = future_interactions[stratify_by] if stratify_by else None
+
+        try:
+            val_df, test_df = train_test_split(
+                future_interactions,
+                test_size=test_size,
+                random_state=self.random_state,
+                stratify=stratify_col_data
+            )
+        except ValueError as e:
+            print(f"Warning: Stratified split failed with error: {e}. Falling back to random split for validation/test sets.")
+            val_df, test_df = train_test_split(
+                future_interactions,
+                test_size=test_size,
+                random_state=self.random_state
+            )
+
+        return train_df, val_df, test_df
+
     def user_based_split(
         self,
         interactions_df: pd.DataFrame,
@@ -298,7 +369,7 @@ class DataSplitter:
             train_ratio (float): The fraction of interactions for the training set.
 
         Returns:
-            Tuple[pd.DataFrame, pd.DataFrame]: A tuple of training and validation DataFrames.
+            A tuple of training and validation DataFrames.
         """
         train_df = interactions_df.sample(
             frac=train_ratio, 
@@ -331,7 +402,7 @@ class DataSplitter:
             train_ratio (float): The ratio for the training/validation split of the warm-warm set.
 
         Returns:
-            Dict[str, pd.DataFrame]: A dictionary containing the training DataFrame
+            A dictionary containing the training DataFrame
                                      and the various validation DataFrames.
         """
         user_interactions = interactions_df.groupby('user_id').size()
@@ -373,60 +444,81 @@ class DataSplitter:
     def get_split_statistics(
         self, 
         train_df: pd.DataFrame, 
-        val_df: pd.DataFrame
+        val_df: pd.DataFrame,
+        test_df: Optional[pd.DataFrame] = None
     ) -> Dict[str, any]:
         """
-        Calculates and returns statistics about a train/validation split.
-
+        Calculates and returns statistics about a train/validation/test split.
+    
         Args:
             train_df (pd.DataFrame): The training DataFrame.
             val_df (pd.DataFrame): The validation DataFrame.
-
+            test_df (Optional[pd.DataFrame]): The test DataFrame.
+    
         Returns:
-            Dict[str, any]: A dictionary containing statistics such as interaction
-                            counts, unique user/item counts, and overlap ratios.
+            A dictionary containing statistics such as interaction counts,
+            unique user/item counts, and overlap ratios.
         """
-        train_users = set(train_df['user_id'].unique()) if not train_df.empty and 'user_id' in train_df.columns else set()
-        train_items = set(train_df['item_id'].unique()) if not train_df.empty and 'item_id' in train_df.columns else set()
-        
-        val_users = set(val_df['user_id'].unique()) if not val_df.empty and 'user_id' in val_df.columns else set()
-        val_items = set(val_df['item_id'].unique()) if not val_df.empty and 'item_id' in val_df.columns else set()
-        
-        return {
+        train_users = set(train_df['user_id'].unique())
+        train_items = set(train_df['item_id'].unique())
+        val_users = set(val_df['user_id'].unique())
+        val_items = set(val_df['item_id'].unique())
+    
+        stats = {
             'train_interactions': len(train_df),
             'val_interactions': len(val_df),
             'train_users': len(train_users),
             'train_items': len(train_items),
             'val_users': len(val_users),
             'val_items': len(val_items),
-            'user_overlap': len(train_users & val_users),
-            'item_overlap': len(train_items & val_items),
-            'user_overlap_ratio': len(train_users & val_users) / len(val_users) if len(val_users) > 0 else 0,
-            'item_overlap_ratio': len(train_items & val_items) / len(val_items) if len(val_items) > 0 else 0
+            'user_overlap_val': len(train_users & val_users),
+            'item_overlap_val': len(train_items & val_items),
+            'user_overlap_ratio_val': len(train_users & val_users) / len(val_users) if val_users else 0,
+            'item_overlap_ratio_val': len(train_items & val_items) / len(val_items) if val_items else 0
         }
+    
+        if test_df is not None:
+            test_users = set(test_df['user_id'].unique())
+            test_items = set(test_df['item_id'].unique())
+            stats.update({
+                'test_interactions': len(test_df),
+                'test_users': len(test_users),
+                'test_items': len(test_items),
+                'user_overlap_test': len(train_users & test_users),
+                'item_overlap_test': len(train_items & test_items),
+                'user_overlap_ratio_test': len(train_users & test_users) / len(test_users) if test_users else 0,
+                'item_overlap_ratio_test': len(train_items & test_items) / len(test_items) if test_items else 0
+            })
+            
+        return stats
 
 
 def create_robust_splits(
     interactions_df: pd.DataFrame,
     split_strategy: str = 'stratified',
     **kwargs
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
     """
     A factory function to create train/validation splits using a named strategy.
 
     Args:
         interactions_df (pd.DataFrame): The DataFrame of interactions to split.
         split_strategy (str): The name of the splitting strategy to use.
-                              Options: 'user', 'item', 'temporal', 'stratified',
-                              'leave_one_out', 'simple_random'.
         **kwargs: Additional arguments to be passed to the chosen splitting method.
 
     Returns:
-        Tuple[pd.DataFrame, pd.DataFrame]: A tuple of training and validation DataFrames.
+        A tuple of training and validation/test DataFrames. The number of returned
+        DataFrames depends on the chosen strategy.
     """
-    splitter = DataSplitter(random_state=kwargs.get('random_state', 42))
+    random_state = kwargs.get('random_state', 42)
+    splitter = DataSplitter(random_state=random_state)
     
-    if split_strategy == 'user':
+    if split_strategy == 'stratified_temporal':
+        valid_kwargs = {k: v for k, v in kwargs.items() 
+                       if k in ['train_ratio', 'val_ratio', 'test_ratio', 'timestamp_col', 'stratify_by']}
+        return splitter.stratified_temporal_split(interactions_df, **valid_kwargs)
+
+    elif split_strategy == 'user':
         valid_kwargs = {k: v for k, v in kwargs.items() 
                        if k in ['train_ratio', 'min_interactions_per_user']}
         return splitter.user_based_split(interactions_df, **valid_kwargs)
@@ -459,4 +551,4 @@ def create_robust_splits(
     else:
         raise ValueError(f"Unknown split strategy: {split_strategy}. "
                         f"Available options: 'user', 'item', 'temporal', 'stratified', "
-                        f"'leave_one_out', 'simple_random'")
+                        f"'leave_one_out', 'simple_random', 'stratified_temporal'")

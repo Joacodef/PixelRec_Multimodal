@@ -19,7 +19,8 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.preprocess_data import main as preprocess_main
-from scripts.create_splits import create_splits as create_splits_main
+# Correctly import the 'main' function from the create_splits script
+from scripts.create_splits import main as create_splits_main
 from scripts.train import main as train_main
 from src.config import Config
 
@@ -35,25 +36,20 @@ class TestImageAugmentationTraining(unittest.TestCase):
         """Set up the entire test environment by running preprocessing scripts."""
         self.test_dir = Path(tempfile.mkdtemp())
         
-        # Define paths for raw, processed, and split data
+        # Define paths
         self.raw_dir = self.test_dir / "data" / "raw"
         self.raw_image_dir = self.raw_dir / "images"
         self.processed_dir = self.test_dir / "data" / "processed"
         self.splits_dir = self.test_dir / "data" / "splits" / "test_split"
         self.checkpoint_dir = self.test_dir / "checkpoints"
         
-        # Create initial raw directories
         self.raw_image_dir.mkdir(parents=True, exist_ok=True)
         (self.raw_dir / "item_info").mkdir(exist_ok=True)
         (self.raw_dir / "interactions").mkdir(exist_ok=True)
         
-        # 1. Create dummy RAW data
         self._create_raw_data()
-        
-        # 2. Create a config file pointing to this temporary structure
         self._create_config_file()
         
-        # 3. Run the actual preprocessing and splitting scripts
         print("\n--- Running preprocess_data.py for test setup ---")
         preprocess_main(cli_args=['--config', str(self.config_path)])
         print("\n--- Running create_splits.py for test setup ---")
@@ -68,7 +64,6 @@ class TestImageAugmentationTraining(unittest.TestCase):
 
     def _create_raw_data(self):
         """Creates dummy raw data files, including images."""
-        # Create item info
         num_items = 20
         item_ids = [f'item_{i}' for i in range(num_items)]
         
@@ -78,21 +73,13 @@ class TestImageAugmentationTraining(unittest.TestCase):
             'description': [f'Desc {i}' for i in range(num_items)],
             'tag': [f'tag{i % 4}' for i in range(num_items)],
             'view_number': np.random.randint(100, 1000, num_items),
-            'comment_number': np.random.randint(0, 100, num_items),
         }).to_csv(self.raw_dir / "item_info" / "item_info_sample.csv", index=False)
         
-        # FIX: Add a loop to create a dummy image file for each item.
-        # This is what the preprocess_data.py script expects to find.
         for item_id in item_ids:
-            try:
-                # Creates a simple 64x64 black image, which will pass validation.
-                img = Image.new('RGB', (64, 64), color = 'black')
-                img.save(self.raw_image_dir / f"{item_id}.jpg")
-            except Exception as e:
-                self.fail(f"Failed to create dummy image for {item_id}: {e}")
+            img = Image.new('RGB', (64, 64), color='black')
+            img.save(self.raw_image_dir / f"{item_id}.jpg")
 
-        # Create interactions
-        interactions = [{'user_id': f'user_{i}', 'item_id': f'item_{j}'} for i in range(10) for j in range(10)]
+        interactions = [{'user_id': f'user_{i}', 'item_id': f'item_{j}', 'timestamp': pd.Timestamp.now()} for i in range(10) for j in range(10)]
         pd.DataFrame(interactions).to_csv(self.raw_dir / "interactions" / "interactions_sample.csv", index=False)
 
     def _create_config_file(self):
@@ -108,39 +95,28 @@ class TestImageAugmentationTraining(unittest.TestCase):
                 'processed_item_info_path': str(self.processed_dir / "item_info.csv"),
                 'processed_interactions_path': str(self.processed_dir / "interactions.csv"),
                 'processed_image_destination_folder': str(self.processed_dir / "images"),
-                'scaler_path': str(self.processed_dir / "numerical_scaler.pkl"),
                 'split_data_path': str(self.splits_dir),
-                'train_data_path': str(self.splits_dir / "train.csv"),
-                'val_data_path': str(self.splits_dir / "val.csv"),
-                'test_data_path': str(self.splits_dir / "test.csv"),
-                'numerical_features_cols': ['view_number', 'comment_number'],
-                'categorical_features_cols': ['tag'],
-                'splitting': { 'min_interactions_per_user': 1, 'min_interactions_per_item': 1 },
+                'splitting': { 'strategy': 'stratified_temporal', 'stratify_by': 'tag', 'min_interactions_per_user': 1, 'min_interactions_per_item': 1 },
                 'image_augmentation': {'enabled': True, 'brightness': 0.2, 'contrast': 0.2},
                 'cache_config': {'enabled': False},
             },
             'checkpoint_dir': str(self.checkpoint_dir),
-            'results_dir': str(self.test_dir / "results"),
         }
         with open(self.config_path, 'w') as f:
             yaml.dump(config_content, f)
 
     def test_end_to_end_training_with_augmentation(self):
         """
-        Verifies that the main training script runs to completion using the
-        data generated by the preprocessing and splitting scripts.
+        Verifies that the main training script runs to completion.
         """
         try:
-            # Run the training script using the fully prepared data
             train_main(cli_args=['--config', str(self.config_path), '--device', 'cpu'])
         except Exception as e:
             self.fail(f"Training script failed with an exception: {e}\n{traceback.format_exc()}")
 
-        # Verify that a model checkpoint was created as expected
         checkpoint_path = self.checkpoint_dir / "resnet_sentence-bert" / "best_model.pth"
         self.assertTrue(checkpoint_path.exists(), "Model checkpoint was not created.")
         
-        # Verify the checkpoint is valid
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         self.assertIn('model_state_dict', checkpoint)
 

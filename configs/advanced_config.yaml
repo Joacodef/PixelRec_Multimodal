@@ -22,12 +22,12 @@ model:
   attention_dropout: 0.2            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [512, 256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [128, 64]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
   # Projection layers (advanced)
-  projection_hidden_dim: 1024       # Hidden dim in projections (null = direct projection)
+  projection_hidden_dim: 256      # Hidden dim in projections (null = direct projection)
   
   # Advanced architectural choices
   final_activation: sigmoid         # Options: sigmoid, tanh, none
@@ -36,10 +36,10 @@ model:
 training:
   # Basic training parameters
   batch_size: 128
-  epochs: 200
-  learning_rate: 0.00001
-  weight_decay: 0.1               # L2 regularization
-  patience: 10                     # Early stopping patience
+  epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.1                # L2 regularization
+  patience: 5                      # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
   num_workers: 8                   # DataLoader workers
   
@@ -71,16 +71,16 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_200K
-  train_data_path: data/splits/split_200K/train.csv
-  val_data_path: data/splits/split_200K/val.csv
-  test_data_path: data/splits/split_200K/test.csv
+  split_data_path: data/splits/split_tiny
+  train_data_path: data/splits/split_tiny/train.csv
+  val_data_path: data/splits/split_tiny/val.csv
+  test_data_path: data/splits/split_tiny/test.csv
   
   # Cache configuration
   cache_config:
     enabled: true
-    max_memory_items: 500
-    cache_directory: 'cache'
+    max_memory_items: 200
+    cache_directory: 'C:/Users/joaco/Documents/PixelRec_cache/clip_sentence-bert'
     use_disk: true
   
   # Data preprocessing (advanced)
@@ -101,7 +101,7 @@ data:
   
   # Image augmentation settings
   image_augmentation:
-    enabled: true
+    enabled: false
     # Color augmentations
     brightness: 0.3        # Random brightness adjustment
     contrast: 0.3          # Random contrast adjustment  
@@ -147,9 +147,11 @@ data:
   
   # Data splitting configuration (advanced)
   splitting:
+    strategy: "stratified_temporal" # "user", "item", "temporal" or "stratified_temporal"
+    stratify_by: "tag" # Column to stratify by (if applicable)
     random_state: 42
-    train_final_ratio: 0.75
-    val_final_ratio: 0.1
+    train_final_ratio: 0.7
+    val_final_ratio: 0.15
     test_final_ratio: 0.15
     min_interactions_per_user: 5
     min_interactions_per_item: 5

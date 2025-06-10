@@ -190,6 +190,10 @@ class OfflineTextCleaningConfig:
 @dataclass
 class DataSplittingConfig:
     """Configures the strategy for splitting data into train, validation, and test sets."""
+    # The splitting strategy to use.
+    strategy: str = 'user' 
+    # The column to use for stratification (only applicable for 'stratified_temporal' strategy).
+    stratify_by: Optional[str] = None
     # The seed for the random number generator to ensure reproducible splits.
     random_state: int = 42
     # The proportion of the data to allocate to the final training set.
