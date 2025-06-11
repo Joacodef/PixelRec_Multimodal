@@ -77,8 +77,6 @@ class TestCreateSplitsEnhanced(unittest.TestCase):
         if self.test_dir.exists():
             shutil.rmtree(self.test_dir)
 
-    # Located in: tests/integration/scripts/test_create_splits.py
-
     def test_stratified_temporal_split_properties(self):
         """
         Test the properties of the splits created by the 'stratified_temporal' strategy.
@@ -118,28 +116,33 @@ class TestCreateSplitsEnhanced(unittest.TestCase):
         self.assertTrue(test_users.issubset(train_users), "All test users should be in the training set.")
 
         # 5. Verify split ratios are approximately correct
-        # We use the row count from the stdout for total interactions after filtering
-        total_interactions = 700 
+        # This is a bit brittle, a better test would calculate this from source. For now, it works.
+        total_interactions = len(self.interactions_df)
         self.assertAlmostEqual(len(train_df) / total_interactions, 0.7, delta=0.1)
         self.assertAlmostEqual(len(val_df) / total_interactions, 0.15, delta=0.1)
         self.assertAlmostEqual(len(test_df) / total_interactions, 0.15, delta=0.1)
 
         # 6. Verify stratification
-        # The 'tag' column is already in the dataframes from the split, so no merge is needed.
-        self.assertTrue('tag' in val_df.columns, "The 'tag' column is missing from val.csv")
-        self.assertTrue('tag' in test_df.columns, "The 'tag' column is missing from test.csv")
+        # The 'tag' column is no longer expected in the output splits.
+        # It must be merged from the item_info file to verify the split's properties.
+        item_info_df = pd.read_csv(self.item_info_path)
+        val_df_merged = pd.merge(val_df, item_info_df[['item_id', 'tag']], on='item_id', how='left')
+        test_df_merged = pd.merge(test_df, item_info_df[['item_id', 'tag']], on='item_id', how='left')
 
         # Check if the tag distribution in validation and test sets is similar
-        val_tag_dist = val_df['tag'].value_counts(normalize=True)
-        test_tag_dist = test_df['tag'].value_counts(normalize=True)
+        val_tag_dist = val_df_merged['tag'].value_counts(normalize=True)
+        test_tag_dist = test_df_merged['tag'].value_counts(normalize=True)
 
         # Reindex to ensure we are comparing the same tags, fill missing with 0
         all_tags = val_tag_dist.index.union(test_tag_dist.index)
-        dist_diff = (val_tag_dist.reindex(all_tags, fill_value=0) - test_tag_dist.reindex(all_tags, fill_value=0)).abs().sum()
+        val_dist_norm = val_tag_dist.reindex(all_tags, fill_value=0)
+        test_dist_norm = test_tag_dist.reindex(all_tags, fill_value=0)
+        dist_diff = (val_dist_norm - test_dist_norm).abs().sum()
 
         # We divide by 2 because the sum of absolute differences is double the total variation distance
         total_variation_distance = dist_diff / 2
 
         self.assertLess(total_variation_distance, 0.2, "Total variation distance between tag distributions should be small.")
+
 if __name__ == '__main__':
     unittest.main()
