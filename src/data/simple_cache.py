@@ -38,23 +38,31 @@ class SimpleFeatureCache:
         Args:
             vision_model (str): The name of the vision model being used (e.g., 'resnet').
             language_model (str): The name of the language model being used (e.g., 'sentence-bert').
-            base_cache_dir (str): The parent directory where model-specific cache folders will be created.
+            base_cache_dir (str): The parent directory for the cache. This can be a base path
+                                  or the full model-specific path.
             max_memory_items (int): The maximum number of items to retain in the in-memory cache.
             use_disk (bool): A flag to enable or disable persisting the cache to disk.
         """
         self.vision_model = vision_model
         self.language_model = language_model
-        self.base_cache_dir = Path(base_cache_dir)
-
-        # Constructs a model-specific directory path to prevent cache conflicts between different models.
-        cache_name = f"{self.vision_model}_{self.language_model}"
-        
-        # The 'self.cache_dir' is now the single path for all cache operations.
-        self.cache_dir: Path = self.base_cache_dir / cache_name
-
         self.max_memory_items = max_memory_items
         self.use_disk = use_disk
 
+        cache_name = f"{self.vision_model}_{self.language_model}"
+        provided_path = Path(base_cache_dir)
+
+        # This logic prevents creating nested cache directories.
+        # It checks if the provided path already ends with the model-specific name.
+        if provided_path.name == cache_name:
+            # If the provided path is already model-specific, use it directly.
+            self.cache_dir = provided_path
+        else:
+            # Otherwise, create the model-specific subdirectory within the provided base path.
+            self.cache_dir = provided_path / cache_name
+
+        # The base directory is the parent of the final active cache directory.
+        self.base_cache_dir = self.cache_dir.parent
+        
         # An OrderedDict is used for the in-memory cache to efficiently manage the LRU policy.
         self.memory_cache: OrderedDict[str, Dict[str, torch.Tensor]] = OrderedDict()
         # A threading lock ensures that cache operations are atomic and thread-safe.
@@ -66,9 +74,7 @@ class SimpleFeatureCache:
 
         # Creates the on-disk cache directory if disk persistence is enabled.
         if self.use_disk:
-            # The .mkdir() call now uses the single, correct cache_dir path.
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-
 
     def __getstate__(self) -> Dict[str, Any]:
         """
@@ -217,7 +223,9 @@ class SimpleFeatureCache:
     def print_stats(self) -> None:
         """Prints a formatted summary of the cache's current statistics."""
         stats = self.stats()
-        print(f"SimpleFeatureCache Stats ({self.vision_model}_{self.language_model}): "
-              f"{stats['memory_items']}/{stats['max_memory_items']} in-memory. "
-              f"Hit rate: {stats['hit_rate']:.2%}. "
-              f"Disk: {'Enabled' if stats['use_disk'] else 'Disabled'} at {stats['cache_directory_active']}.")
+        print("Cache Status:")
+        print(f"  - Model Combination: {self.vision_model}_{self.language_model}")
+        print(f"  - Active Directory: {stats['cache_directory_active']}")
+        print(f"  - In-Memory: {stats['memory_items']}/{stats['max_memory_items']} items")
+        print(f"  - Performance: {stats['hits']} hits, {stats['misses']} misses (Hit Rate: {stats['hit_rate']:.2%})")
+        print(f"  - Disk Persistence: {'Enabled' if stats['use_disk'] else 'Disabled'}")

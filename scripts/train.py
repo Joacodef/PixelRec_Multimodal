@@ -437,12 +437,7 @@ def main(cli_args: Optional[List[str]] = None):
         if cache_config.enabled:
             # Automatically generate a model-specific subdirectory for the cache to avoid conflicts.
             cache_name = f"{model_config.vision_model}_{model_config.language_model}"
-            auto_cache_dir = f"cache/{cache_name}"
-            
-            # Use the directory from the config file, or the auto-generated one if the config uses the default 'cache'.
-            effective_cache_dir = cache_config.cache_directory
-            if cache_config.cache_directory == 'cache':
-                effective_cache_dir = auto_cache_dir
+            effective_cache_dir = f"{cache_config.cache_directory}/{cache_name}"
             
             print("Cache configuration:")
             print(f"Strategy: Memory-based caching")

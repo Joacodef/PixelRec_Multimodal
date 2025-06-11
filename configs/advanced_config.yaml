@@ -80,7 +80,7 @@ data:
   cache_config:
     enabled: true
     max_memory_items: 150
-    cache_directory: 'C:/Users/joaco/Documents/PixelRec_cache/clip_sentence-bert'
+    cache_directory: 'C:/Users/joaco/Documents/PixelRec_cache'
     use_disk: true
   
   # Data preprocessing (advanced)
