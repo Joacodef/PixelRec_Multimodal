@@ -281,55 +281,60 @@ class DataSplitter:
     
     def leave_one_out_split(
         self,
-        interactions_df: pd.DataFrame,
-        strategy: Literal['random', 'latest'] = 'random'
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        interactions_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
-        Performs a leave-one-out split, holding out one item per user.
+        Performs a leave-two-out split, holding out the last two items per user
+        for testing and validation, respectively.
 
         This is a common evaluation strategy in academic literature where for each
-        user, a single interaction is held out for the validation set, and the
-        model is trained on the rest of that user's interactions.
+        user, the last interaction is used for the test set, the penultimate
+        interaction is used for the validation set, and the model is trained
+        on the rest of that user's interactions. This method requires a
+        'timestamp' column to determine the order of interactions.
 
         Args:
             interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
-            strategy ('random' or 'latest'): Determines which item to hold out.
-                                            'random' selects a random interaction.
-                                            'latest' selects the most recent one
-                                            (requires a 'timestamp' column).
+                                            Must contain a 'timestamp' column.
 
         Returns:
-            Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the training
-                                               and validation DataFrames.
+            A tuple containing the training, validation, and test DataFrames.
+
+        Raises:
+            ValueError: If the 'timestamp' column is not found in the DataFrame.
         """
+        if 'timestamp' not in interactions_df.columns:
+            raise ValueError("The 'latest' strategy for leave-one-out requires a 'timestamp' column.")
+
         train_data = []
         val_data = []
-        
-        user_groups = interactions_df.groupby('user_id')
-        
+        test_data = []
+
+        # Ensure interactions are sorted by user and time to easily select latest interactions
+        # This is more efficient than sorting within the loop for every user
+        sorted_df = interactions_df.sort_values(by=['user_id', 'timestamp'])
+        user_groups = sorted_df.groupby('user_id')
+
         for user_id, user_interactions in user_groups:
-            user_df = user_interactions.copy()
-            
-            if len(user_df) < 2:
-                train_data.append(user_df)
+            if len(user_interactions) < 3:
+                # If a user has fewer than 3 interactions, they cannot be split
+                # into train, val, and test. Add all their interactions to the
+                # training set.
+                train_data.append(user_interactions)
                 continue
-            
-            if strategy == 'random':
-                val_idx = user_df.sample(n=1, random_state=self.random_state).index
-            else:
-                if 'timestamp' in user_df.columns:
-                    val_idx = user_df.loc[user_df['timestamp'].idxmax()].name
-                    val_idx = [val_idx] if not isinstance(val_idx, list) else val_idx
-                else:
-                    val_idx = [user_df.index[-1]]
-            
-            val_data.append(user_df.loc[val_idx])
-            train_data.append(user_df.drop(val_idx))
-        
+
+            # The last interaction is for the test set
+            test_data.append(user_interactions.iloc[-1:])
+            # The second-to-last interaction is for the validation set
+            val_data.append(user_interactions.iloc[-2:-1])
+            # All remaining interactions are for the training set
+            train_data.append(user_interactions.iloc[:-2])
+
         train_df = pd.concat(train_data, ignore_index=True) if train_data else pd.DataFrame()
         val_df = pd.concat(val_data, ignore_index=True) if val_data else pd.DataFrame()
-        
-        return train_df, val_df
+        test_df = pd.concat(test_data, ignore_index=True) if test_data else pd.DataFrame()
+
+        return train_df, val_df, test_df
     
     def stratified_split(
         self,
