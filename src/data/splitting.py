@@ -36,6 +36,69 @@ class DataSplitter:
         self.random_state = random_state
         np.random.seed(random_state)
         random.seed(random_state)
+
+    def column_stratified_split(
+        self,
+        interactions_df: pd.DataFrame,
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+        stratify_by: str = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Splits data into training, validation, and test sets while preserving the
+        percentage of samples for each class in the specified stratification column.
+        This split is random and does not consider timestamps.
+
+        Args:
+            interactions_df (pd.DataFrame): The complete interactions DataFrame.
+            train_ratio (float): The proportion of the dataset to allocate to training.
+            val_ratio (float): The proportion of the dataset to allocate to validation.
+            test_ratio (float): The proportion of the dataset to allocate to testing.
+            stratify_by (str): The name of the column to stratify by.
+
+        Returns:
+            A tuple containing the training, validation, and test DataFrames.
+        """
+        if not stratify_by or stratify_by not in interactions_df.columns:
+            raise ValueError(f"Stratification column '{stratify_by}' not found or not provided.")
+
+        # Ensure ratios sum to 1
+        if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0):
+            raise ValueError("The sum of train, validation, and test ratios must be 1.0.")
+
+        # Stratify the main dataframe
+        stratify_col_data = interactions_df[stratify_by]
+
+        # First split: separate out the training set
+        temp_df, train_df = train_test_split(
+            interactions_df,
+            test_size=train_ratio,
+            random_state=self.random_state,
+            stratify=stratify_col_data
+        )
+        
+        # Second split: split the remainder into validation and test sets
+        # Adjust the test_size for the second split
+        remaining_stratify_data = temp_df[stratify_by]
+        if len(remaining_stratify_data.value_counts()) < 2:
+             # Fallback to random split if stratification is not possible
+            val_df, test_df = train_test_split(
+                temp_df,
+                test_size=test_ratio / (val_ratio + test_ratio),
+                random_state=self.random_state
+            )
+        else:
+            val_df, test_df = train_test_split(
+                temp_df,
+                test_size=test_ratio / (val_ratio + test_ratio),
+                random_state=self.random_state,
+                stratify=remaining_stratify_data
+            )
+        
+        # Return only the core interaction columns
+        core_columns = [col for col in ['user_id', 'item_id', 'timestamp'] if col in interactions_df.columns]
+        return train_df[core_columns], val_df[core_columns], test_df[core_columns]
     
     def stratified_temporal_split(
         self,
@@ -503,7 +566,12 @@ def create_robust_splits(
     random_state = kwargs.get('random_state', 42)
     splitter = DataSplitter(random_state=random_state)
     
-    if split_strategy == 'stratified_temporal':
+    if split_strategy == 'stratified_by_column':
+        valid_kwargs = {k: v for k, v in kwargs.items() 
+                       if k in ['train_ratio', 'val_ratio', 'test_ratio', 'stratify_by']}
+        return splitter.column_stratified_split(interactions_df, **valid_kwargs)
+
+    elif split_strategy == 'stratified_temporal':
         valid_kwargs = {k: v for k, v in kwargs.items() 
                        if k in ['train_ratio', 'val_ratio', 'test_ratio', 'timestamp_col', 'stratify_by']}
         return splitter.stratified_temporal_split(interactions_df, **valid_kwargs)

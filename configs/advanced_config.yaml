@@ -22,12 +22,12 @@ model:
   attention_dropout: 0.2            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [128, 64]  # Hidden layer dimensions
+  fusion_hidden_dims: [256, 128]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
   # Projection layers (advanced)
-  projection_hidden_dim: 256      # Hidden dim in projections (null = direct projection)
+  projection_hidden_dim: 512      # Hidden dim in projections (null = direct projection)
   
   # Advanced architectural choices
   final_activation: sigmoid         # Options: sigmoid, tanh, none
@@ -71,10 +71,10 @@ data:
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/temporal_tag_stratified_50k
-  train_data_path: data/splits/temporal_tag_stratified_50k/train.csv
-  val_data_path: data/splits/temporal_tag_stratified_50k/val.csv
-  test_data_path: data/splits/temporal_tag_stratified_50k/test.csv
+  split_data_path: data/splits/tag_stratified_50k
+  train_data_path: data/splits/tag_stratified_50k/train.csv
+  val_data_path: data/splits/tag_stratified_50k/val.csv
+  test_data_path: data/splits/tag_stratified_50k/test.csv
   
   # Cache configuration
   cache_config:
@@ -147,7 +147,7 @@ data:
   
   # Data splitting configuration (advanced)
   splitting:
-    strategy: "stratified_temporal" # "user", "item", "temporal" or "stratified_temporal"
+    strategy: "stratified_by_column" # "user", "item", "temporal", "stratified_temporal" or "stratified_by_column"
     stratify_by: "tag" # Column to stratify by (if applicable)
     tag_grouping_threshold: 10
     random_state: 42
