@@ -256,8 +256,10 @@ class DataConfig:
     scaler_path: str = 'data/processed/numerical_scaler.pkl'
     # Directory where validated and optionally compressed images are stored.
     processed_image_destination_folder: Optional[str] = 'data/processed/images'
+    # The strategy for sampling negative items during training.
+    negative_sampling_strategy: str = 'random'
     # The ratio of negative samples to positive samples generated for training.
-    negative_sampling_ratio: float = 1.0
+    negative_sampling_ratio: float = 1.0    
     # The method used for scaling numerical features.
     numerical_normalization_method: str = 'standardization'
     # A list of column names in the item metadata to be used as numerical features.

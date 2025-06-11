@@ -102,6 +102,7 @@ class MultimodalDataset(Dataset):
         self.categorical_feat_cols = categorical_feat_cols if categorical_feat_cols is not None else []
 
         # Sets up other configuration parameters from kwargs.
+        self.negative_sampling_strategy = kwargs.get('negative_sampling_strategy', 'random')
         self.negative_sampling_ratio = float(kwargs.get('negative_sampling_ratio', 1.0))
         self.text_augmentation_config = kwargs.get('text_augmentation_config', TextAugmentationConfig(enabled=False))
         self.numerical_normalization_method = kwargs.get('numerical_normalization_method', 'none')
@@ -381,7 +382,29 @@ class MultimodalDataset(Dataset):
         positive_df['label'] = 1
         
         all_item_indices = np.arange(len(self.item_encoder.classes_))
-        
+        # Prepare for popularity-based sampling if needed.
+        item_pop_weights = None
+        if self.negative_sampling_strategy in ['popularity', 'popularity_inverse']:
+            # Calculate global item popularity from the interactions data.
+            item_counts = self.interactions['item_id'].astype(str).value_counts()
+            
+            # Create a weights array aligned with the item encoder's classes.
+            item_pop_weights = np.zeros(len(self.item_encoder.classes_))
+            for item_id, count in item_counts.items():
+                if item_id in self.item_encoder.classes_:
+                    idx = self.item_encoder.transform([item_id])[0]
+                    if self.negative_sampling_strategy == 'popularity':
+                        item_pop_weights[idx] = count
+                    else: # popularity_inverse
+                        item_pop_weights[idx] = 1.0 / count
+
+            # Normalize to get probabilities.
+            total_weight = item_pop_weights.sum()
+            if total_weight > 0:
+                item_pop_weights /= total_weight
+            else: # Fallback to uniform if all weights are zero.
+                item_pop_weights = None
+
         neg_samples = []
         for user_idx, group in tqdm(self.interactions.groupby('user_idx'), desc="Creating negative samples"):
             pos_indices = group['item_idx'].unique()
@@ -389,7 +412,26 @@ class MultimodalDataset(Dataset):
             
             num_negatives = min(len(neg_candidates), int(len(pos_indices) * self.negative_sampling_ratio))
             if num_negatives > 0:
-                sampled_neg_indices = np.random.choice(neg_candidates, num_negatives, replace=False)
+                if self.negative_sampling_strategy != 'random' and item_pop_weights is not None:
+                    # Use popularity-based sampling.
+                    candidate_weights = item_pop_weights[neg_candidates]
+                    
+                    # Normalize weights for the current candidate set.
+                    sum_candidate_weights = candidate_weights.sum()
+                    if sum_candidate_weights > 0:
+                        p = candidate_weights / sum_candidate_weights
+                        sampled_neg_indices = np.random.choice(
+                            neg_candidates, num_negatives, replace=False, p=p
+                        )
+                    else: # Fallback for candidates with zero total weight.
+                        sampled_neg_indices = np.random.choice(
+                            neg_candidates, num_negatives, replace=False
+                        )
+                else:
+                    # Default to random sampling.
+                    sampled_neg_indices = np.random.choice(
+                        neg_candidates, num_negatives, replace=False
+                    )
                 
                 user_id = group['user_id'].iloc[0]
                 item_ids = self.item_encoder.inverse_transform(sampled_neg_indices)

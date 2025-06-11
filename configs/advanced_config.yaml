@@ -84,6 +84,7 @@ data:
     use_disk: true
   
   # Data preprocessing (advanced)
+  negative_sampling_strategy: popularity  # Options: random, popularity, popularity_inverse
   negative_sampling_ratio: 1.0     # Ratio of negative samples to positive
   
   # Numerical features (advanced)
