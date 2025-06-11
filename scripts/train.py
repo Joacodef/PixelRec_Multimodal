@@ -635,7 +635,10 @@ def main(cli_args: Optional[List[str]] = None):
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
             cache_dir=effective_cache_dir,
-            cache_to_disk=cache_config.use_disk
+            cache_to_disk=cache_config.use_disk,            
+            user_encoder=full_dataset_for_encoders.user_encoder,
+            item_encoder=full_dataset_for_encoders.item_encoder,
+            tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None)
         )
         
         # Assign the globally fitted encoders to the training dataset.
@@ -643,6 +646,12 @@ def main(cli_args: Optional[List[str]] = None):
         train_dataset.item_encoder = full_dataset_for_encoders.item_encoder
         train_dataset.n_users = full_dataset_for_encoders.n_users
         train_dataset.n_items = full_dataset_for_encoders.n_items
+
+        # Ensure the globally fitted tag encoder is also passed to the train_dataset
+        if hasattr(full_dataset_for_encoders, 'tag_encoder'):
+            train_dataset.tag_encoder = full_dataset_for_encoders.tag_encoder
+        if hasattr(full_dataset_for_encoders, 'n_tags'):
+            train_dataset.n_tags = full_dataset_for_encoders.n_tags
 
         print("Creating validation dataset...")
         val_dataset = MultimodalDataset(
@@ -662,7 +671,10 @@ def main(cli_args: Optional[List[str]] = None):
             cache_features=cache_config.enabled,
             cache_max_items=cache_config.max_memory_items,
             cache_dir=effective_cache_dir,
-            cache_to_disk=cache_config.use_disk
+            cache_to_disk=cache_config.use_disk,
+            user_encoder=full_dataset_for_encoders.user_encoder,
+            item_encoder=full_dataset_for_encoders.item_encoder,
+            tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None)
         )
         
         # Assign the globally fitted encoders to the validation dataset.

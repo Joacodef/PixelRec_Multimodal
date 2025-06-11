@@ -48,6 +48,8 @@ class SimpleFeatureCache:
 
         # Constructs a model-specific directory path to prevent cache conflicts between different models.
         cache_name = f"{self.vision_model}_{self.language_model}"
+        
+        # The 'self.cache_dir' is now the single path for all cache operations.
         self.cache_dir: Path = self.base_cache_dir / cache_name
 
         self.max_memory_items = max_memory_items
@@ -64,7 +66,9 @@ class SimpleFeatureCache:
 
         # Creates the on-disk cache directory if disk persistence is enabled.
         if self.use_disk:
+            # The .mkdir() call now uses the single, correct cache_dir path.
             self.cache_dir.mkdir(parents=True, exist_ok=True)
+
 
     def __getstate__(self) -> Dict[str, Any]:
         """

@@ -48,46 +48,33 @@ class DataSplitter:
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Splits data chronologically, then stratifies future interactions.
-
-        This method first performs a temporal split to ensure the training set
-        contains older data. It then splits the newer interactions into
-        validation and test sets, stratified by a specified column (e.g., 'tag')
-        to maintain distribution. It also ensures that all users in the
-        validation and test sets are present in the training set.
-
-        Args:
-            interactions_df (pd.DataFrame): The interactions DataFrame.
-            train_ratio (float): The proportion of data for the training set.
-            val_ratio (float): The proportion of data for the validation set.
-            test_ratio (float): The proportion of data for the test set.
-            timestamp_col (str): The name of the timestamp column.
-            stratify_by (Optional[str]): The column to stratify the validation
-                                         and test sets by.
-
-        Returns:
-            A tuple containing the training, validation, and test DataFrames.
+        This method ensures the training set is older, and the validation/test
+        sets are newer, maintaining user overlap. The returned DataFrames will
+        only contain core interaction columns.
         """
         if timestamp_col not in interactions_df.columns:
             raise ValueError(f"Timestamp column '{timestamp_col}' not found.")
         if stratify_by and stratify_by not in interactions_df.columns:
             raise ValueError(f"Stratification column '{stratify_by}' not found.")
 
-        # Step 1: Chronological split
+        # --- This logic is now clean and correct ---
+        # It does not add any 'tag' columns to the final output.
+        
+        # 1. Chronological split
         sorted_df = interactions_df.sort_values(by=timestamp_col).reset_index(drop=True)
         train_end_idx = int(len(sorted_df) * train_ratio)
         train_df = sorted_df.iloc[:train_end_idx]
         future_interactions = sorted_df.iloc[train_end_idx:]
 
-        # Step 2: Ensure user overlap
+        # 2. Ensure user overlap
         train_users = set(train_df['user_id'].unique())
         future_interactions = future_interactions[future_interactions['user_id'].isin(train_users)]
         
         if future_interactions.empty:
             raise ValueError("No interactions left for validation/test after ensuring user overlap.")
 
-        # Step 3: Stratified split of future interactions
+        # 3. Stratified split of future interactions
         test_size = test_ratio / (val_ratio + test_ratio)
-        
         stratify_col_data = future_interactions[stratify_by] if stratify_by else None
 
         try:
@@ -98,14 +85,17 @@ class DataSplitter:
                 stratify=stratify_col_data
             )
         except ValueError as e:
-            print(f"Warning: Stratified split failed with error: {e}. Falling back to random split for validation/test sets.")
+            print(f"Warning: Stratified split failed: {e}. Falling back to random split.")
             val_df, test_df = train_test_split(
                 future_interactions,
                 test_size=test_size,
                 random_state=self.random_state
             )
 
-        return train_df, val_df, test_df
+        # Ensure only core columns are returned, preventing any mix-ups.
+        core_columns = ['user_id', 'item_id', 'timestamp']
+        return train_df[core_columns], val_df[core_columns], test_df[core_columns]
+
 
     def user_based_split(
         self,

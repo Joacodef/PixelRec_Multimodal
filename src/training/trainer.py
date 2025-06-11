@@ -399,14 +399,16 @@ class Trainer:
                 batch = self._batch_to_device(batch)
                 
                 model_call_args = {
-                    'user_idx': batch['user_idx'],
-                    'item_idx': batch['item_idx'],
-                    'tag_idx': batch['tag_idx'],
-                    'image': batch['image'],
-                    'text_input_ids': batch['text_input_ids'],
-                    'text_attention_mask': batch['text_attention_mask'],
-                    'numerical_features': batch['numerical_features'],
+                    'user_idx': batch['user_idx'].to(self.device),
+                    'item_idx': batch['item_idx'].to(self.device),
+                    'image': batch['image'].to(self.device),
+                    'text': (batch['text_input_ids'].to(self.device), batch['text_attention_mask'].to(self.device)),
+                    'numerical_features': batch['numerical_features'].to(self.device),
+                    'target': batch['label'].to(self.device)
                 }
+                # Only add tag_idx to the model input if it actually exists in the batch
+                if 'tag_idx' in batch:
+                    model_call_args['tag_idx'] = batch['tag_idx'].to(self.device)
                     
                 if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
                 if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']

@@ -50,6 +50,9 @@ class MultimodalDataset(Dataset):
         cache_max_items: int = 1000,
         cache_dir: Optional[str] = None,
         cache_to_disk: bool = False,
+        user_encoder: LabelEncoder = None,
+        item_encoder: LabelEncoder = None,
+        tag_encoder: LabelEncoder = None,
         **kwargs
     ):
         """
@@ -105,8 +108,19 @@ class MultimodalDataset(Dataset):
         self.numerical_scaler = kwargs.get('numerical_scaler', None)
         self.is_train_mode = kwargs.get('is_train_mode', False)
 
-        self.user_encoder = LabelEncoder()
-        self.item_encoder = LabelEncoder()
+        self.user_encoder = user_encoder if user_encoder is not None else LabelEncoder()
+        self.item_encoder = item_encoder if item_encoder is not None else LabelEncoder()
+
+        # Fit user encoder ONLY if it hasn't been fitted before
+        if not hasattr(self.user_encoder, 'classes_'):
+            
+            self.user_encoder.fit(self.interactions['user_id'].astype(str))
+
+        # Fit item encoder ONLY if it hasn't been fitted before
+        if not hasattr(self.item_encoder, 'classes_'):
+            print("Fitting item encoder...")
+            self.all_item_ids = self.item_info_df_original['item_id'].astype(str).unique()
+            self.item_encoder.fit(self.all_item_ids)
         
         # Initializes the necessary Hugging Face processors.
         self._init_processors(vision_model_name, language_model_name)
@@ -134,8 +148,10 @@ class MultimodalDataset(Dataset):
                 self.item_info_df_original[col] = self.item_info_df_original[col].fillna('unknown')
                 self.item_info[col] = self.item_info[col].fillna('unknown')
                 
-                self.tag_encoder = LabelEncoder()
-                self.tag_encoder.fit(self.item_info_df_original[col])
+                self.tag_encoder = tag_encoder if tag_encoder is not None else LabelEncoder()
+                if not hasattr(self.tag_encoder, 'classes_'):
+                    print("Fitting tag encoder...")
+                    self.tag_encoder.fit(self.item_info_df_original[col])
                 self.n_tags = len(self.tag_encoder.classes_)
         
         # Transforms interaction data to numerical indices.
@@ -215,7 +231,7 @@ class MultimodalDataset(Dataset):
         """
         row = self.all_samples.iloc[idx]
         item_id = str(row['item_id'])
-        
+
         features = self.feature_cache.get(item_id) if self.feature_cache else None
 
         if features is None:
@@ -236,7 +252,7 @@ class MultimodalDataset(Dataset):
             if self.clip_tokenizer_for_contrastive:
                 features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
                 features['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
-
+                
         batch = {
             'user_idx': torch.tensor(row['user_idx'], dtype=torch.long),
             'item_idx': torch.tensor(row['item_idx'], dtype=torch.long),
@@ -292,9 +308,20 @@ class MultimodalDataset(Dataset):
             }
 
             # Process categorical features
-            if 'tag' in self.categorical_feat_cols:
-                tag = item_row.get('tag', 'unknown')
-                tag_idx = self.tag_encoder.transform([tag])[0]
+            if 'tag' in self.categorical_feat_cols and hasattr(self, 'tag_encoder'):
+                # Build a direct mapping from the fitted encoder's classes
+                tag_map = {tag_name: i for i, tag_name in enumerate(self.tag_encoder.classes_)}
+                
+                tag_str = item_row.get('tag', 'unknown')
+                
+                # Look up the index from our explicit map
+                tag_idx = tag_map.get(tag_str)
+                
+                # If the tag is somehow not in our map, handle it gracefully
+                if tag_idx is None:
+                    print(f"\nWARNING: Unseen tag '{tag_str}' for item '{item_id}'. Defaulting to 'unknown'.")
+                    tag_idx = tag_map.get('unknown', 0) # Default to 'unknown', or 0 if even that fails
+                
                 features['tag_idx'] = torch.tensor(tag_idx, dtype=torch.long)
 
             if self.clip_tokenizer_for_contrastive:
