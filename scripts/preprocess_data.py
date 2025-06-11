@@ -112,20 +112,24 @@ class PreprocessingPipeline:
         # Step 6: Ensure the item metadata only contains items present in the final interaction set.
         print("\n6. Aligning item info with interactions...")
         item_info_df = self._align_item_info(item_info_df, interactions_df)
+
+        # Step 7: Group rare tags to ensure robust stratified splitting.
+        print("\n7. Grouping rare tags...")
+        item_info_df = self._group_rare_tags(item_info_df)
         
-        # Step 7: Fit a scaler on the numerical features and save it for later use.
-        print("\n7. Processing numerical features...")
+        # Step 8: Fit a scaler on the numerical features and save it for later use.
+        print("\n8. Processing numerical features...")
         self._process_numerical_features(item_info_df)
         
-        # Step 8: Save the final, processed dataframes to disk.
-        print("\n8. Saving processed data...")
+        # Step 9: Save the final, processed dataframes to disk.
+        print("\n9. Saving processed data...")
         self._save_processed_data(item_info_df, interactions_df)
         
-        # Step 9: Pre-compute and cache features if enabled in the configuration.
-        print("\n9. Caching features...")
+        # Step 10: Pre-compute and cache features if enabled in the configuration.
+        print("\n10. Caching features...")
         self._cache_features_if_enabled(item_info_df)
         
-        # Step 10: Print a summary of the final dataset statistics.
+        # Step 11: Print a summary of the final dataset statistics.
         self._print_summary(item_info_df, interactions_df)
         
         print("\n" + "=" * 60)
@@ -438,6 +442,45 @@ class PreprocessingPipeline:
         """
         print(summary_text)
 
+    def _group_rare_tags(self, item_info_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Groups infrequent tags into a single 'rare_tag' category.
+
+        This step is crucial for ensuring that stratified splitting does not fail
+        due to classes (tags) with too few members. It operates on the final,
+        filtered item data before it's saved.
+
+        Args:
+            item_info_df: The aligned and filtered item metadata DataFrame.
+
+        Returns:
+            The item metadata DataFrame with rare tags grouped together.
+        """
+        # Get the frequency threshold from config, with a safe default of 10.
+        threshold_config = getattr(self.data_config.splitting, 'tag_grouping_threshold', None)
+        
+        # If no threshold is set in the config, skip this step.
+        if threshold_config is None:
+            print("tag_grouping_threshold not set in config. Skipping tag grouping.")
+            return item_info_df
+        
+        threshold = int(threshold_config)
+        print(f"Grouping tags that appear less than {threshold} times.")
+
+        # Calculate how many times each tag appears.
+        tag_counts = item_info_df['tag'].value_counts()
+
+        # Identify which tags are rare.
+        rare_tags = tag_counts[tag_counts < threshold].index
+
+        if len(rare_tags) > 0:
+            # Replace the rare tags with a single, unified category.
+            item_info_df.loc[item_info_df['tag'].isin(rare_tags), 'tag'] = 'rare_tag'
+            print(f"Grouped {len(rare_tags)} rare tags into a single 'rare_tag' category.")
+        else:
+            print("No rare tags found below the threshold.")
+            
+        return item_info_df
 
 def main(cli_args: Optional[List[str]] = None):
     """

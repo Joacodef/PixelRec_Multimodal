@@ -194,6 +194,8 @@ class DataSplittingConfig:
     strategy: str = 'user' 
     # The column to use for stratification (only applicable for 'stratified_temporal' strategy).
     stratify_by: Optional[str] = None
+    # The minimum number of appearances for a tag to not be grouped.
+    tag_grouping_threshold: Optional[int] = None
     # The seed for the random number generator to ensure reproducible splits.
     random_state: int = 42
     # The proportion of the data to allocate to the final training set.

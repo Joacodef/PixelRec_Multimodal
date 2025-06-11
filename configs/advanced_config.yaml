@@ -62,24 +62,24 @@ training:
 
 data:
   # Data paths
-  item_info_path: data/raw/item_info/Pixel200K.csv
-  interactions_path: data/raw/interactions/Pixel200K.csv
+  item_info_path: data/raw/item_info/Pixel50k.csv
+  interactions_path: data/raw/interactions/Pixel50k.csv
   image_folder: data/raw/images
-  processed_item_info_path: data/processed/item_info.csv
-  processed_interactions_path: data/processed/interactions.csv
-  scaler_path: data/processed/numerical_scaler.pkl
+  processed_item_info_path: data/processed/item_info_Pixel50k.csv
+  processed_interactions_path: data/processed/interactions_Pixel50k.csv
+  scaler_path: data/processed/numerical_scaler_Pixel50k.pkl
   processed_image_destination_folder: data/processed/images
   
   # Data splits
-  split_data_path: data/splits/split_tiny
-  train_data_path: data/splits/split_tiny/train.csv
-  val_data_path: data/splits/split_tiny/val.csv
-  test_data_path: data/splits/split_tiny/test.csv
+  split_data_path: data/splits/temporal_tag_stratified_50k
+  train_data_path: data/splits/temporal_tag_stratified_50k/train.csv
+  val_data_path: data/splits/temporal_tag_stratified_50k/val.csv
+  test_data_path: data/splits/temporal_tag_stratified_50k/test.csv
   
   # Cache configuration
   cache_config:
     enabled: true
-    max_memory_items: 200
+    max_memory_items: 150
     cache_directory: 'C:/Users/joaco/Documents/PixelRec_cache/clip_sentence-bert'
     use_disk: true
   
@@ -149,6 +149,7 @@ data:
   splitting:
     strategy: "stratified_temporal" # "user", "item", "temporal" or "stratified_temporal"
     stratify_by: "tag" # Column to stratify by (if applicable)
+    tag_grouping_threshold: 10
     random_state: 42
     train_final_ratio: 0.7
     val_final_ratio: 0.15
