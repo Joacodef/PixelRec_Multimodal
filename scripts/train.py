@@ -319,7 +319,7 @@ def main(cli_args: Optional[List[str]] = None):
     args = parser.parse_args(cli_args)
 
     # Print a header for the training run.
-    print("MULTIMODAL RECOMMENDER TRAINING (DYNAMIC NUMERICAL FEATURES)")
+    print("MULTIMODAL RECOMMENDER TRAINING")
     print("=" * 80)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Config file: {args.config}")
@@ -359,6 +359,19 @@ def main(cli_args: Optional[List[str]] = None):
         
         if args.use_wandb:
             try:
+                 # Determine the run name automatically if not provided by the user.
+                run_name = args.wandb_run_name
+                if not run_name:
+                    # Construct <models_used> from the model configuration.
+                    models_used = f"{model_config.vision_model}_{model_config.language_model}"
+                    
+                    # Construct <dataset_used> from the training data path.
+                    # This takes the name of the directory containing 'train.csv'.
+                    dataset_used = Path(data_config.train_data_path).parent.name
+                    
+                    run_name = f"{models_used}_{dataset_used}"
+                    print(f"Wandb run name not provided, automatically generating: {run_name}")
+
                 config_dict_for_wandb = dataclasses.asdict(config)
                 wandb.init(
                     project=args.wandb_project, 
@@ -420,7 +433,6 @@ def main(cli_args: Optional[List[str]] = None):
         # Update the configuration object to use only the validated columns.
         data_config.numerical_features_cols = valid_numerical_features
         print(f"Final numerical features to use: {valid_numerical_features}")
-        print(f"Number of numerical features: {len(valid_numerical_features)}")
         
         data_stats = validate_data_integrity(interactions_df_full, item_info_df_full)
         
@@ -480,9 +492,7 @@ def main(cli_args: Optional[List[str]] = None):
         
         numerical_scaler = None
         scaler_path_obj = Path(data_config.scaler_path)
-        
-        print(f"Numerical features (final): {valid_numerical_features}")
-        print(f"Number of numerical features: {len(valid_numerical_features)}")
+    
         print(f"Normalization method: {data_config.numerical_normalization_method}")
         
         if data_config.numerical_normalization_method in ['standardization', 'min_max']:
@@ -545,7 +555,6 @@ def main(cli_args: Optional[List[str]] = None):
         
         print("Initializing full dataset for encoder fitting...")
         print("This step may take time as it initializes the vision and language models")
-        print(f"Using {len(valid_numerical_features)} validated numerical features")
         
         full_dataset_for_encoders = MultimodalDataset(
             interactions_df=interactions_df_full,
@@ -569,7 +578,6 @@ def main(cli_args: Optional[List[str]] = None):
         print("Encoder fitting results:")
         print(f"Users: {full_dataset_for_encoders.n_users:,}")
         print(f"Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"Numerical features used: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -610,7 +618,6 @@ def main(cli_args: Optional[List[str]] = None):
         step_start = time.time()
         
         print("Creating training dataset with negative sampling...")
-        print(f"Using {len(valid_numerical_features)} validated numerical features")
         
         train_dataset = MultimodalDataset(
             interactions_df=train_interactions_df,
@@ -682,7 +689,6 @@ def main(cli_args: Optional[List[str]] = None):
         print(f"Training samples: {len(train_dataset):,}")
         print(f"Validation samples: {len(val_dataset):,}")
         print(f"Negative sampling ratio: {data_config.negative_sampling_ratio}")
-        print(f"Numerical features: {len(valid_numerical_features)}")
         
         print_progress_footer(step_start)
 
@@ -717,7 +723,7 @@ def main(cli_args: Optional[List[str]] = None):
         print(f"Architecture: MultimodalRecommender")
         print(f"Users: {full_dataset_for_encoders.n_users:,}")
         print(f"Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"Numerical features: {num_numerical_features} (validated)")
+        print(f"Numerical features: {num_numerical_features}")
         print(f"Feature names: {valid_numerical_features}")
         print(f"Embedding dim: {model_config.embedding_dim}")
         print(f"Vision model: {model_config.vision_model}")
@@ -817,7 +823,7 @@ def main(cli_args: Optional[List[str]] = None):
         print("=" * 60)
 
         # Save the final, validated configuration used for this run.
-        print("Saving updated configuration with validated numerical features...")
+        print("Saving configuration...")
         updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
         config.to_yaml(str(updated_config_path))
         print(f"Updated configuration saved to {updated_config_path}")

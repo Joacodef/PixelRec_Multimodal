@@ -2,7 +2,7 @@
 
 model:
   # Basic model selection
-  vision_model: clip                # Options: clip, resnet, dino, convnext
+  vision_model: resnet                # Options: clip, resnet, dino, convnext
   language_model: sentence-bert     # Options: sentence-bert, mpnet, bert, roberta
   embedding_dim: 512
   
@@ -15,19 +15,19 @@ model:
   contrastive_temperature: 0.07     # Temperature for contrastive loss
   
   # Regularization
-  dropout_rate: 0.5                 # Dropout rate for regularization
+  dropout_rate: 0.4                 # Dropout rate for regularization
   
   # Attention mechanism (advanced)
   num_attention_heads: 8            # Number of attention heads
   attention_dropout: 0.2            # Dropout in attention layers
   
   # Fusion network architecture (advanced)
-  fusion_hidden_dims: [256, 128]  # Hidden layer dimensions
+  fusion_hidden_dims: [768, 512, 256]  # Hidden layer dimensions
   fusion_activation: relu           # Options: relu, gelu, tanh, leaky_relu, silu
   use_batch_norm: true              # Use batch normalization
   
   # Projection layers (advanced)
-  projection_hidden_dim: 512      # Hidden dim in projections (null = direct projection)
+  projection_hidden_dim: 1024      # Hidden dim in projections (null = direct projection)
   
   # Advanced architectural choices
   final_activation: sigmoid         # Options: sigmoid, tanh, none
@@ -35,9 +35,9 @@ model:
 
 training:
   # Basic training parameters
-  batch_size: 128
-  epochs: 100
-  learning_rate: 0.0001
+  batch_size: 256
+  epochs: 50
+  learning_rate: 0.00001
   weight_decay: 0.1                # L2 regularization
   patience: 5                      # Early stopping patience
   gradient_clip: 1.0               # Gradient clipping threshold
@@ -79,7 +79,7 @@ data:
   # Cache configuration
   cache_config:
     enabled: true
-    max_memory_items: 150
+    max_memory_items: 2500
     cache_directory: 'C:/Users/joaco/Documents/PixelRec_cache'
     use_disk: true
   
@@ -102,7 +102,7 @@ data:
   
   # Image augmentation settings
   image_augmentation:
-    enabled: false
+    enabled: true
     # Color augmentations
     brightness: 0.3        # Random brightness adjustment
     contrast: 0.3          # Random contrast adjustment  
