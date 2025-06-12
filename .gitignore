@@ -51,3 +51,6 @@ cache/*
 cache/*/*
 
 *_predictions.json
+
+configs/simple_config.yaml
+configs/advanced_config.yaml
