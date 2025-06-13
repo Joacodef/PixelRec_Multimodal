@@ -12,7 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import os
 from pathlib import Path
 import wandb
@@ -35,7 +35,8 @@ class Trainer:
         device: torch.device,
         checkpoint_dir: str = 'models/checkpoints',
         use_contrastive: bool = True,
-        model_config: Optional[object] = None
+        model_config: Optional[object] = None,
+        trial_info: Optional[Dict[str, Any]] = None  
     ):
         """
         Initializes the Trainer instance.
@@ -46,8 +47,10 @@ class Trainer:
             checkpoint_dir (str): The base directory to save model checkpoints and encoders.
             use_contrastive (bool): Flag to determine if contrastive loss should be used.
             model_config (Optional[object]): A configuration object containing model
-                                              details, used to create model-specific
-                                              checkpoint directories.
+                                            details, used to create model-specific
+                                            checkpoint directories.
+            trial_info (Optional[Dict[str, Any]]): Information about the current Optuna trial,
+                                                including trial number and parameters.
         """
         self.model = model
         self.device = device
@@ -82,6 +85,15 @@ class Trainer:
         self.patience_counter = 0
         self.optimizer = None
         self.scheduler = None
+        self.trial_info = trial_info
+        self.training_history = {
+            'train_losses': [],
+            'val_losses': [],
+            'train_metrics': [],
+            'val_metrics': [],
+            'best_metrics': {}
+        }
+
 
     def _create_optimizer(
         self,
@@ -215,18 +227,42 @@ class Trainer:
 
             # Executes one full pass over the training data.
             train_metrics = self._train_epoch(train_loader, optimizer, gradient_clip)
+            self.training_history['train_metrics'].append(train_metrics)
+            self.training_history['train_losses'].append(train_metrics['total_loss'])
+            
             train_losses.append(train_metrics['total_loss'])
 
             validation_performed_this_epoch = False
             # Executes one full pass over the validation data, if available.
             if val_loader is not None and len(val_loader) > 0:
                 val_metrics = self._validate_epoch(val_loader)
+
                 if 'total_loss' in val_metrics:
                     val_losses.append(val_metrics['total_loss'])
                     validation_performed_this_epoch = True
                 else:
                     val_losses.append(np.nan)
                     validation_performed_this_epoch = False
+
+                if validation_performed_this_epoch:
+                    self.training_history['val_metrics'].append(val_metrics)
+                    self.training_history['val_losses'].append(val_metrics['total_loss'])
+                    
+                    # Update best metrics
+                    for key, value in val_metrics.items():
+                        metric_name = f'val_{key}'
+                        if metric_name not in self.training_history['best_metrics']:
+                            self.training_history['best_metrics'][metric_name] = value
+                        else:
+                            # For losses, track minimum; for other metrics, track maximum
+                            if 'loss' in key:
+                                self.training_history['best_metrics'][metric_name] = min(
+                                    self.training_history['best_metrics'][metric_name], value
+                                )
+                            else:
+                                self.training_history['best_metrics'][metric_name] = max(
+                                    self.training_history['best_metrics'][metric_name], value
+                                )
             else:
                 print(f"Epoch {self.epoch+1}: Validation skipped (no validation data).")
                 val_metrics = {'total_loss': np.nan, 'bce_loss': np.nan, 'accuracy': 0.0, 'f1_score': 0.0, 'contrastive_loss': np.nan} 
@@ -550,24 +586,51 @@ class Trainer:
         print(f"Learning Rate: {current_lr:.6f}")
         print("-" * 50)
 
-    def save_checkpoint(self, filename: str, is_best: bool = False):
+    def save_checkpoint(self, filename: str, is_best: bool = False, additional_info: Optional[Dict[str, Any]] = None):
         """
         Saves the model and optimizer state to a checkpoint file.
 
         Args:
             filename (str): The name of the checkpoint file.
             is_best (bool): If True, indicates that this is the best model so far based on validation loss.
+            additional_info (Optional[Dict[str, Any]]): Additional information to save in the checkpoint.
         """
-        checkpoint = {'epoch': self.epoch, 'model_state_dict': self.model.state_dict(), 'best_val_loss': self.best_val_loss}
-        if self.optimizer: checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
-        if self.scheduler: checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        checkpoint = {
+            'epoch': self.epoch,
+            'model_state_dict': self.model.state_dict(),
+            'best_val_loss': self.best_val_loss,
+            'training_history': self.training_history,  
+            'best_metrics': self.get_all_best_metrics()  
+        }
+        
+        # Add trial information if available
+        if self.trial_info:
+            checkpoint['trial_info'] = self.trial_info
+        
+        # Add any additional info passed to the method
+        if additional_info:
+            checkpoint['additional_info'] = additional_info
+        
+        if self.optimizer:
+            checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
         path = self.model_checkpoint_dir / filename
         torch.save(checkpoint, path)
+        
         if is_best:
             print(f"Saved best model checkpoint to {path}")
+            # Also save as 'best_model.pth' for easy access
+            best_path = self.model_checkpoint_dir / 'best_model.pth'
+            torch.save(checkpoint, best_path)
             try:
-                if wandb.run is not None: wandb.save(str(path))
-            except Exception as e: print(f"Warning: Failed to save checkpoint to wandb: {e}")
+                if wandb.run is not None:
+                    wandb.save(str(path))
+                    wandb.save(str(best_path))
+            except Exception as e:
+                print(f"Warning: Failed to save checkpoint to wandb: {e}")
+
 
     def load_checkpoint(self, filename: str):
         """
@@ -577,12 +640,23 @@ class Trainer:
             filename (str): The name of the checkpoint file to load.
         """
         path = self.model_checkpoint_dir / filename
-        if not path.exists(): 
-            print(f"Warning: Checkpoint file not found at {path}"); return
+        if not path.exists():
+            print(f"Warning: Checkpoint file not found at {path}")
+            return
+        
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.epoch = checkpoint.get('epoch', 0)
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        
+        # Restore training history if available
+        if 'training_history' in checkpoint:
+            self.training_history = checkpoint['training_history']
+        
+        # Restore trial information if available
+        if 'trial_info' in checkpoint:
+            self.trial_info = checkpoint['trial_info']
+        
         if self.optimizer and 'optimizer_state_dict' in checkpoint:
             try:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -598,7 +672,10 @@ class Trainer:
                 print(f"Loaded scheduler state from checkpoint.")
             except Exception as e:
                 print(f"Warning: Could not load scheduler state: {e}. Scheduler may not resume correctly.")
+        
         print(f"Loaded checkpoint from {path} (epoch {self.epoch})")
+
+
 
     def get_learning_rate(self) -> float:
         """
@@ -628,3 +705,101 @@ class Trainer:
             Path: The Path object for the directory.
         """
         return self.encoders_dir
+
+    def get_best_metric(self, metric_name: str = 'val_loss') -> float:
+        """
+        Returns the best value achieved for a specified metric during training.
+        
+        Args:
+            metric_name: Name of the metric to retrieve. Common options:
+                        'val_loss', 'val_accuracy', 'val_f1_score',
+                        'train_loss', 'train_accuracy', 'train_f1_score'
+        
+        Returns:
+            The best value achieved for the metric. Returns inf for losses
+            (where lower is better) and -inf for metrics like accuracy
+            (where higher is better) if the metric was never recorded.
+        """
+        # Check if we have the metric in our best_metrics tracking
+        if metric_name in self.training_history['best_metrics']:
+            return self.training_history['best_metrics'][metric_name]
+        
+        # Fallback for backward compatibility
+        if metric_name == 'val_loss':
+            return self.best_val_loss
+        
+        # Try to compute from history
+        if metric_name.startswith('val_'):
+            metric_key = metric_name.replace('val_', '')
+            if self.training_history['val_metrics']:
+                values = [m.get(metric_key, float('inf')) for m in self.training_history['val_metrics']]
+                if values:
+                    # For loss metrics, lower is better
+                    if 'loss' in metric_name:
+                        return min(values)
+                    # For other metrics, higher is better
+                    else:
+                        return max(values)
+        
+        elif metric_name.startswith('train_'):
+            metric_key = metric_name.replace('train_', '')
+            if self.training_history['train_metrics']:
+                values = [m.get(metric_key, float('inf')) for m in self.training_history['train_metrics']]
+                if values:
+                    if 'loss' in metric_name:
+                        return min(values)
+                    else:
+                        return max(values)
+        
+        # Return appropriate default based on metric type
+        if 'loss' in metric_name:
+            return float('inf')
+        else:
+            return float('-inf')
+    
+    def get_all_best_metrics(self) -> Dict[str, float]:
+        """
+        Returns a dictionary of all best metrics achieved during training.
+        
+        Returns:
+            Dictionary mapping metric names to their best values.
+        """
+        metrics = {}
+        
+        # Get validation metrics
+        for metric_name in ['total_loss', 'bce_loss', 'contrastive_loss', 'accuracy', 'f1_score', 'precision', 'recall']:
+            val_metric = f'val_{metric_name}'
+            best_val = self.get_best_metric(val_metric)
+            if best_val != float('inf') and best_val != float('-inf'):
+                metrics[val_metric] = best_val
+        
+        # Get training metrics
+        for metric_name in ['total_loss', 'bce_loss', 'contrastive_loss', 'accuracy', 'f1_score']:
+            train_metric = f'train_{metric_name}'
+            best_train = self.get_best_metric(train_metric)
+            if best_train != float('inf') and best_train != float('-inf'):
+                metrics[train_metric] = best_train
+        
+        return metrics
+    
+    def get_trial_number(self) -> Optional[int]:
+        """
+        Returns the Optuna trial number if this trainer is being used in a trial.
+        
+        Returns:
+            Trial number or None if not part of an Optuna trial.
+        """
+        if self.trial_info and 'trial_number' in self.trial_info:
+            return self.trial_info['trial_number']
+        return None
+
+    def update_trial_info(self, info: Dict[str, Any]):
+        """
+        Updates the trial information during training.
+        
+        Args:
+            info: Dictionary with trial information to update.
+        """
+        if self.trial_info is None:
+            self.trial_info = {}
+        self.trial_info.update(info)

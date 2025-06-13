@@ -162,9 +162,6 @@ class ImageAugmentationConfig:
         if self.random_crop and (not (0 < self.crop_scale[0] <= self.crop_scale[1] <= 1.0)):
             raise ValueError("Invalid crop_scale. Must be [min, max] with 0 < min <= max <= 1.0.")
 
-# --- START OF REORDERING ---
-# These classes are now defined BEFORE DataConfig, which uses them.
-
 @dataclass
 class ImageValidationConfig:
     """Configures the validation rules for images during offline preprocessing."""
@@ -225,7 +222,213 @@ class OfflineImageCompressionConfig:
     # When resizing, the longest edge of the image will be scaled down to this size in pixels.
     resize_target_longest_edge: Optional[int] = 1024
 
-# --- END OF REORDERING ---
+
+# Add this dataclass to src/config.py after the RecommendationConfig dataclass
+
+@dataclass
+class HyperparameterSearchConfig:
+    """Configures Optuna hyperparameter optimization settings."""
+    # Number of Optuna trials to run
+    n_trials: int = 100
+    
+    # Name for the Optuna study (auto-generated if None)
+    study_name: Optional[str] = None
+    
+    # Database URL for distributed optimization (e.g., 'sqlite:///study.db')
+    # If None, the study is stored in memory
+    storage: Optional[str] = None
+    
+    # Direction of optimization: 'minimize' or 'maximize'
+    direction: str = 'minimize'
+    
+    # Metric to optimize (e.g., 'val_loss', 'ndcg@10', 'recall@5')
+    metric: str = 'val_loss'
+    
+    # Enable trial pruning based on intermediate values
+    enable_pruning: bool = True
+    
+    # Pruner type: 'median', 'percentile', 'hyperband'
+    pruner_type: str = 'median'
+    
+    # Number of parallel jobs (-1 for all available cores)
+    n_jobs: int = 1
+    
+    # Random seed for reproducibility
+    seed: int = 42
+    
+    # Directory to save trial results
+    output_dir: str = 'optuna_trials'
+    
+    # Search space definition for hyperparameters
+    search_space: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+        # Training hyperparameters
+        'learning_rate': {
+            'type': 'float',
+            'low': 1e-5,
+            'high': 1e-2,
+            'log': True
+        },
+        'batch_size': {
+            'type': 'categorical',
+            'choices': [16, 32, 64, 128]
+        },
+        'weight_decay': {
+            'type': 'float',
+            'low': 1e-6,
+            'high': 1e-2,
+            'log': True
+        },
+        'patience': {
+            'type': 'int',
+            'low': 2,
+            'high': 10
+        },
+        'gradient_clip': {
+            'type': 'float',
+            'low': 0.5,
+            'high': 5.0
+        },
+        
+        # Model hyperparameters
+        'embedding_dim': {
+            'type': 'categorical',
+            'choices': [64, 128, 256, 512]
+        },
+        'fusion_type': {
+            'type': 'categorical',
+            'choices': ['concatenate', 'attention', 'gated']
+        },
+        'dropout_rate': {
+            'type': 'float',
+            'low': 0.1,
+            'high': 0.5
+        },
+        'fusion_hidden_dims': {
+            'type': 'categorical',
+            'choices': [[256, 128], [512, 256], [128, 64], [256, 128, 64]]
+        },
+        
+        # Loss weights
+        'contrastive_weight': {
+            'type': 'float',
+            'low': 0.0,
+            'high': 1.0
+        },
+        'bce_weight': {
+            'type': 'float',
+            'low': 0.5,
+            'high': 1.0
+        },
+        
+        # Optimizer settings
+        'optimizer_type': {
+            'type': 'categorical',
+            'choices': ['adam', 'adamw', 'sgd']
+        },
+        'adam_beta1': {
+            'type': 'float',
+            'low': 0.8,
+            'high': 0.99,
+            'condition': 'optimizer_type in ["adam", "adamw"]'
+        },
+        'adam_beta2': {
+            'type': 'float',
+            'low': 0.9,
+            'high': 0.999,
+            'condition': 'optimizer_type in ["adam", "adamw"]'
+        },
+        
+        # Learning rate scheduler
+        'use_lr_scheduler': {
+            'type': 'categorical',
+            'choices': [True, False]
+        },
+        'lr_scheduler_type': {
+            'type': 'categorical',
+            'choices': ['reduce_on_plateau', 'cosine', 'step'],
+            'condition': 'use_lr_scheduler == True'
+        },
+        'lr_scheduler_factor': {
+            'type': 'float',
+            'low': 0.1,
+            'high': 0.9,
+            'condition': 'use_lr_scheduler == True'
+        }
+    })
+    
+    # Additional sampler configuration
+    sampler_config: Dict[str, Any] = field(default_factory=lambda: {
+        'type': 'TPESampler',  # Options: 'TPESampler', 'RandomSampler', 'CmaEsSampler'
+        'n_startup_trials': 10,
+        'n_ei_candidates': 24,
+        'multivariate': False,
+        'group': False,
+        'warn_independent_sampling': True
+    })
+    
+    # Pruner configuration
+    pruner_config: Dict[str, Any] = field(default_factory=lambda: {
+        'n_startup_trials': 5,
+        'n_warmup_steps': 0,
+        'interval_steps': 1,
+        # For MedianPruner
+        'percentile': 50.0,
+        # For HyperbandPruner
+        'min_resource': 1,
+        'max_resource': 'auto',
+        'reduction_factor': 3
+    })
+    
+    # Whether to save intermediate model checkpoints for each trial
+    save_trial_checkpoints: bool = False
+    
+    # Whether to delete unsuccessful trial data to save space
+    delete_unsuccessful_trials: bool = True
+    
+    # Minimum improvement required to update best trial
+    min_improvement_threshold: float = 1e-4
+    
+    # Resume from previous study if it exists
+    resume_if_exists: bool = True
+    
+    # Visualization settings
+    create_visualizations: bool = True
+    visualization_formats: List[str] = field(default_factory=lambda: ['html', 'png'])
+    
+    def get_parameter_config(self, param_name: str) -> Dict[str, Any]:
+        """
+        Get the configuration for a specific parameter.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            Dictionary with parameter configuration
+        """
+        return self.search_space.get(param_name, {})
+    
+    def validate(self):
+        """Validate the hyperparameter search configuration."""
+        valid_directions = ['minimize', 'maximize']
+        if self.direction not in valid_directions:
+            raise ValueError(f"direction must be one of {valid_directions}")
+        
+        valid_pruner_types = ['median', 'percentile', 'hyperband']
+        if self.pruner_type not in valid_pruner_types:
+            raise ValueError(f"pruner_type must be one of {valid_pruner_types}")
+        
+        # Validate search space
+        for param_name, param_config in self.search_space.items():
+            if 'type' not in param_config:
+                raise ValueError(f"Parameter {param_name} must have a 'type' field")
+            
+            param_type = param_config['type']
+            if param_type == 'float' or param_type == 'int':
+                if 'low' not in param_config or 'high' not in param_config:
+                    raise ValueError(f"Parameter {param_name} of type {param_type} must have 'low' and 'high' fields")
+            elif param_type == 'categorical':
+                if 'choices' not in param_config:
+                    raise ValueError(f"Parameter {param_name} of type categorical must have 'choices' field")
 
 @dataclass
 class DataConfig:
@@ -313,6 +516,7 @@ class Config:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: DataConfig = field(default_factory=DataConfig)
     recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
+    hyperparameter_search: HyperparameterSearchConfig = field(default_factory=HyperparameterSearchConfig)
     # The base directory where model checkpoints and encoders are saved.
     checkpoint_dir: str = 'models/checkpoints'
     # The base directory where all results, such as logs and metrics, are saved.
@@ -439,12 +643,14 @@ class Config:
         training_config = _create_with_defaults(TrainingConfig, yaml_config.get('training'))
         data_config = _create_with_defaults(DataConfig, yaml_config.get('data'))
         rec_config = _create_with_defaults(RecommendationConfig, yaml_config.get('recommendation'))
+        hyperparam_config = _create_with_defaults(HyperparameterSearchConfig, yaml_config.get('hyperparameter_search'))
 
         return cls(
             model=model_config,
             training=training_config,
             data=data_config,
             recommendation=rec_config,
+            hyperparameter_search=hyperparam_config,
             checkpoint_dir=yaml_config.get('checkpoint_dir', 'models/checkpoints'),
             results_dir=yaml_config.get('results_dir', 'results')
         )

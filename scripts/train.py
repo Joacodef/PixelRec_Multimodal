@@ -1,231 +1,93 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Main training script for the multimodal recommender system.
+Training script for the multimodal recommender system.
 
-This script orchestrates the entire model training process, including:
-- Loading and validating configurations.
-- Initializing logging with Weights & Biases.
-- Setting up the computation device (CPU or GPU).
-- Loading datasets and performing data integrity checks.
-- Handling numerical feature scaling.
-- Initializing the model, optimizer, and learning rate scheduler.
-- Running the training and validation loops.
-- Saving model checkpoints and training metadata.
+This script provides both a command-line interface for training models and
+a programmatic interface for hyperparameter optimization. The main() function
+preserves backward compatibility while run_training() enables integration
+with tools like Optuna.
 """
+
 import argparse
-import sys
-from pathlib import Path
-import torch
-from torch.utils.data import DataLoader
-import pandas as pd
-import pickle
-import numpy as np
 import dataclasses
-import wandb
+import json
 import os
+import pickle
+import sys
 import time
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple
 
-# Add the project's root directory to the Python path to enable imports from the 'src' folder.
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer
+from torch.utils.data import DataLoader
 
-from src.config import Config, TextAugmentationConfig
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.config import Config, MODEL_CONFIGS
+from src.data.simple_cache import SimpleFeatureCache
 from src.data.dataset import MultimodalDataset
 from src.models.multimodal import MultimodalRecommender
 from src.training.trainer import Trainer
-from src.data.processors import NumericalProcessor
 
-# Use the feature cache system.
-try:
-    from src.data.simple_cache import SimpleFeatureCache
-except ImportError:
-    # If the main cache class cannot be imported, create a minimal fallback class.
-    # This ensures the script can run with a basic in-memory cache if the primary implementation is unavailable.
-    class SimpleFeatureCache:
-        def __init__(self, *args, **kwargs):
-            self.cache = {}
-            print("Using fallback SimpleFeatureCache")
-        
-        def get(self, item_id):
-            return self.cache.get(item_id)
-        
-        def set(self, item_id, features):
-            self.cache[item_id] = features
-        
-        def print_stats(self):
-            print(f"Simple cache: {len(self.cache)} items")
+# Suppress specific warnings from transformers library
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 
 
-def print_progress_header(step_num: int, title: str, total_steps: int = 13):
+def print_progress_header(step: int, title: str, total_steps: int = 13):
     """
-    Prints a standardized header for a step in the training process.
+    Prints a formatted progress header for tracking the training pipeline steps.
 
     Args:
-        step_num (int): The current step number.
-        title (str): The title of the current step.
-        total_steps (int): The total number of steps in the process.
+        step: The current step number.
+        title: A descriptive title for the current step.
+        total_steps: The total number of steps in the pipeline.
     """
     print(f"\n{'='*60}")
-    print(f"STEP {step_num}/{total_steps}: {title.upper()}")
+    print(f"STEP {step}/{total_steps}: {title}")
     print(f"{'='*60}")
-    print(f"Time: {datetime.now().strftime('%H:%M:%S')}")
 
 
-def print_progress_footer(start_time: float, additional_info: str = ""):
+def print_progress_footer(start_time: float):
     """
-    Prints a standardized footer for a completed step, including its duration.
+    Prints a footer with the elapsed time for a step.
 
     Args:
-        start_time (float): The timestamp (from time.time()) when the step began.
-        additional_info (str, optional): Extra information to display. Defaults to "".
+        start_time: The timestamp when the step started.
     """
     elapsed = time.time() - start_time
-    print(f"Completed in {elapsed:.2f}s")
-    if additional_info:
-        print(f"  {additional_info}")
-    print("-" * 60)
+    print(f"✓ Completed in {elapsed:.2f}s")
 
 
 def print_system_info():
-    """Prints key information about the system and libraries being used."""
-    print("SYSTEM INFORMATION")
+    """Displays system information relevant to the training environment."""
+    print("\nSYSTEM INFO")
     print("-" * 30)
-    print(f"PyTorch version: {torch.__version__}")
+    print(f"Python: {sys.version.split()[0]}")
+    print(f"PyTorch: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        print(f"CUDA device count: {torch.cuda.device_count()}")
-        print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-    print(f"CPU count: {os.cpu_count()}")
-
-
-def validate_numerical_features(item_info_df: pd.DataFrame, config_numerical_cols: List[str]) -> List[str]:
-    """
-    Validate and filter numerical feature columns to ensure they exist in the data.
-
-    Args:
-        item_info_df (pd.DataFrame): DataFrame containing item information.
-        config_numerical_cols (List[str]): List of numerical columns from config.
-
-    Returns:
-        List[str]: A list of valid numerical columns that exist in the DataFrame.
-    """
-    available_cols = list(item_info_df.columns)
-    valid_cols = []
-    missing_cols = []
-    
-    for col in config_numerical_cols:
-        if col in available_cols:
-            valid_cols.append(col)
-        else:
-            missing_cols.append(col)
-    
-    if missing_cols:
-        print(f"Warning: The following numerical columns from config are missing in data:")
-        for col in missing_cols:
-            print(f"    - {col}")
-        print(f"Available columns in data: {available_cols}")
-        print(f"Using valid columns: {valid_cols}")
-    
-    if not valid_cols:
-        print(f"Error: No valid numerical columns found!")
-        print(f"Configured columns: {config_numerical_cols}")
-        print(f"Available columns: {available_cols}")
-        raise ValueError("No valid numerical feature columns found in the data")
-    
-    return valid_cols
-
-
-def fit_numerical_scaler(df, numerical_cols, method, scaler_path):
-    """
-    Fits a numerical scaler to the provided data and saves it to a file.
-
-    Args:
-        df (pd.DataFrame): The DataFrame containing the numerical data.
-        numerical_cols (List[str]): A list of column names to use for fitting the scaler.
-        method (str): The scaling method to use (e.g., 'standardization').
-        scaler_path (Path): The file path where the fitted scaler will be saved.
-
-    Returns:
-        A fitted scaler object from scikit-learn.
-    """
-    print(f"Fitting {method} scaler on {len(df)} samples...")
-    processor = NumericalProcessor()
-    processor.fit_scaler(df, numerical_cols, method)
-    processor.save_scaler(scaler_path)
-    print(f"Scaler saved to {scaler_path}")
-    return processor.scaler
-
-
-def load_numerical_scaler(scaler_path):
-    """
-    Loads a pre-fitted numerical scaler from a file.
-
-    Args:
-        scaler_path (Path): The file path of the saved scaler.
-
-    Returns:
-        The loaded scikit-learn scaler object.
-    """
-    print(f"Loading scaler from {scaler_path}")
-    processor = NumericalProcessor()
-    processor.load_scaler(scaler_path)
-    return processor.scaler
-
-
-def validate_data_integrity(interactions_df, item_info_df):
-    """
-    Performs integrity checks on the interaction and item dataframes and prints a summary.
-
-    Checks for shape, unique counts, and the overlap of items between the two dataframes.
-
-    Args:
-        interactions_df (pd.DataFrame): The DataFrame of user-item interactions.
-        item_info_df (pd.DataFrame): The DataFrame of item metadata.
-
-    Returns:
-        dict: A dictionary containing key statistics about the data.
-    """
-    print("DATA INTEGRITY CHECK")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CPU cores: {os.cpu_count()}")
     print("-" * 30)
-    
-    # Check for missing values and dataframe shapes.
-    print(f"Interactions shape: {interactions_df.shape}")
-    print(f"Item info shape: {item_info_df.shape}")
-    
-    # Check unique counts of users and items.
-    n_unique_users = interactions_df['user_id'].nunique()
-    n_unique_items_interactions = interactions_df['item_id'].nunique()
-    n_unique_items_info = item_info_df['item_id'].nunique()
-    
-    print(f"Unique users: {n_unique_users:,}")
-    print(f"Unique items in interactions: {n_unique_items_interactions:,}")
-    print(f"Unique items in item_info: {n_unique_items_info:,}")
-    
-    # Check for overlap between items in metadata and items in interaction data.
-    items_with_info = set(item_info_df['item_id'].astype(str))
-    items_in_interactions = set(interactions_df['item_id'].astype(str))
-    overlap = len(items_with_info & items_in_interactions)
-    
-    print(f"Item overlap: {overlap:,} ({100*overlap/n_unique_items_interactions:.1f}%)")
-    
-    if overlap < n_unique_items_interactions * 0.9:
-        print("Warning: Less than 90% of interaction items have item info")
-    
-    return {
-        'n_users': n_unique_users,
-        'n_items_interactions': n_unique_items_interactions,
-        'n_items_info': n_unique_items_info,
-        'overlap': overlap
-    }
 
 
-def create_data_loaders_with_progress(train_dataset, val_dataset, training_config):
+def create_dataloaders(
+    train_dataset: 'Dataset',
+    val_dataset: 'Dataset',
+    training_config: Any
+) -> Tuple[DataLoader, Optional[DataLoader]]:
     """
-    Creates and configures DataLoader instances for training and validation.
+    Creates optimized DataLoader instances for training and validation.
 
-    Optimizes the number of workers and sets other performance-related parameters.
+    This function configures DataLoaders with optimal settings based on system
+    capabilities and the provided training configuration.
 
     Args:
         train_dataset (Dataset): The training dataset.
@@ -286,6 +148,438 @@ def create_data_loaders_with_progress(train_dataset, val_dataset, training_confi
     return train_loader, val_loader
 
 
+def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Execute the training pipeline and return results.
+    
+    This function encapsulates the entire training logic, making it reusable
+    for both standalone training and hyperparameter optimization.
+    
+    Args:
+        config: Configuration object with all settings
+        args: Command line arguments namespace
+        
+    Returns:
+        Dictionary containing training results:
+        - 'best_val_loss': Best validation loss achieved
+        - 'final_val_loss': Final validation loss
+        - 'best_train_loss': Best training loss achieved  
+        - 'final_train_loss': Final training loss
+        - 'epochs_completed': Number of epochs completed
+        - 'training_time': Total training time in seconds
+        - 'model_path': Path to best model checkpoint
+        - 'train_losses': List of training losses per epoch
+        - 'val_losses': List of validation losses per epoch
+        - 'metadata': Full training metadata dictionary
+    """
+    # Extract sub-configurations
+    data_config = config.data
+    model_config = config.model
+    training_config = config.training
+    
+    # Store original numerical features before validation
+    original_numerical_features_from_config = data_config.numerical_features_cols.copy()
+    
+    # STEP 3: Initialize Weights & Biases (if enabled)
+    print_progress_header(3, "Initializing Weights & Biases", total_steps=13)
+    step_start = time.time()
+    
+    if args.use_wandb:
+        try:
+            import wandb
+            run_name = args.wandb_run_name
+            if not run_name:
+                models_used = f"{model_config.vision_model}_{model_config.language_model}"
+                dataset_name = Path(data_config.train_data_path).parent.name
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                run_name = f"{models_used}_{dataset_name}_{timestamp}"
+            
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=run_name,
+                config={
+                    'model_config': dataclasses.asdict(model_config),
+                    'training_config': dataclasses.asdict(training_config),
+                    'data_config': dataclasses.asdict(data_config)
+                }
+            )
+            print(f"W&B run initialized: {wandb.run.name}")
+        except ImportError:
+            print("Warning: wandb not installed. Proceeding without W&B logging.")
+            args.use_wandb = False
+        except Exception as e:
+            print(f"Warning: Failed to initialize W&B: {e}")
+            args.use_wandb = False
+    else:
+        print("W&B logging disabled")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 4: Set up device
+    print_progress_header(4, "Setting up Device", total_steps=13)
+    step_start = time.time()
+    
+    device = torch.device(args.device)
+    print(f"Using device: {device}")
+    if device.type == 'cuda':
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 5: Load data
+    print_progress_header(5, "Loading Data", total_steps=13)
+    step_start = time.time()
+    
+    print(f"Loading training data from: {data_config.train_data_path}")
+    train_data = pd.read_csv(data_config.train_data_path)
+    print(f"Training interactions: {len(train_data):,}")
+    
+    print(f"Loading validation data from: {data_config.val_data_path}")
+    val_data = pd.read_csv(data_config.val_data_path)
+    print(f"Validation interactions: {len(val_data):,}")
+    
+    print(f"Loading item information from: {data_config.processed_item_info_path}")
+    item_info = pd.read_csv(data_config.processed_item_info_path)
+    print(f"Total items: {len(item_info):,}")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 6: Validate numerical features
+    print_progress_header(6, "Validating Numerical Features", total_steps=13)
+    step_start = time.time()
+    
+    print(f"Configured numerical features: {data_config.numerical_features_cols}")
+    valid_numerical_features = [col for col in data_config.numerical_features_cols if col in item_info.columns]
+    missing_features = [col for col in data_config.numerical_features_cols if col not in item_info.columns]
+    
+    if missing_features:
+        print(f"⚠️  Warning: The following features are missing from item_info: {missing_features}")
+        print(f"   Continuing with available features: {valid_numerical_features}")
+    else:
+        print(f"✓ All configured numerical features are present")
+    
+    data_config.numerical_features_cols = valid_numerical_features
+    num_numerical_features = len(valid_numerical_features) if valid_numerical_features else 0
+    print(f"Number of numerical features to use: {num_numerical_features}")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 7: Initialize cache
+    print_progress_header(7, "Initializing Feature Cache", total_steps=13)
+    step_start = time.time()
+    
+    cache_key = f"{model_config.vision_model}_{model_config.language_model}"
+    
+    if data_config.cache_config.enabled:
+        if data_config.cache_config.cache_directory:
+            cache_base_dir = Path(data_config.cache_config.cache_directory)
+        else:
+            cache_base_dir = Path(config.checkpoint_dir).parent / 'cache'
+        
+        cache_dir = cache_base_dir / cache_key
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"Cache enabled: {cache_dir}")
+        print(f"Max memory items: {data_config.cache_config.max_memory_items}")
+        print(f"Persist to disk: {data_config.cache_config.use_disk}")
+    else:
+        cache_dir = None
+        print("Feature caching disabled")
+    
+    cache = SimpleFeatureCache(
+        enabled=data_config.cache_config.enabled,
+        cache_dir=str(cache_dir) if cache_dir else None,
+        max_memory_items=data_config.cache_config.max_memory_items,
+        persist_to_disk=data_config.cache_config.use_disk
+    )
+    
+    if cache.enabled and cache_dir:
+        cache.print_stats()
+    
+    print_progress_footer(step_start)
+    
+    # STEP 8: Fit or load scaler
+    print_progress_header(8, "Preparing Numerical Scaler", total_steps=13)
+    step_start = time.time()
+    
+    all_interactions = pd.read_csv(data_config.processed_interactions_path)
+    
+    full_dataset_for_encoders = MultimodalDataset(
+        interactions_df=all_interactions,
+        item_info_df=item_info,
+        image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
+        model_config=model_config,
+        device=device,
+        numerical_scaler=None,
+        numerical_feature_columns=valid_numerical_features,
+        cache=None,
+        is_training=False,
+        augment_text=False,
+        augment_image=False
+    )
+    
+    scaler_path = Path(data_config.scaler_path)
+    if scaler_path.exists():
+        print(f"Loading existing scaler from: {scaler_path}")
+        full_dataset_for_encoders.load_scaler(str(scaler_path))
+    else:
+        print(f"Fitting new scaler using method: {data_config.numerical_normalization_method}")
+        full_dataset_for_encoders.fit_numerical_scaler(method=data_config.numerical_normalization_method)
+        scaler_path.parent.mkdir(parents=True, exist_ok=True)
+        full_dataset_for_encoders.save_scaler(str(scaler_path))
+        print(f"Scaler saved to: {scaler_path}")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 9: Create datasets
+    print_progress_header(9, "Creating Datasets", total_steps=13)
+    step_start = time.time()
+    
+    print("Creating training dataset...")
+    train_dataset = MultimodalDataset(
+        interactions_df=train_data,
+        item_info_df=item_info,
+        image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
+        model_config=model_config,
+        device=device,
+        encoder_mappings={
+            'user_encoder': full_dataset_for_encoders.user_encoder,
+            'item_encoder': full_dataset_for_encoders.item_encoder
+        },
+        numerical_scaler=full_dataset_for_encoders.numerical_scaler,
+        numerical_feature_columns=valid_numerical_features,
+        text_column='item_name',
+        categorical_feature_columns=data_config.categorical_features_cols,
+        negative_sampling_ratio=data_config.negative_sampling_ratio,
+        cache=cache,
+        is_training=True,
+        augment_text=data_config.text_augmentation.enabled,
+        augment_image=data_config.image_augmentation.enabled,
+        augmentation_config={
+            'text': data_config.text_augmentation,
+            'image': data_config.image_augmentation
+        }
+    )
+    
+    print("Creating validation dataset...")
+    val_dataset = MultimodalDataset(
+        interactions_df=val_data,
+        item_info_df=item_info,
+        image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
+        model_config=model_config,
+        device=device,
+        encoder_mappings={
+            'user_encoder': full_dataset_for_encoders.user_encoder,
+            'item_encoder': full_dataset_for_encoders.item_encoder
+        },
+        numerical_scaler=full_dataset_for_encoders.numerical_scaler,
+        numerical_feature_columns=valid_numerical_features,
+        text_column='item_name',
+        categorical_feature_columns=data_config.categorical_features_cols,
+        negative_sampling_ratio=data_config.negative_sampling_ratio,
+        cache=cache,
+        is_training=False,
+        augment_text=False,
+        augment_image=False
+    )
+    
+    data_stats = {
+        'train_interactions': len(train_data),
+        'val_interactions': len(val_data),
+        'total_users': full_dataset_for_encoders.n_users,
+        'total_items': full_dataset_for_encoders.n_items,
+        'total_tags': full_dataset_for_encoders.n_tags,
+        'numerical_features': num_numerical_features
+    }
+    
+    print(f"\nDataset statistics:")
+    for key, value in data_stats.items():
+        print(f"  {key}: {value:,}")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 10: Create dataloaders
+    print_progress_header(10, "Creating DataLoaders", total_steps=13)
+    step_start = time.time()
+    
+    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, training_config)
+    
+    print_progress_footer(step_start)
+    
+    # STEP 11: Initialize model
+    print_progress_header(11, "Initializing Model", total_steps=13)
+    step_start = time.time()
+    
+    print(f"Creating MultimodalRecommender with:")
+    print(f"  Vision model: {model_config.vision_model}")
+    print(f"  Language model: {model_config.language_model}")
+    print(f"  Embedding dim: {model_config.embedding_dim}")
+    print(f"  Users: {full_dataset_for_encoders.n_users:,}")
+    print(f"  Items: {full_dataset_for_encoders.n_items:,}")
+    print(f"  Tags: {full_dataset_for_encoders.n_tags:,}")
+    print(f"  Numerical features: {num_numerical_features}")
+    
+    model = MultimodalRecommender(
+        config=model_config,
+        n_users=full_dataset_for_encoders.n_users,
+        n_items=full_dataset_for_encoders.n_items,
+        n_tags=full_dataset_for_encoders.n_tags,
+        num_numerical_features=num_numerical_features
+    ).to(device)
+    
+    print_progress_footer(step_start)
+    
+    # STEP 12: Initialize trainer
+    print_progress_header(12, "Initializing Trainer", total_steps=13)
+    step_start = time.time()
+    
+    trainer = Trainer(
+        model=model,
+        device=device,
+        checkpoint_dir=config.checkpoint_dir,
+        use_contrastive=model_config.use_contrastive,
+        model_config=model_config
+    )
+    trainer.criterion.contrastive_weight = training_config.contrastive_weight
+    trainer.criterion.bce_weight = training_config.bce_weight
+    
+    print("Training configuration:")
+    print(f"Optimizer: {training_config.optimizer_type}")
+    print(f"Learning rate: {training_config.learning_rate}")
+    print(f"Weight decay: {training_config.weight_decay}")
+    print(f"Batch size: {training_config.batch_size}")
+    print(f"Epochs: {training_config.epochs}")
+    print(f"Patience: {training_config.patience}")
+    print(f"Gradient clip: {training_config.gradient_clip}")
+    print(f"Contrastive weight: {training_config.contrastive_weight}")
+    print(f"BCE weight: {training_config.bce_weight}")
+    
+    if args.resume:
+        print(f"\nResuming from checkpoint: {args.resume}")
+        trainer.load_checkpoint(args.resume)
+    
+    # Save encoders
+    print("Saving encoders to shared directory...")
+    encoders_dir = trainer.get_encoders_dir()
+    
+    with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
+        pickle.dump(full_dataset_for_encoders.user_encoder, f)
+    with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
+        pickle.dump(full_dataset_for_encoders.item_encoder, f)
+    print(f"Encoders saved to {encoders_dir}")
+    
+    print(f"\nStarting training...")
+    print("=" * 60)
+    
+    # Save configuration
+    print("Saving configuration...")
+    updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
+    config.to_yaml(str(updated_config_path))
+    print(f"Updated configuration saved to {updated_config_path}")
+    
+    print_progress_footer(step_start)
+    
+    # STEP 13: Train
+    print_progress_header(13, "Starting Training", total_steps=13)
+    step_start = time.time()
+    
+    training_params = {
+        'train_loader': train_loader,
+        'val_loader': val_loader,
+        'epochs': training_config.epochs,
+        'lr': training_config.learning_rate,
+        'weight_decay': training_config.weight_decay,
+        'patience': training_config.patience,
+        'gradient_clip': training_config.gradient_clip,
+        'optimizer_type': training_config.optimizer_type,
+        'adam_beta1': training_config.adam_beta1,
+        'adam_beta2': training_config.adam_beta2,
+        'adam_eps': training_config.adam_eps,
+        'use_lr_scheduler': training_config.use_lr_scheduler,
+        'lr_scheduler_type': training_config.lr_scheduler_type,
+        'lr_scheduler_patience': training_config.lr_scheduler_patience,
+        'lr_scheduler_factor': training_config.lr_scheduler_factor,
+        'lr_scheduler_min_lr': training_config.lr_scheduler_min_lr
+    }
+    
+    training_start_time = time.time()
+    train_losses, val_losses = trainer.train(**training_params)
+    training_time = time.time() - training_start_time
+    
+    # Prepare results
+    results = {
+        'best_val_loss': min(val_losses) if val_losses else float('inf'),
+        'final_val_loss': val_losses[-1] if val_losses else float('inf'),
+        'best_train_loss': min(train_losses) if train_losses else float('inf'),
+        'final_train_loss': train_losses[-1] if train_losses else float('inf'),
+        'epochs_completed': len(train_losses) if train_losses else 0,
+        'training_time': training_time,
+        'model_path': str(trainer.get_model_checkpoint_path('best_model.pth')),
+        'train_losses': train_losses,
+        'val_losses': val_losses
+    }
+    
+    # Save metadata
+    training_metadata = {
+        'training_completed': True,
+        'completion_time': datetime.now().isoformat(),
+        'training_duration_hours': training_time / 3600,
+        'epochs_completed': results['epochs_completed'],
+        'final_train_loss': results['final_train_loss'],
+        'final_val_loss': results['final_val_loss'],
+        'best_train_loss': results['best_train_loss'],
+        'best_val_loss': results['best_val_loss'],
+        'model_config': dataclasses.asdict(model_config),
+        'training_config': dataclasses.asdict(training_config),
+        'data_stats': data_stats,
+        'model_params': {
+            'total_parameters': total_params,
+            'trainable_parameters': trainable_params,
+            'frozen_parameters': total_params - trainable_params
+        },
+        'device_info': {
+            'device': str(device),
+            'cuda_available': torch.cuda.is_available(),
+            'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        },
+        'numerical_features_validation': {
+            'original_config_features': original_numerical_features_from_config,
+            'validated_features': valid_numerical_features,
+            'num_features_used': num_numerical_features,
+            'missing_features': missing_features
+        }
+    }
+    
+    metadata_path = Path(config.results_dir) / 'training_metadata.json'
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(metadata_path, 'w') as f:
+        json.dump(training_metadata, f, indent=2, default=str)
+    print(f"Training metadata saved to {metadata_path}")
+    
+    # Save final configuration
+    config_save_path = Path(config.results_dir) / 'training_run_config.yaml'
+    config.to_yaml(str(config_save_path))
+    print(f"Configuration saved to {config_save_path}")
+    
+    if args.use_wandb and 'wandb' in sys.modules:
+        try:
+            wandb = sys.modules['wandb']
+            wandb.save(str(config_save_path))
+            wandb.save(str(metadata_path))
+            wandb.save(str(updated_config_path))
+            print("Files saved to wandb")
+        except Exception as e:
+            print(f"Failed to save files to wandb: {e}")
+    
+    results['metadata'] = training_metadata
+    
+    print_progress_footer(step_start)
+    
+    return results
+
+
 def main(cli_args: Optional[List[str]] = None):
     """
     Main function to execute the full training pipeline for the multimodal recommender.
@@ -338,9 +632,6 @@ def main(cli_args: Optional[List[str]] = None):
         data_config = config.data
         model_config = config.model
         training_config = config.training
-
-        # Store the original list of numerical features before validation to keep a record.
-        original_numerical_features_from_config = data_config.numerical_features_cols.copy()
         
         print(f"Configuration loaded successfully:")
         print(f"Vision model: {model_config.vision_model}")
@@ -353,679 +644,61 @@ def main(cli_args: Optional[List[str]] = None):
         
         print_progress_footer(step_start)
 
-        # STEP 2: Initialize Weights & Biases for experiment tracking if enabled.
-        print_progress_header(2, "Initializing Weights & Biases")
+        # STEP 2: Validate configuration
+        print_progress_header(2, "Validating Configuration")
         step_start = time.time()
         
-        if args.use_wandb:
-            try:
-                 # Determine the run name automatically if not provided by the user.
-                run_name = args.wandb_run_name
-                if not run_name:
-                    # Construct <models_used> from the model configuration.
-                    models_used = f"{model_config.vision_model}_{model_config.language_model}"
-                    
-                    # Construct <dataset_used> from the training data path.
-                    # This takes the name of the directory containing 'train.csv'.
-                    dataset_used = Path(data_config.train_data_path).parent.name
-                    
-                    run_name = f"{models_used}_{dataset_used}"
-                    print(f"Wandb run name not provided, automatically generating: {run_name}")
-
-                config_dict_for_wandb = dataclasses.asdict(config)
-                wandb.init(
-                    project=args.wandb_project, 
-                    entity=args.wandb_entity, 
-                    name=args.wandb_run_name, 
-                    config=config_dict_for_wandb, 
-                    reinit=True
-                )
-                print("Weights & Biases logging enabled")
-                wandb.define_metric("epoch")
-                wandb.define_metric("train/*", step_metric="epoch")
-                wandb.define_metric("val/*", step_metric="epoch")
-                wandb.define_metric("train/learning_rate", step_metric="epoch")
-            except Exception as e:
-                print(f"Failed to initialize wandb: {e}")
-                print("Proceeding without wandb logging")
-                args.use_wandb = False
-        else:
-            print("Weights & Biases logging disabled")
+        # Ensure required directories exist
+        Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(config.results_dir).mkdir(parents=True, exist_ok=True)
         
+        # Validate model configurations
+        if model_config.vision_model not in MODEL_CONFIGS['vision']:
+            raise ValueError(f"Unknown vision model: {model_config.vision_model}")
+        if model_config.language_model not in MODEL_CONFIGS['language']:
+            raise ValueError(f"Unknown language model: {model_config.language_model}")
+        
+        print("✓ Configuration validated")
         print_progress_footer(step_start)
-
-        # STEP 3: Set up the computation device (CPU or GPU).
-        print_progress_header(3, "Setting Up Device")
-        step_start = time.time()
         
-        device = torch.device(args.device)
-        print(f"Using device: {device}")
+        # Run the training pipeline
+        results = run_training(config, args)
         
-        if device.type == 'cuda':
-            print(f"GPU: {torch.cuda.get_device_name(0)}")
-            print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-            # Clear any residual memory in the GPU cache.
-            torch.cuda.empty_cache()
-            print("GPU cache cleared")
-        
-        print_progress_footer(step_start)
-
-        # STEP 4: Load processed data and validate numerical features against the data.
-        print_progress_header(4, "Loading and Validating Data")
-        step_start = time.time()
-        
-        print(f"Loading data files:")
-        print(f"Item info: {data_config.processed_item_info_path}")
-        print(f"Interactions: {data_config.processed_interactions_path}")
-        
-        item_info_df_full = pd.read_csv(Path(data_config.processed_item_info_path).resolve())
-        interactions_df_full = pd.read_csv(Path(data_config.processed_interactions_path).resolve())
-        
-        print(f"\nVALIDATING NUMERICAL FEATURES:")
-        print(f"   Original config numerical features: {data_config.numerical_features_cols}")
-        
-        # Ensure that the numerical columns specified in the config exist in the loaded data.
-        valid_numerical_features = validate_numerical_features(
-            item_info_df_full, 
-            data_config.numerical_features_cols
-        )
-        
-        # Update the configuration object to use only the validated columns.
-        data_config.numerical_features_cols = valid_numerical_features
-        print(f"Final numerical features to use: {valid_numerical_features}")
-        
-        data_stats = validate_data_integrity(interactions_df_full, item_info_df_full)
-        
-        print_progress_footer(step_start, f"Loaded {len(item_info_df_full):,} items, {len(interactions_df_full):,} interactions")
-
-        # STEP 5: Initialize the feature caching system.
-        print_progress_header(5, "Initializing Feature Cache")
-        step_start = time.time()
-        
-        simple_cache_instance = None
-        cache_config = data_config.cache_config
-        effective_cache_dir = None
-        
-        if cache_config.enabled:
-            # Automatically generate a model-specific subdirectory for the cache to avoid conflicts.
-            cache_name = f"{model_config.vision_model}_{model_config.language_model}"
-            effective_cache_dir = f"{cache_config.cache_directory}/{cache_name}"
-            
-            print("Cache configuration:")
-            print(f"Strategy: Memory-based caching")
-            print(f"Max memory items: {cache_config.max_memory_items:,}")
-            print(f"Cache directory: {effective_cache_dir}")
-            print(f"Use disk: {cache_config.use_disk}")
-            print(f"Model combination: {model_config.vision_model} + {model_config.language_model}")
-            
-            # Create the cache directory on disk if it doesn't exist.
-            cache_dir = Path(effective_cache_dir)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Check for existing cache files and report statistics.
-            existing_files = list(cache_dir.glob("*.pt"))
-            if existing_files:
-                total_size = sum(f.stat().st_size for f in existing_files) / (1024*1024)
-                print(f"Found existing cache: {len(existing_files):,} files, {total_size:.1f} MB")
-            else:
-                print(f"Cache directory is empty - features will be computed during training")
-            
-            base_cache_directory_from_config = cache_config.cache_directory
-
-            simple_cache_instance = SimpleFeatureCache(
-                vision_model=model_config.vision_model,         
-                language_model=model_config.language_model,     
-                base_cache_dir=base_cache_directory_from_config, 
-                max_memory_items=cache_config.max_memory_items,
-                use_disk=cache_config.use_disk
-            )
-
-            simple_cache_instance.print_stats()
-        else:
-            print("Feature caching is disabled")
-        
-        print_progress_footer(step_start)
-
-        # STEP 6: Handle numerical feature scaling based on the configuration.
-        print_progress_header(6, "Processing Numerical Scaler")
-        step_start = time.time()
-        
-        numerical_scaler = None
-        scaler_path_obj = Path(data_config.scaler_path)
-    
-        print(f"Normalization method: {data_config.numerical_normalization_method}")
-        
-        if data_config.numerical_normalization_method in ['standardization', 'min_max']:
-            if scaler_path_obj.exists():
-                print("Loading existing scaler...")
-                try:
-                    numerical_scaler = load_numerical_scaler(scaler_path_obj)
-                    print(f"Scaler loaded successfully")
-                except Exception as e:
-                    print(f"Error loading scaler: {e}")
-                    print(f"Will fit new scaler...")
-                    scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                    numerical_scaler = fit_numerical_scaler(
-                        item_info_df_full, 
-                        valid_numerical_features,
-                        data_config.numerical_normalization_method, 
-                        scaler_path_obj
-                    )
-            else:
-                print("Fitting new scaler...")
-                scaler_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                numerical_scaler = fit_numerical_scaler(
-                    item_info_df_full, 
-                    valid_numerical_features,
-                    data_config.numerical_normalization_method, 
-                    scaler_path_obj
-                )
-        else:
-            print("No scaling required (method: none or log1p)")
-        
-        print_progress_footer(step_start)
-
-        # STEP 7: Determine which image folder to use (raw or processed).
-        print_progress_header(7, "Configuring Image Processing")
-        step_start = time.time()
-        
-        effective_image_folder = data_config.image_folder
-        if (hasattr(data_config, 'offline_image_compression') and 
-            data_config.offline_image_compression.enabled and 
-            hasattr(data_config, 'processed_image_destination_folder') and 
-            data_config.processed_image_destination_folder):
-            effective_image_folder = data_config.processed_image_destination_folder
-            print(f"Using processed images: {effective_image_folder}")
-        else:
-            print(f"Using original images: {effective_image_folder}")
-        
-        # Verify that the selected image folder exists.
-        if os.path.exists(effective_image_folder):
-            image_count = len([f for f in os.listdir(effective_image_folder) 
-                             if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-            print(f"Found {image_count:,} image files")
-        else:
-            print(f"Warning: Image folder does not exist: {effective_image_folder}")
-        
-        print_progress_footer(step_start)
-
-        # STEP 8: Create a dataset instance from the full data to fit user/item encoders globally.
-        print_progress_header(8, "Creating Dataset for Encoder Fitting")
-        step_start = time.time()
-        
-        print("Initializing full dataset for encoder fitting...")
-        print("This step may take time as it initializes the vision and language models")
-        
-        full_dataset_for_encoders = MultimodalDataset(
-            interactions_df=interactions_df_full,
-            item_info_df=item_info_df_full,
-            image_folder=effective_image_folder,
-            vision_model_name=model_config.vision_model,
-            language_model_name=model_config.language_model,
-            create_negative_samples=False,
-            negative_sampling_ratio=0,
-            cache_features=cache_config.enabled,
-            cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,
-            cache_to_disk=cache_config.use_disk,
-            numerical_feat_cols=valid_numerical_features,
-            categorical_feat_cols=data_config.categorical_features_cols,
-            numerical_normalization_method=data_config.numerical_normalization_method,
-            numerical_scaler=numerical_scaler,
-            is_train_mode=False
-        )
-        
-        print("Encoder fitting results:")
-        print(f"Users: {full_dataset_for_encoders.n_users:,}")
-        print(f"Items: {full_dataset_for_encoders.n_items:,}")
-        
-        print_progress_footer(step_start)
-
-        # STEP 9: Load pre-generated training and validation data splits.
-        print_progress_header(9, "Loading Pre-Split Training Data")
-        step_start = time.time()
-        
-        print(f"Loading split data:")
-        print(f"Train: {data_config.train_data_path}")
-        print(f"Val: {data_config.val_data_path}")
-        
-        train_interactions_df = pd.read_csv(Path(data_config.train_data_path).resolve())
-        val_interactions_df = pd.read_csv(Path(data_config.val_data_path).resolve())
-
-        
-        # We must filter the main item_info DataFrame to only include items that
-        # are actually present in the train and validation splits being used.
-        # This ensures consistency when the dataset objects are created.
-        all_item_ids_in_splits = pd.concat(
-            [train_interactions_df['item_id'], val_interactions_df['item_id']]
-        ).unique()
-        
-        item_info_df_for_datasets = item_info_df_full[
-            item_info_df_full['item_id'].astype(str).isin(all_item_ids_in_splits)
-        ].reset_index(drop=True)
-
-        print("Split data statistics:")
-        print(f"Training interactions: {len(train_interactions_df):,}")
-        print(f"Validation interactions: {len(val_interactions_df):,}")
-        print(f"Items in splits: {len(item_info_df_for_datasets):,}")
-        print(f"Train users: {train_interactions_df['user_id'].nunique():,}")
-        print(f"Val users: {val_interactions_df['user_id'].nunique():,}")
-        
-        print_progress_footer(step_start)
-
-        # STEP 10: Create the final Dataset objects for training and validation.
-        print_progress_header(10, "Creating Training Datasets")
-        step_start = time.time()
-        
-        print("Creating training dataset with negative sampling...")
-        
-        train_dataset = MultimodalDataset(
-            interactions_df=train_interactions_df,
-            item_info_df=item_info_df_for_datasets,
-            image_folder=effective_image_folder,
-            vision_model_name=model_config.vision_model,
-            language_model_name=model_config.language_model,
-            create_negative_samples=True,
-            negative_sampling_ratio=data_config.negative_sampling_ratio,
-            text_augmentation_config=data_config.text_augmentation,
-            image_augmentation_config=data_config.image_augmentation,
-            numerical_feat_cols=valid_numerical_features,
-            categorical_feat_cols=data_config.categorical_features_cols,
-            numerical_normalization_method=data_config.numerical_normalization_method,
-            numerical_scaler=numerical_scaler,
-            is_train_mode=True,
-            cache_features=cache_config.enabled,
-            cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,
-            cache_to_disk=cache_config.use_disk,            
-            user_encoder=full_dataset_for_encoders.user_encoder,
-            item_encoder=full_dataset_for_encoders.item_encoder,
-            tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None)
-        )
-        
-        # Assign the globally fitted encoders to the training dataset.
-        train_dataset.user_encoder = full_dataset_for_encoders.user_encoder
-        train_dataset.item_encoder = full_dataset_for_encoders.item_encoder
-        train_dataset.n_users = full_dataset_for_encoders.n_users
-        train_dataset.n_items = full_dataset_for_encoders.n_items
-
-        # Ensure the globally fitted tag encoder is also passed to the train_dataset
-        if hasattr(full_dataset_for_encoders, 'tag_encoder'):
-            train_dataset.tag_encoder = full_dataset_for_encoders.tag_encoder
-        if hasattr(full_dataset_for_encoders, 'n_tags'):
-            train_dataset.n_tags = full_dataset_for_encoders.n_tags
-
-        print("Creating validation dataset...")
-        val_dataset = MultimodalDataset(
-            interactions_df=val_interactions_df,
-            item_info_df=item_info_df_for_datasets,
-            image_folder=effective_image_folder,
-            vision_model_name=model_config.vision_model,
-            language_model_name=model_config.language_model,
-            create_negative_samples=True,
-            negative_sampling_ratio=data_config.negative_sampling_ratio,
-            text_augmentation_config=TextAugmentationConfig(enabled=False),
-            numerical_feat_cols=valid_numerical_features,
-            categorical_feat_cols=data_config.categorical_features_cols,
-            numerical_normalization_method=data_config.numerical_normalization_method,
-            numerical_scaler=numerical_scaler,
-            is_train_mode=False,
-            cache_features=cache_config.enabled,
-            cache_max_items=cache_config.max_memory_items,
-            cache_dir=effective_cache_dir,
-            cache_to_disk=cache_config.use_disk,
-            user_encoder=full_dataset_for_encoders.user_encoder,
-            item_encoder=full_dataset_for_encoders.item_encoder,
-            tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None)
-        )
-        
-        # Assign the globally fitted encoders to the validation dataset.
-        val_dataset.user_encoder = full_dataset_for_encoders.user_encoder
-        val_dataset.item_encoder = full_dataset_for_encoders.item_encoder
-        val_dataset.n_users = full_dataset_for_encoders.n_users
-        val_dataset.n_items = full_dataset_for_encoders.n_items
-        
-        print("Dataset creation results:")
-        print(f"Training samples: {len(train_dataset):,}")
-        print(f"Validation samples: {len(val_dataset):,}")
-        print(f"Negative sampling ratio: {data_config.negative_sampling_ratio}")
-        
-        print_progress_footer(step_start)
-
-        # STEP 11: Create DataLoaders for batching.
-        print_progress_header(11, "Creating Data Loaders")
-        step_start = time.time()
-        
-        train_loader, val_loader = create_data_loaders_with_progress(
-            train_dataset, val_dataset, training_config
-        )
-        
-        print_progress_footer(step_start)
-
-        # Save the fitted encoders to disk for later use in inference or evaluation.
-        print("Saving encoders...")
-        encoders_dir = Path(config.checkpoint_dir) / 'encoders'
-        encoders_dir.mkdir(parents=True, exist_ok=True)
-        
-        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.user_encoder, f)
-        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.item_encoder, f)
-        print(f"Encoders saved to {encoders_dir}")
-
-        # STEP 12: Initialize the model with the correct number of features.
-        print_progress_header(12, "Initializing Model", total_steps=13)
-        step_start = time.time()
-        
-        num_numerical_features = len(valid_numerical_features)
-        
-        print("Model configuration:")
-        print(f"Architecture: MultimodalRecommender")
-        print(f"Users: {full_dataset_for_encoders.n_users:,}")
-        print(f"Items: {full_dataset_for_encoders.n_items:,}")
-        print(f"Numerical features: {num_numerical_features}")
-        print(f"Feature names: {valid_numerical_features}")
-        print(f"Embedding dim: {model_config.embedding_dim}")
-        print(f"Vision model: {model_config.vision_model}")
-        print(f"Language model: {model_config.language_model}")
-        print(f"Use contrastive: {model_config.use_contrastive}")
-        
-        # Define and display the directory structure for saving checkpoints.
-        model_combo = f"{model_config.vision_model}_{model_config.language_model}"
-        model_checkpoint_dir = Path(config.checkpoint_dir) / model_combo
-        shared_encoders_dir = Path(config.checkpoint_dir) / 'encoders'
-        
-        print(f"\n Checkpoint Organization:")
-        print(f"Model checkpoints (.pth): {model_checkpoint_dir}")
-        print(f"Shared encoders: {shared_encoders_dir}")
-        
-        print("\nInitializing model (this may take several minutes for model downloads)...")
-        
-        model_params = {
-            'n_users': full_dataset_for_encoders.n_users,
-            'n_items': full_dataset_for_encoders.n_items,
-            'n_tags': full_dataset_for_encoders.n_tags,
-            'num_numerical_features': num_numerical_features,
-            'embedding_dim': model_config.embedding_dim,
-            'vision_model_name': model_config.vision_model,
-            'language_model_name': model_config.language_model,
-            'freeze_vision': model_config.freeze_vision,
-            'freeze_language': model_config.freeze_language,
-            'use_contrastive': model_config.use_contrastive,
-            'dropout_rate': model_config.dropout_rate,
-            'num_attention_heads': model_config.num_attention_heads,
-            'attention_dropout': model_config.attention_dropout,
-            'fusion_hidden_dims': model_config.fusion_hidden_dims,
-            'fusion_activation': model_config.fusion_activation,
-            'use_batch_norm': model_config.use_batch_norm,
-            'projection_hidden_dim': model_config.projection_hidden_dim,
-            'final_activation': model_config.final_activation,
-            'init_method': model_config.init_method,
-            'contrastive_temperature': model_config.contrastive_temperature
-        }
-        
-        model = MultimodalRecommender(**model_params).to(device)
-
-        # Print statistics about the instantiated model.
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        print("Model statistics:")
-        print(f"Total parameters: {total_params:,}")
-        print(f"Trainable parameters: {trainable_params:,}")
-        print(f"Frozen parameters: {total_params - trainable_params:,}")
-        print(f"Model size: ~{total_params * 4 / 1e6:.1f} MB")
-        
-        print_progress_footer(step_start, f"Model ready with {trainable_params:,} trainable parameters")
-
-        # STEP 13: Initialize the Trainer and start the training process.
-        print_progress_header(13, "Starting Training", total_steps=13)
-        step_start = time.time()
-        
-        # The Trainer requires the model configuration to correctly manage model-specific checkpoint paths.
-        trainer = Trainer(
-            model=model, 
-            device=device, 
-            checkpoint_dir=config.checkpoint_dir, 
-            use_contrastive=model_config.use_contrastive,
-            model_config=model_config
-        )
-        trainer.criterion.contrastive_weight = training_config.contrastive_weight
-        trainer.criterion.bce_weight = training_config.bce_weight
-
-        print("Training configuration:")
-        print(f"Optimizer: {training_config.optimizer_type}")
-        print(f"Learning rate: {training_config.learning_rate}")
-        print(f"Weight decay: {training_config.weight_decay}")
-        print(f"Batch size: {training_config.batch_size}")
-        print(f"Epochs: {training_config.epochs}")
-        print(f"Patience: {training_config.patience}")
-        print(f"Gradient clip: {training_config.gradient_clip}")
-        print(f"Contrastive weight: {training_config.contrastive_weight}")
-        print(f"BCE weight: {training_config.bce_weight}")
-
-        # If a checkpoint path is provided, resume training from that state.
-        if args.resume:
-            print(f"\nResuming from checkpoint: {args.resume}")
-            trainer.load_checkpoint(args.resume)
-
-        # Save encoders to a shared directory before starting the training loop.
-        print("Saving encoders to shared directory...")
-        encoders_dir = trainer.get_encoders_dir()
-        
-        with open(encoders_dir / 'user_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.user_encoder, f)
-        with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
-            pickle.dump(full_dataset_for_encoders.item_encoder, f)
-        print(f"Encoders saved to {encoders_dir}")
-
-        print(f"\n Starting training...")
-        print("=" * 60)
-
-        # Save the final, validated configuration used for this run.
-        print("Saving configuration...")
-        updated_config_path = Path(config.results_dir) / 'training_run_config_validated.yaml'
-        config.to_yaml(str(updated_config_path))
-        print(f"Updated configuration saved to {updated_config_path}")
-
-        # Assemble the dictionary of parameters for the training loop.
-        training_params = {
-            'train_loader': train_loader,
-            'val_loader': val_loader,
-            'epochs': training_config.epochs,
-            'lr': training_config.learning_rate, 
-            'weight_decay': training_config.weight_decay,
-            'patience': training_config.patience, 
-            'gradient_clip': training_config.gradient_clip,
-            'optimizer_type': training_config.optimizer_type, 
-            'adam_beta1': training_config.adam_beta1,
-            'adam_beta2': training_config.adam_beta2, 
-            'adam_eps': training_config.adam_eps,
-            'use_lr_scheduler': training_config.use_lr_scheduler, 
-            'lr_scheduler_type': training_config.lr_scheduler_type,
-            'lr_scheduler_patience': training_config.lr_scheduler_patience,
-            'lr_scheduler_factor': training_config.lr_scheduler_factor, 
-            'lr_scheduler_min_lr': training_config.lr_scheduler_min_lr
-        }
-        
-        # Execute the training loop.
-        training_start_time = time.time()
-        train_losses, val_losses = trainer.train(**training_params)
-        training_time = time.time() - training_start_time
-
-        # Save a metadata file summarizing the training run.
-        training_metadata = {
-            'training_completed': True,
-            'completion_time': datetime.now().isoformat(),
-            'training_duration_hours': training_time / 3600,
-            'epochs_completed': len(train_losses) if train_losses else 0,
-            'final_train_loss': train_losses[-1] if train_losses else None,
-            'final_val_loss': val_losses[-1] if val_losses else None,
-            'best_train_loss': min(train_losses) if train_losses else None,
-            'best_val_loss': min(val_losses) if val_losses else None,
-            'model_config': dataclasses.asdict(model_config),
-            'training_config': dataclasses.asdict(training_config),
-            'data_stats': data_stats,
-            'model_params': {
-                'total_parameters': total_params,
-                'trainable_parameters': trainable_params,
-                'frozen_parameters': total_params - trainable_params
-            },
-            'device_info': {
-                'device': str(device),
-                'cuda_available': torch.cuda.is_available(),
-                'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
-            },
-            'numerical_features_validation': {
-                'original_config_features': original_numerical_features_from_config,
-                'validated_features': valid_numerical_features,
-                'num_features_used': num_numerical_features,
-                'missing_features': [col for col in original_numerical_features_from_config if col not in valid_numerical_features]
-            }
-        }
-        
-        metadata_path = Path(config.results_dir) / 'training_metadata.json'
-        metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        import json
-        with open(metadata_path, 'w') as f:
-            json.dump(training_metadata, f, indent=2, default=str)
-        print(f"Training metadata saved to {metadata_path}")
-
-        # Save the final configuration file.
-        config_save_path = Path(config.results_dir) / 'training_run_config.yaml'
-        config.to_yaml(str(config_save_path))
-        print(f"Configuration saved to {config_save_path}")
-        
-        if args.use_wandb and wandb.run is not None:
-            try:
-                wandb.save(str(config_save_path))
-                wandb.save(str(metadata_path))
-                wandb.save(str(updated_config_path))
-                print("Files saved to wandb")
-            except Exception as e:
-                print(f"Failed to save files to wandb: {e}")
-
-        # Print a final summary of the training run.
+        # Print final summary
         print("\n" + "=" * 80)
         print(" TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 80)
-        print(f" Training Summary:")
-        print(f" Duration: {training_time/3600:.2f} hours")
-        print(f" Epochs: {len(train_losses) if train_losses else 0}")
-        print(f" Final train loss: {train_losses[-1]:.6f}" if train_losses else " No training loss recorded")
-        print(f" Final val loss: {val_losses[-1]:.6f}" if val_losses else " No validation loss recorded")
-        print(f" Best val loss: {min(val_losses):.6f}" if val_losses else " No validation loss recorded")
-        print(f" Numerical Features:")
-        print(f" Features used: {num_numerical_features}")
-        print(f" Feature names: {valid_numerical_features}")
-        print(f" Outputs saved to: {config.results_dir}")
-        print(f" Model checkpoint: {model_checkpoint_dir}/best_model.pth")
-        print(f" Encoders: {encoders_dir}")
-        
-        # Provide recommendations based on performance metrics.
-        print(f"\n Performance Notes:")
-        if training_time > 0:
-            samples_per_second = (len(train_dataset) * len(train_losses)) / training_time
-            print(f" Training speed: {samples_per_second:.1f} samples/second")
-            
-            if samples_per_second < 100:
-                print(" Consider reducing image resolution or batch size for faster training")
-            elif samples_per_second > 1000:
-                print(" Training speed is excellent!")
-        
-        if torch.cuda.is_available():
-            gpu_memory_used = torch.cuda.max_memory_allocated() / 1e9
-            print(f" Peak GPU memory: {gpu_memory_used:.1f} GB")
-            
-            if gpu_memory_used > 10:
-                print(" High GPU memory usage - consider reducing batch size")
-        
+        print(f"Total time: {results['training_time']/3600:.2f} hours")
+        print(f"Epochs completed: {results['epochs_completed']}")
+        print(f"Best validation loss: {results['best_val_loss']:.4f}")
+        print(f"Final validation loss: {results['final_val_loss']:.4f}")
+        print(f"Model checkpoint: {results['model_path']}")
         print("=" * 80)
         
+        # Clean up wandb if used
+        if args.use_wandb and 'wandb' in sys.modules:
+            wandb = sys.modules['wandb']
+            if hasattr(wandb, 'run') and wandb.run is not None:
+                try:
+                    wandb.finish()
+                except Exception as e:
+                    print(f"Warning: Failed to close wandb run: {e}")
+        
     except KeyboardInterrupt:
-        print("\n  Training interrupted by user")
-        print("Saving current state...")
-        
-        # Save an emergency checkpoint if the training is interrupted.
-        if 'trainer' in locals():
-            try:
-                trainer.save_checkpoint('interrupted_model.pth')
-                print(f"Emergency checkpoint saved to {config.checkpoint_dir}/interrupted_model.pth")
-            except Exception as e:
-                print(f"Failed to save emergency checkpoint: {e}")
-        
-        # Save any partial results that were generated before the interruption.
-        if 'train_losses' in locals() and train_losses:
-            try:
-                partial_results = {
-                    'interrupted': True,
-                    'interruption_time': datetime.now().isoformat(),
-                    'epochs_completed': len(train_losses),
-                    'train_losses': train_losses,
-                    'val_losses': val_losses if 'val_losses' in locals() else [],
-                    'validated_numerical_features': valid_numerical_features if 'valid_numerical_features' in locals() else []
-                }
-                
-                interrupted_path = Path(config.results_dir) / 'interrupted_training.json'
-                interrupted_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                import json
-                with open(interrupted_path, 'w') as f:
-                    json.dump(partial_results, f, indent=2)
-                print(f"Partial results saved to {interrupted_path}")
-            except Exception as e:
-                print(f"Failed to save partial results: {e}")
-        else:
-            print("No training progress to save (training may not have started)")
-        
-        raise
+        print("\n" + "=" * 60)
+        print("Training interrupted by user")
+        print("=" * 60)
+        sys.exit(1)
         
     except Exception as e:
-        print(f"\nERROR during training: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Log error information to a file for debugging.
-        try:
-            error_info = {
-                'error_occurred': True,
-                'error_time': datetime.now().isoformat(),
-                'error_type': type(e).__name__,
-                'error_message': str(e),
-                'traceback': traceback.format_exc(),
-                'validated_numerical_features': valid_numerical_features if 'valid_numerical_features' in locals() else 'Not computed yet'
-            }
-            
-            if 'config' in locals():
-                error_path = Path(config.results_dir) / 'error_log.json'
-                error_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                import json
-                with open(error_path, 'w') as f:
-                    json.dump(error_info, f, indent=2)
-                print(f"Error log saved to {error_path}")
-        except Exception as save_error:
-            print(f"Failed to save error log: {save_error}")
-        
-        raise
-        
-    finally:
-        # Finalize the Weights & Biases run.
-        if args.use_wandb and wandb.run is not None:
-            print("Finishing wandb run...")
-            try:
-                wandb.finish()
-                print("Wandb run finished")
-            except Exception as e:
-                print(f"Warning during wandb cleanup: {e}")
-        
-        # Clear GPU cache at the end of the script.
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("GPU cache cleared")
-        
-        print(f"\nSession ended at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\n{'='*60}")
+        print(f"ERROR: Training failed with exception:")
+        print(f"{type(e).__name__}: {str(e)}")
+        print(f"{'='*60}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == '__main__':
