@@ -22,15 +22,15 @@ from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer
 from torch.utils.data import DataLoader
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import Config, MODEL_CONFIGS
-from src.data.simple_cache import SimpleFeatureCache
 from src.data.dataset import MultimodalDataset
+from src.data.processors.numerical_processor import NumericalProcessor
+from src.data.simple_cache import SimpleFeatureCache
 from src.models.multimodal import MultimodalRecommender
 from src.training.trainer import Trainer
 
@@ -243,6 +243,9 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     item_info = pd.read_csv(data_config.processed_item_info_path)
     print(f"Total items: {len(item_info):,}")
     
+    print(f"Loading all interactions for encoder fitting from: {data_config.processed_interactions_path}")
+    all_interactions = pd.read_csv(data_config.processed_interactions_path)
+    
     print_progress_footer(step_start)
     
     # STEP 6: Validate numerical features
@@ -269,33 +272,27 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     print_progress_header(7, "Initializing Feature Cache", total_steps=13)
     step_start = time.time()
     
-    cache_key = f"{model_config.vision_model}_{model_config.language_model}"
-    
+    cache = None
     if data_config.cache_config.enabled:
         if data_config.cache_config.cache_directory:
             cache_base_dir = Path(data_config.cache_config.cache_directory)
         else:
             cache_base_dir = Path(config.checkpoint_dir).parent / 'cache'
         
-        cache_dir = cache_base_dir / cache_key
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        print(f"Cache enabled: {cache_dir}")
+        print(f"Cache enabled. Base directory: {cache_base_dir}")
         print(f"Max memory items: {data_config.cache_config.max_memory_items}")
         print(f"Persist to disk: {data_config.cache_config.use_disk}")
-    else:
-        cache_dir = None
-        print("Feature caching disabled")
-    
-    cache = SimpleFeatureCache(
-        enabled=data_config.cache_config.enabled,
-        cache_dir=str(cache_dir) if cache_dir else None,
-        max_memory_items=data_config.cache_config.max_memory_items,
-        persist_to_disk=data_config.cache_config.use_disk
-    )
-    
-    if cache.enabled and cache_dir:
+
+        cache = SimpleFeatureCache(
+            vision_model=model_config.vision_model,
+            language_model=model_config.language_model,
+            base_cache_dir=str(cache_base_dir),
+            max_memory_items=data_config.cache_config.max_memory_items,
+            use_disk=data_config.cache_config.use_disk
+        )
         cache.print_stats()
+    else:
+        print("Feature caching disabled.")
     
     print_progress_footer(step_start)
     
@@ -303,102 +300,113 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     print_progress_header(8, "Preparing Numerical Scaler", total_steps=13)
     step_start = time.time()
     
-    all_interactions = pd.read_csv(data_config.processed_interactions_path)
-    
-    full_dataset_for_encoders = MultimodalDataset(
-        interactions_df=all_interactions,
-        item_info_df=item_info,
-        image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
-        model_config=model_config,
-        device=device,
-        numerical_scaler=None,
-        numerical_feature_columns=valid_numerical_features,
-        cache=None,
-        is_training=False,
-        augment_text=False,
-        augment_image=False
-    )
-    
+    numerical_processor = NumericalProcessor()
     scaler_path = Path(data_config.scaler_path)
+    
     if scaler_path.exists():
         print(f"Loading existing scaler from: {scaler_path}")
-        full_dataset_for_encoders.load_scaler(str(scaler_path))
+        numerical_processor.load_scaler(scaler_path)
     else:
-        print(f"Fitting new scaler using method: {data_config.numerical_normalization_method}")
-        full_dataset_for_encoders.fit_numerical_scaler(method=data_config.numerical_normalization_method)
-        scaler_path.parent.mkdir(parents=True, exist_ok=True)
-        full_dataset_for_encoders.save_scaler(str(scaler_path))
-        print(f"Scaler saved to: {scaler_path}")
-    
+        if valid_numerical_features:
+            print(f"Fitting new scaler for features: {valid_numerical_features}")
+            numerical_processor.fit_scaler(
+                df=item_info,
+                numerical_columns=valid_numerical_features,
+                method=data_config.numerical_normalization_method
+            )
+            scaler_path.parent.mkdir(parents=True, exist_ok=True)
+            numerical_processor.save_scaler(scaler_path)
+            print(f"Scaler saved to: {scaler_path}")
+        else:
+            print("No numerical features found. Skipping scaler fitting.")
+            
+    fitted_scaler = numerical_processor.scaler if valid_numerical_features else None
     print_progress_footer(step_start)
     
     # STEP 9: Create datasets
     print_progress_header(9, "Creating Datasets", total_steps=13)
     step_start = time.time()
-    
+
+    print("Creating temporary dataset to fit all encoders...")
+    # This dataset is used to fit encoders on the complete dataset.
+    full_dataset_for_encoders = MultimodalDataset(
+        interactions_df=all_interactions,
+        item_info_df=item_info,
+        image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
+        vision_model_name=model_config.vision_model,
+        language_model_name=model_config.language_model,
+        create_negative_samples=False,
+        numerical_feat_cols=valid_numerical_features,
+        categorical_feat_cols=data_config.categorical_features_cols,
+        cache_features=False,
+        numerical_scaler=fitted_scaler,
+        numerical_normalization_method=data_config.numerical_normalization_method,
+        is_train_mode=False
+    )
+
     print("Creating training dataset...")
     train_dataset = MultimodalDataset(
         interactions_df=train_data,
         item_info_df=item_info,
         image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
-        model_config=model_config,
-        device=device,
-        encoder_mappings={
-            'user_encoder': full_dataset_for_encoders.user_encoder,
-            'item_encoder': full_dataset_for_encoders.item_encoder
-        },
-        numerical_scaler=full_dataset_for_encoders.numerical_scaler,
-        numerical_feature_columns=valid_numerical_features,
-        text_column='item_name',
-        categorical_feature_columns=data_config.categorical_features_cols,
+        vision_model_name=model_config.vision_model,
+        language_model_name=model_config.language_model,
+        user_encoder=full_dataset_for_encoders.user_encoder,
+        item_encoder=full_dataset_for_encoders.item_encoder,
+        tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None),
+        create_negative_samples=True,
+        numerical_feat_cols=valid_numerical_features,
+        categorical_feat_cols=data_config.categorical_features_cols,
+        cache_features=data_config.cache_config.enabled,
+        cache_dir=str(cache.cache_dir) if cache else None,
+        cache_max_items=data_config.cache_config.max_memory_items if cache else 0,
+        cache_to_disk=data_config.cache_config.use_disk if cache else False,
         negative_sampling_ratio=data_config.negative_sampling_ratio,
-        cache=cache,
-        is_training=True,
-        augment_text=data_config.text_augmentation.enabled,
-        augment_image=data_config.image_augmentation.enabled,
-        augmentation_config={
-            'text': data_config.text_augmentation,
-            'image': data_config.image_augmentation
-        }
+        numerical_scaler=fitted_scaler,
+        numerical_normalization_method=data_config.numerical_normalization_method,
+        is_train_mode=True,
+        text_augmentation_config=data_config.text_augmentation,
+        image_augmentation_config=data_config.image_augmentation
     )
-    
+
     print("Creating validation dataset...")
     val_dataset = MultimodalDataset(
         interactions_df=val_data,
         item_info_df=item_info,
         image_folder=data_config.processed_image_destination_folder or data_config.image_folder,
-        model_config=model_config,
-        device=device,
-        encoder_mappings={
-            'user_encoder': full_dataset_for_encoders.user_encoder,
-            'item_encoder': full_dataset_for_encoders.item_encoder
-        },
-        numerical_scaler=full_dataset_for_encoders.numerical_scaler,
-        numerical_feature_columns=valid_numerical_features,
-        text_column='item_name',
-        categorical_feature_columns=data_config.categorical_features_cols,
+        vision_model_name=model_config.vision_model,
+        language_model_name=model_config.language_model,
+        user_encoder=full_dataset_for_encoders.user_encoder,
+        item_encoder=full_dataset_for_encoders.item_encoder,
+        tag_encoder=getattr(full_dataset_for_encoders, 'tag_encoder', None),
+        create_negative_samples=True,
+        numerical_feat_cols=valid_numerical_features,
+        categorical_feat_cols=data_config.categorical_features_cols,
+        cache_features=data_config.cache_config.enabled,
+        cache_dir=str(cache.cache_dir) if cache else None,
+        cache_max_items=data_config.cache_config.max_memory_items if cache else 0,
+        cache_to_disk=data_config.cache_config.use_disk if cache else False,
         negative_sampling_ratio=data_config.negative_sampling_ratio,
-        cache=cache,
-        is_training=False,
-        augment_text=False,
-        augment_image=False
+        numerical_scaler=fitted_scaler,
+        numerical_normalization_method=data_config.numerical_normalization_method,
+        is_train_mode=False
     )
-    
+
     data_stats = {
         'train_interactions': len(train_data),
         'val_interactions': len(val_data),
         'total_users': full_dataset_for_encoders.n_users,
         'total_items': full_dataset_for_encoders.n_items,
-        'total_tags': full_dataset_for_encoders.n_tags,
+        'total_tags': getattr(full_dataset_for_encoders, 'n_tags', 0),
         'numerical_features': num_numerical_features
     }
-    
+
     print(f"\nDataset statistics:")
     for key, value in data_stats.items():
         print(f"  {key}: {value:,}")
-    
+
     print_progress_footer(step_start)
-    
+        
     # STEP 10: Create dataloaders
     print_progress_header(10, "Creating DataLoaders", total_steps=13)
     step_start = time.time()
@@ -419,14 +427,38 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     print(f"  Items: {full_dataset_for_encoders.n_items:,}")
     print(f"  Tags: {full_dataset_for_encoders.n_tags:,}")
     print(f"  Numerical features: {num_numerical_features}")
-    
+
+
     model = MultimodalRecommender(
-        config=model_config,
+        # Required positional arguments
         n_users=full_dataset_for_encoders.n_users,
         n_items=full_dataset_for_encoders.n_items,
-        n_tags=full_dataset_for_encoders.n_tags,
-        num_numerical_features=num_numerical_features
+        n_tags=getattr(full_dataset_for_encoders, 'n_tags', 0),
+        num_numerical_features=num_numerical_features,
+
+        # Keyword arguments, unpacked from the model_config object
+        embedding_dim=model_config.embedding_dim,
+        vision_model_name=model_config.vision_model,
+        language_model_name=model_config.language_model,
+        freeze_vision=model_config.freeze_vision,
+        freeze_language=model_config.freeze_language,
+        use_contrastive=model_config.use_contrastive,
+        dropout_rate=model_config.dropout_rate,
+        num_attention_heads=model_config.num_attention_heads,
+        attention_dropout=model_config.attention_dropout,
+        fusion_hidden_dims=model_config.fusion_hidden_dims,
+        fusion_activation=model_config.fusion_activation,
+        use_batch_norm=model_config.use_batch_norm,
+        projection_hidden_dim=model_config.projection_hidden_dim,
+        final_activation=model_config.final_activation,
+        init_method=model_config.init_method,
+        contrastive_temperature=model_config.contrastive_temperature
     ).to(device)
+    
+    # Count model parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {total_params:,} total, {trainable_params:,} trainable")
     
     print_progress_footer(step_start)
     
@@ -468,9 +500,6 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     with open(encoders_dir / 'item_encoder.pkl', 'wb') as f:
         pickle.dump(full_dataset_for_encoders.item_encoder, f)
     print(f"Encoders saved to {encoders_dir}")
-    
-    print(f"\nStarting training...")
-    print("=" * 60)
     
     # Save configuration
     print("Saving configuration...")
@@ -515,7 +544,7 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
         'final_train_loss': train_losses[-1] if train_losses else float('inf'),
         'epochs_completed': len(train_losses) if train_losses else 0,
         'training_time': training_time,
-        'model_path': str(trainer.get_model_checkpoint_path('best_model.pth')),
+        'model_path': str(trainer.get_model_checkpoint_dir()),
         'train_losses': train_losses,
         'val_losses': val_losses
     }
@@ -629,18 +658,15 @@ def main(cli_args: Optional[List[str]] = None):
         step_start = time.time()
         
         config = Config.from_yaml(args.config)
-        data_config = config.data
-        model_config = config.model
-        training_config = config.training
         
         print(f"Configuration loaded successfully:")
-        print(f"Vision model: {model_config.vision_model}")
-        print(f"Language model: {model_config.language_model}")
-        print(f"Embedding dim: {model_config.embedding_dim}")
-        print(f"Batch size: {training_config.batch_size}")
-        print(f"Learning rate: {training_config.learning_rate}")
-        print(f"Epochs: {training_config.epochs}")
-        print(f"Configured numerical features: {data_config.numerical_features_cols}")
+        print(f"Vision model: {config.model.vision_model}")
+        print(f"Language model: {config.model.language_model}")
+        print(f"Embedding dim: {config.model.embedding_dim}")
+        print(f"Batch size: {config.training.batch_size}")
+        print(f"Learning rate: {config.training.learning_rate}")
+        print(f"Epochs: {config.training.epochs}")
+        print(f"Configured numerical features: {config.data.numerical_features_cols}")
         
         print_progress_footer(step_start)
 
@@ -653,10 +679,10 @@ def main(cli_args: Optional[List[str]] = None):
         Path(config.results_dir).mkdir(parents=True, exist_ok=True)
         
         # Validate model configurations
-        if model_config.vision_model not in MODEL_CONFIGS['vision']:
-            raise ValueError(f"Unknown vision model: {model_config.vision_model}")
-        if model_config.language_model not in MODEL_CONFIGS['language']:
-            raise ValueError(f"Unknown language model: {model_config.language_model}")
+        if config.model.vision_model not in MODEL_CONFIGS['vision']:
+            raise ValueError(f"Unknown vision model: {config.model.vision_model}")
+        if config.model.language_model not in MODEL_CONFIGS['language']:
+            raise ValueError(f"Unknown language model: {config.model.language_model}")
         
         print("✓ Configuration validated")
         print_progress_footer(step_start)
