@@ -3,8 +3,6 @@ data/processed/
 data/splits/
 data/cache/
 
-optuna*
-
 results/*
 
 *.csv
@@ -56,3 +54,21 @@ cache/*/*
 
 configs/simple_config.yaml
 configs/advanced_config.yaml
+
+# Optuna-specific files
+*.db            # SQLite databases
+*.sqlite
+*.sqlite3
+optuna_dashboard/
+
+# Hyperparameter search results
+*_trials/
+study_*.json
+trial_*/
+optimization_*.html
+param_importances.html
+parallel_coordinate.html
+
+# Model artifacts that might be large
+best_params.json
+study_results.json
