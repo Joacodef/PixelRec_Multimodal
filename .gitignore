@@ -3,6 +3,8 @@ data/processed/
 data/splits/
 data/cache/
 
+optuna*
+
 results/*
 
 *.csv

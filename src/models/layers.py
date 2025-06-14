@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from typing import List
 
 
 class CrossModalAttention(nn.Module):
@@ -98,3 +99,127 @@ class CrossModalAttention(nn.Module):
             output = output.squeeze(1)
 
         return output
+
+
+class AttentionFusionLayer(nn.Module):
+    """
+    A layer that fuses multiple feature embeddings using a self-attention mechanism.
+
+    This layer treats the different modalities as a sequence and applies a
+    transformer-style multi-head attention block to learn context-aware
+    representations. The final output is the mean-pooled representation of the
+    sequence.
+    """
+    def __init__(self, embedding_dim: int, num_attention_heads: int, dropout_rate: float):
+        """
+        Initializes the AttentionFusionLayer.
+
+        Args:
+            embedding_dim: The dimensionality of the input and output embeddings.
+            num_attention_heads: The number of parallel attention heads.
+            dropout_rate: The dropout probability.
+        """
+        super().__init__()
+        # The core multi-head self-attention mechanism.
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embedding_dim,
+            num_heads=num_attention_heads,
+            dropout=dropout_rate,
+            batch_first=False  # Expects (seq_len, batch, embedding_dim)
+        )
+        # Layer normalization to stabilize the training.
+        self.norm = nn.LayerNorm(embedding_dim)
+        # Dropout layer for regularization.
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Defines the forward pass for the attention fusion.
+
+        Args:
+            features: A list of tensors, where each tensor represents a modality
+                      and has a shape of (batch_size, embedding_dim).
+
+        Returns:
+            A fused tensor of shape (batch_size, embedding_dim).
+        """
+        # Stacks the list of tensors into a single tensor for the attention mechanism.
+        # The sequence dimension is placed first, as expected by nn.MultiheadAttention.
+        # Shape becomes (num_modalities, batch_size, embedding_dim).
+        feature_stack = torch.stack(features, dim=0)
+        
+        # Computes self-attention. Query, key, and value are all the same.
+        attn_output, _ = self.attention(
+            query=feature_stack,
+            key=feature_stack,
+            value=feature_stack
+        )
+        
+        # Applies a residual connection, followed by layer normalization.
+        normalized_output = self.norm(feature_stack + self.dropout(attn_output))
+        
+        # Pools the representations across the modalities to get a single vector.
+        fused_vector = torch.mean(normalized_output, dim=0)
+        
+        return fused_vector
+
+
+class GatedFusionLayer(nn.Module):
+    """
+    A layer that fuses multiple feature embeddings using a gating mechanism.
+
+    This layer learns a set of weights (gates) for each modality based on the
+    concatenated input features. These gates control the contribution of each
+    modality to the final fused representation, which is a weighted sum.
+    """
+    def __init__(self, embedding_dim: int, num_modalities: int, dropout_rate: float):
+        """
+        Initializes the GatedFusionLayer.
+
+        Args:
+            embedding_dim: The dimensionality of the input embeddings for each modality.
+            num_modalities: The number of input feature modalities.
+            dropout_rate: The dropout probability.
+        """
+        super().__init__()
+        self.num_modalities = num_modalities
+        
+        # The network that computes the gates. It takes the concatenated features
+        # as input and outputs a weight for each modality.
+        self.gating_network = nn.Sequential(
+            nn.Linear(embedding_dim * num_modalities, num_modalities),
+            nn.Softmax(dim=-1)
+        )
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Defines the forward pass for the gated fusion.
+
+        Args:
+            features: A list of tensors, where each tensor represents a modality
+                      and has a shape of (batch_size, embedding_dim).
+
+        Returns:
+            A fused tensor of shape (batch_size, embedding_dim).
+        """
+        # Concatenates all feature tensors along the dimension of features.
+        concatenated_features = torch.cat(features, dim=1)
+        concatenated_features = self.dropout(concatenated_features)
+        
+        # Computes the gate weights, ensuring they sum to 1 across modalities.
+        gate_weights = self.gating_network(concatenated_features)
+        
+        # Stacks the original features to facilitate weighted summation.
+        # Shape becomes (batch_size, num_modalities, embedding_dim).
+        feature_stack = torch.stack(features, dim=1)
+        
+        # Applies the gates to the features. The gate_weights tensor is unsqueezed
+        # to enable broadcasting across the embedding dimension.
+        # Shape of gate_weights.unsqueeze(-1) is (batch_size, num_modalities, 1).
+        weighted_features = feature_stack * gate_weights.unsqueeze(-1)
+        
+        # Sums the weighted features to produce the final fused vector.
+        fused_vector = torch.sum(weighted_features, dim=1)
+        
+        return fused_vector

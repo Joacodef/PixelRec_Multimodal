@@ -548,6 +548,8 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
         'train_losses': train_losses,
         'val_losses': val_losses
     }
+
+    results['all_best_metrics'] = trainer.get_all_best_metrics()
     
     # Save metadata
     training_metadata = {
@@ -577,7 +579,9 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
             'validated_features': valid_numerical_features,
             'num_features_used': num_numerical_features,
             'missing_features': missing_features
-        }
+        },
+
+        'all_best_metrics': results['all_best_metrics']
     }
     
     metadata_path = Path(config.results_dir) / 'training_metadata.json'

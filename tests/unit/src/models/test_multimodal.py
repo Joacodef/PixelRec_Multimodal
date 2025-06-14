@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from src.models.multimodal import MultimodalRecommender
 from src.models.losses import ContrastiveLoss
+from src.models.layers import AttentionFusionLayer, GatedFusionLayer
 
 
 class TestMultimodalRecommender(unittest.TestCase):
@@ -78,8 +79,8 @@ class TestMultimodalRecommender(unittest.TestCase):
         self.assertIsInstance(model.user_embedding, nn.Embedding)
         self.assertIsInstance(model.item_embedding, nn.Embedding)
         self.assertIsInstance(model.tag_embedding, nn.Embedding)
-        self.assertIsInstance(model.attention, nn.MultiheadAttention)
-        self.assertIsInstance(model.fusion, nn.Sequential)
+        self.assertIsInstance(model.prediction_network, nn.Sequential)
+        self.assertIsNone(model.fusion_layer)
 
     def test_model_initialization_various_configs(self):
         """Test model initialization with various vision and language model combinations."""
@@ -137,15 +138,17 @@ class TestMultimodalRecommender(unittest.TestCase):
                     n_tags=self.n_tags,
                     num_numerical_features=self.num_numerical_features,
                     embedding_dim=self.embedding_dim,
+                    fusion_type='attention', 
                     **config
                 )
                 
-                # Verify attention configuration
-                self.assertEqual(model.attention.num_heads, config['num_attention_heads'])
-                self.assertEqual(model.attention.dropout, config['attention_dropout'])
+                # Verify attention configuration by checking the fusion_layer
+                self.assertIsInstance(model.fusion_layer, AttentionFusionLayer)
+                self.assertEqual(model.fusion_layer.attention.num_heads, config['num_attention_heads'])
+                self.assertEqual(model.fusion_layer.attention.dropout, config['attention_dropout'])
                 
-                # Verify fusion network structure
-                fusion_modules = list(model.fusion.modules())[1:]  # Skip Sequential wrapper
+                # Verify prediction network structure
+                fusion_modules = list(model.prediction_network.modules())[1:] # Skip Sequential wrapper
                 linear_layers = [m for m in fusion_modules if isinstance(m, nn.Linear)]
                 self.assertEqual(len(linear_layers), len(config['fusion_hidden_dims']) + 1)
 
@@ -258,7 +261,8 @@ class TestMultimodalRecommender(unittest.TestCase):
             n_tags=self.n_tags,
             num_numerical_features=self.num_numerical_features,
             embedding_dim=self.embedding_dim,
-            num_attention_heads=4
+            num_attention_heads=4,
+            fusion_type='attention'  # Specify attention fusion
         ).to(self.device)
         
         # Create inputs for attention
@@ -268,9 +272,9 @@ class TestMultimodalRecommender(unittest.TestCase):
         # Create attention input
         attention_input = torch.randn(seq_len, batch_size, self.embedding_dim).to(self.device)
         
-        # Apply attention without expecting attention weights (not all attention implementations return them)
+        # Apply attention from within the fusion_layer
         with torch.no_grad():
-            attention_output = model.attention(
+            attention_output = model.fusion_layer.attention(
                 attention_input, attention_input, attention_input
             )
             
@@ -305,7 +309,7 @@ class TestMultimodalRecommender(unittest.TestCase):
         
         # Pass through fusion network
         with torch.no_grad():
-            output = model.fusion(concat_features)
+            output = model.prediction_network(concat_features)
         
         # Check output shape
         self.assertEqual(output.shape, (batch_size, 1))
@@ -323,7 +327,7 @@ class TestMultimodalRecommender(unittest.TestCase):
                 ).to(self.device)
                 
                 with torch.no_grad():
-                    output = model_act.fusion(concat_features)
+                    output = model_act.prediction_network(concat_features)
                 self.assertEqual(output.shape, (batch_size, 1))
 
     def test_gradient_flow(self):

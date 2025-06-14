@@ -22,10 +22,11 @@ from typing import Optional, Tuple, Union, List
 
 from ..config import MODEL_CONFIGS
 
+from .layers import AttentionFusionLayer, GatedFusionLayer
 
-from typing import List, Optional
 from src.config import MODEL_CONFIGS
 import torch.nn as nn
+
 
 class MultimodalRecommender(nn.Module):
     """
@@ -60,7 +61,8 @@ class MultimodalRecommender(nn.Module):
         projection_hidden_dim: Optional[int] = None,
         final_activation: str = 'sigmoid',
         init_method: str = 'xavier_uniform',
-        contrastive_temperature: float = 0.07
+        contrastive_temperature: float = 0.07,
+        fusion_type: str = 'concatenate' 
     ):
         """
         Initializes the MultimodalRecommender model and its components.
@@ -98,6 +100,11 @@ class MultimodalRecommender(nn.Module):
             contrastive_temperature (float): The temperature for the contrastive loss.
         """
         super(MultimodalRecommender, self).__init__()
+
+        self.fusion_type = fusion_type
+
+        self.n_users = n_users
+        self.n_items = n_items
         
         self.n_users = n_users
         self.n_items = n_items
@@ -311,41 +318,59 @@ class MultimodalRecommender(nn.Module):
 
     def _init_fusion_network(self):
         """
-        Initializes the attention-based fusion network and final prediction layers.
+        Initializes the fusion mechanism and final prediction network based on the
+        configured fusion_type.
         """
-        # Defines the multi-head self-attention layer for feature fusion.
-        self.attention = nn.MultiheadAttention(
-            embed_dim=self.embedding_dim,
-            num_heads=self.num_attention_heads,
-            dropout=self.attention_dropout,
-            batch_first=False
-        )
-        
-        # Dynamically builds the final multi-layer perceptron (MLP) for prediction.
+        self.fusion_layer = None
+        num_modalities = 4  # user, item, tag, numerical
+        if hasattr(self, 'vision_model'):
+            num_modalities += 1
+        if hasattr(self, 'language_model'):
+            num_modalities += 1
+
+        if self.fusion_type == 'concatenate':
+            # For concatenation, the input to the next layer is the sum of all feature dimensions.
+            fusion_input_dim = num_modalities * self.embedding_dim
+        elif self.fusion_type == 'attention':
+            self.fusion_layer = AttentionFusionLayer(
+                embedding_dim=self.embedding_dim,
+                num_attention_heads=self.num_attention_heads,
+                dropout_rate=self.attention_dropout
+            )
+            # The attention layer outputs a single vector of the same embedding dimension.
+            fusion_input_dim = self.embedding_dim
+        elif self.fusion_type == 'gated':
+            self.fusion_layer = GatedFusionLayer(
+                embedding_dim=self.embedding_dim,
+                num_modalities=num_modalities,
+                dropout_rate=self.dropout_rate
+            )
+            # The gated layer outputs a single vector of the same embedding dimension.
+            fusion_input_dim = self.embedding_dim
+        else:
+            raise ValueError(f"Unknown fusion type: '{self.fusion_type}'")
+
+        # Dynamically build the final prediction MLP.
         activation = self._get_activation(self.fusion_activation)
-        fusion_layers = []
+        prediction_layers = []
+        input_dim = fusion_input_dim
         
-        # The input to the MLP is the concatenated output of the attention layer.
-        input_dim = self.embedding_dim * 6
-        
-        for i, hidden_dim in enumerate(self.fusion_hidden_dims):
-            fusion_layers.append(nn.Linear(input_dim, hidden_dim))
-            fusion_layers.append(activation)
-            fusion_layers.append(nn.Dropout(self.dropout_rate))
+        for hidden_dim in self.fusion_hidden_dims:
+            prediction_layers.append(nn.Linear(input_dim, hidden_dim))
+            prediction_layers.append(activation)
             if self.use_batch_norm:
-                fusion_layers.append(nn.BatchNorm1d(hidden_dim))
+                prediction_layers.append(nn.BatchNorm1d(hidden_dim))
+            prediction_layers.append(nn.Dropout(self.dropout_rate))
             input_dim = hidden_dim
+            
+        prediction_layers.append(nn.Linear(input_dim, 1))
         
-        # Appends the final output layer.
-        fusion_layers.append(nn.Linear(input_dim, 1))
-        
-        # Appends the final activation function if specified.
         if self.final_activation == 'sigmoid':
-            fusion_layers.append(nn.Sigmoid())
+            prediction_layers.append(nn.Sigmoid())
         elif self.final_activation == 'tanh':
-            fusion_layers.append(nn.Tanh())
-        
-        self.fusion = nn.Sequential(*fusion_layers)
+            prediction_layers.append(nn.Tanh())
+            
+        self.prediction_network = nn.Sequential(*prediction_layers)
     
     def _get_vision_features(self, image: torch.Tensor) -> torch.Tensor:
         """
@@ -549,17 +574,24 @@ class MultimodalRecommender(nn.Module):
         
         # Stack all features and apply attention-based fusion.
         # The new tag_emb is added to the stack of features.
-        features_stacked = torch.stack([
-            user_emb, item_emb, tag_emb,
+        features_to_fuse = [
+            user_emb, 
+            item_emb, 
+            tag_emb,
             projected_vision_emb_main_task,
-            projected_language_emb_main_task, 
+            projected_language_emb_main_task,
             projected_numerical_emb_main_task
-        ], dim=0) 
-        attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
-        combined_features = attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
+        ]
+
+        # Apply the selected fusion method.
+        if self.fusion_type == 'concatenate':
+            fused_features = torch.cat(features_to_fuse, dim=1)
+        else:
+            # The 'attention' and 'gated' layers expect a list of features.
+            fused_features = self.fusion_layer(features_to_fuse)
         
-        # Pass fused features through the final prediction network.
-        output = self.fusion(combined_features)
+        # Pass the dynamically fused features through the final prediction network.
+        output = self.prediction_network(fused_features)
         
         # Sanitize the output to prevent NaN/Inf values from propagating.
         if torch.isnan(output).any() or torch.isinf(output).any():

@@ -39,6 +39,8 @@ class ModelConfig:
     language_model: str = 'sentence-bert'
     # The dimensionality of the latent embeddings for users, items, and projected features.
     embedding_dim: int = 64
+    # The method for combining multimodal features ('concatenate', 'attention', 'gated').
+    fusion_type: str = 'concatenate'
     # If True, enables an additional contrastive loss to align vision and text representations.
     use_contrastive: bool = True
     

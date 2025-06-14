@@ -75,14 +75,65 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         config.model.embedding_dim = trial.suggest_categorical(
             'embedding_dim', [64, 128, 256, 512]
         )
+        
         config.model.fusion_type = trial.suggest_categorical(
             'fusion_type', ['concatenate', 'attention', 'gated']
         )
-        
-        # Loss weights
-        config.training.contrastive_weight = trial.suggest_float(
-            'contrastive_weight', 0.0, 1.0
+
+         # Dropout rates
+        config.model.dropout_rate = trial.suggest_float(
+            'dropout_rate', 0.1, 0.5
         )
+        config.model.attention_dropout = trial.suggest_float(
+            'attention_dropout', 0.0, 0.3
+        )
+        
+        # Hidden layers configuration
+        fusion_hidden_configs = [
+            [256, 128],
+            [512, 256],
+            [512, 256, 128],
+            [256, 128, 64],
+            [128, 64],
+            [512],
+            [256]
+        ]
+        config.model.fusion_hidden_dims = trial.suggest_categorical(
+            'fusion_hidden_dims', fusion_hidden_configs
+        )
+
+        # Projection hidden dimension 
+        config.model.projection_hidden_dim = trial.suggest_categorical(
+            'projection_hidden_dim', [None, 128, 256, 512]
+        )
+        
+        # Activation functions
+        config.model.fusion_activation = trial.suggest_categorical(
+            'fusion_activation', ['relu', 'gelu', 'tanh', 'leaky_relu']
+        )
+        
+        # Batch normalization
+        config.model.use_batch_norm = trial.suggest_categorical(
+            'use_batch_norm', [True, False]
+        )
+        
+        # Contrastive learning configuration 
+        config.model.use_contrastive = trial.suggest_categorical(
+            'use_contrastive', [True, False]
+        )
+        
+        # If contrastive learning is enabled, suggest additional parameters
+        if config.model.use_contrastive:
+            config.model.contrastive_temperature = trial.suggest_float(
+                'contrastive_temperature', 0.01, 0.5, log=True
+            )
+            config.training.contrastive_weight = trial.suggest_float(
+                'contrastive_weight', 0.01, 1.0
+            )
+        else:
+            # If contrastive learning is not used, set weights to zero
+            config.training.contrastive_weight = 0.0
+        
         config.training.bce_weight = trial.suggest_float(
             'bce_weight', 0.5, 1.0
         )
