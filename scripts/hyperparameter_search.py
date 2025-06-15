@@ -90,17 +90,20 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         
         # Hidden layers configuration
         fusion_hidden_configs = [
-            [256, 128],
-            [512, 256],
-            [512, 256, 128],
-            [256, 128, 64],
-            [128, 64],
-            [512],
-            [256]
+            "256, 128",
+            "512, 256",
+            "512, 256, 128",
+            "256, 128, 64",
+            "128, 64",
+            "512",
+            "256"
         ]
-        config.model.fusion_hidden_dims = trial.suggest_categorical(
+        # Optuna suggests a string
+        chosen_config_str = trial.suggest_categorical(
             'fusion_hidden_dims', fusion_hidden_configs
         )
+        # Convert the chosen string back to a list of integers
+        config.model.fusion_hidden_dims = [int(x) for x in chosen_config_str.split(',')]
 
         # Projection hidden dimension 
         config.model.projection_hidden_dim = trial.suggest_categorical(
@@ -369,25 +372,27 @@ def main():
     sampler = TPESampler(seed=42)  # Tree-structured Parzen Estimator
     pruner = MedianPruner() if args.pruning else None
     
-    # Create or load study
-    if args.resume and args.storage:
-        print(f"\nResuming study from {args.storage}")
-        study = optuna.load_study(
-            study_name=args.study_name,
-            storage=args.storage,
-            sampler=sampler,
-            pruner=pruner
-        )
-        print(f"Resumed study has {len(study.trials)} completed trials")
+    # --- START OF CORRECTION ---
+    # Simplified and corrected study creation/loading logic.
+    # This single call to 'create_study' handles all cases correctly.
+    # The 'load_if_exists' flag, set by '--resume', ensures that Optuna
+    # will either load an existing study with the specified name or create a
+    # new one, preventing the KeyError.
+    print(f"\nCreating or resuming study '{args.study_name}' from storage: {args.storage}")
+    study = optuna.create_study(
+        study_name=args.study_name,
+        storage=args.storage,
+        sampler=sampler,
+        pruner=pruner,
+        direction=args.direction,
+        load_if_exists=args.resume
+    )
+
+    if args.resume and len(study.trials) > 0:
+        print(f"Successfully resumed study with {len(study.trials)} existing trials.")
     else:
-        study = optuna.create_study(
-            study_name=args.study_name,
-            storage=args.storage,
-            sampler=sampler,
-            pruner=pruner,
-            direction=args.direction,
-            load_if_exists=args.resume
-        )
+        print("Starting a new study or resuming an empty one.")
+    # --- END OF CORRECTION ---
     
     # Create objective function
     objective = create_objective(args.config, args)
@@ -520,11 +525,14 @@ def main():
         print(f"Best configuration saved to {best_config_path}")
         
         # Provide instructions for using the best model
-        best_checkpoint = best_trial_dir / "checkpoints" / best_config.model.vision_model + "_" + best_config.model.language_model / "best_model.pth"
-        if best_checkpoint.exists():
+        best_checkpoint_dir = Path(args.output_dir) / f"trial_{best_trial.number}" / "checkpoints"
+        model_combo = f"{best_config.model.vision_model}_{best_config.model.language_model}"
+        best_checkpoint_path = best_checkpoint_dir / model_combo / "best_model.pth"
+
+        if best_checkpoint_path.exists():
             print(f"\nTo use the best model:")
             print(f"  Config: {best_config_path}")
-            print(f"  Checkpoint: {best_checkpoint}")
+            print(f"  Checkpoint: {best_checkpoint_path}")
             print(f"\nEvaluate with:")
             print(f"  python scripts/evaluate.py --config {best_config_path} --checkpoint_name best_model.pth")
     else:
