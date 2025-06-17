@@ -31,7 +31,8 @@ class TestTextProcessor(unittest.TestCase):
             normalize_unicode=False,
             to_lowercase=False
         )
-        self.processor = TextProcessor(self.full_config)
+        self.processor = TextProcessor(cleaning_config=self.full_config)
+
 
     def test_clean_text_field(self):
         """Tests cleaning of a single text string."""
@@ -72,7 +73,8 @@ class TestTextProcessor(unittest.TestCase):
 
     def test_configuration_flags_respected(self):
         """Tests that the processor respects the boolean flags in its config."""
-        processor_no_op = TextProcessor(self.no_op_config)
+        # Correctly initialize the processor by naming the 'cleaning_config' argument.
+        processor_no_op = TextProcessor(cleaning_config=self.no_op_config)
         text = "  A <B>Bold</B> Title  "
         
         # With the no-op config, only stripping should occur
@@ -81,7 +83,8 @@ class TestTextProcessor(unittest.TestCase):
 
         # Test with only lowercase enabled
         config_only_lower = OfflineTextCleaningConfig(remove_html=False, normalize_unicode=False, to_lowercase=True)
-        processor_only_lower = TextProcessor(config_only_lower)
+        # Correctly initialize this processor as well.
+        processor_only_lower = TextProcessor(cleaning_config=config_only_lower)
         expected_lower = "a <b>bold</b> title"
         self.assertEqual(processor_only_lower.clean_text_field(text), expected_lower)
 

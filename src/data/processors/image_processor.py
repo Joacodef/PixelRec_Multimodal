@@ -12,6 +12,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoImageProcessor
+from torchvision import transforms
 
 from ..preprocessing import is_image_corrupted, check_image_dimensions
 from ...config import (
@@ -61,7 +62,36 @@ class ImageProcessor:
             self.config = None
             self.feature_extractor = None
 
+        self.augmentation_pipeline = self._init_augmentations()
+
     # --- Methods for Online Processing (used by Dataset) ---
+
+    def _init_augmentations(self) -> Optional[transforms.Compose]:
+        """Initialize image augmentation pipeline based on the config."""
+        if not (self.is_train and self.augmentation_config and self.augmentation_config.enabled):
+            return None
+        
+        aug_list = []
+        cfg = self.augmentation_config
+        
+        if cfg.random_crop:
+            aug_list.append(transforms.RandomResizedCrop(
+                self.config.get('input_size', (224, 224))[0], 
+                scale=tuple(cfg.crop_scale)
+            ))
+        if any([cfg.brightness, cfg.contrast, cfg.saturation, cfg.hue]):
+            aug_list.append(transforms.ColorJitter(
+                brightness=cfg.brightness, contrast=cfg.contrast, 
+                saturation=cfg.saturation, hue=cfg.hue
+            ))
+        if cfg.horizontal_flip:
+            aug_list.append(transforms.RandomHorizontalFlip())
+        if cfg.rotation_degrees > 0:
+            aug_list.append(transforms.RandomRotation(degrees=cfg.rotation_degrees))
+        if cfg.gaussian_blur:
+            aug_list.append(transforms.GaussianBlur(kernel_size=tuple(cfg.blur_kernel_size)))
+            
+        return transforms.Compose(aug_list) if aug_list else None
 
     def load_and_transform_image(self, image_path: str) -> torch.Tensor:
         """Loads an image from a path, applies transformations, and returns a tensor."""
@@ -73,6 +103,10 @@ class ImageProcessor:
             
         try:
             image = Image.open(image_path).convert("RGB")
+            # Apply augmentations to the PIL image if the pipeline exists
+            if self.augmentation_pipeline:
+                image = self.augmentation_pipeline(image)
+
             processed_image = self.feature_extractor(images=image, return_tensors="pt")
             return processed_image['pixel_values'].squeeze(0)
         except Exception:

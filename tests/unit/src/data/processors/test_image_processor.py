@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 import sys
 from PIL import Image
+import tempfile
 
 # Add parent directory to path to import src modules
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent.parent))
@@ -18,11 +19,12 @@ class TestImageProcessor(unittest.TestCase):
     """Unit tests for the ImageProcessor class."""
 
     def setUp(self):
-        """Set up temporary directories and dummy images."""
-        self.test_dir = Path("test_temp_image_processor")
+        """Set up unique temporary directories for each test."""
+        # Use tempfile to create a unique directory for each test run.
+        self.test_dir = Path(tempfile.mkdtemp())
         self.source_dir = self.test_dir / "source"
         self.dest_dir = self.test_dir / "dest"
-        self.test_dir.mkdir()
+        # These subdirectories will also be unique and won't conflict.
         self.source_dir.mkdir()
         self.dest_dir.mkdir()
 
@@ -41,26 +43,33 @@ class TestImageProcessor(unittest.TestCase):
         )
         self.compression_config = OfflineImageCompressionConfig(enabled=False)
         
-        self.processor = ImageProcessor(self.compression_config, self.validation_config)
+        self.processor = ImageProcessor(
+            compression_config=self.compression_config,
+            validation_config=self.validation_config
+        )
 
     def tearDown(self):
         """Clean up temporary directories."""
-        if self.test_dir.exists():
+        if hasattr(self, 'test_dir') and self.test_dir.exists():
             shutil.rmtree(self.test_dir)
 
     def test_process_single_image_success(self):
         """Tests successful processing of a valid image."""
         source_path = self.source_dir / "valid_item.jpg"
         dest_path = self.dest_dir / "valid_item.jpg"
-        result = self.processor.process_single_image(source_path, dest_path)
+        # Correct the method name to _process_single_image
+        result = self.processor._process_single_image(source_path, dest_path)
         self.assertTrue(result)
         self.assertTrue(dest_path.exists())
+
+    # tests/unit/src/data/processors/test_image_processor.py
 
     def test_process_single_image_corrupted(self):
         """Tests that a corrupted image is not processed."""
         source_path = self.source_dir / "corrupted_item.jpg"
         dest_path = self.dest_dir / "corrupted_item.jpg"
-        result = self.processor.process_single_image(source_path, dest_path)
+        # Correct the method name to _process_single_image
+        result = self.processor._process_single_image(source_path, dest_path)
         self.assertFalse(result)
         self.assertFalse(dest_path.exists())
 
@@ -68,7 +77,8 @@ class TestImageProcessor(unittest.TestCase):
         """Tests that an image with dimensions below the minimum is not processed."""
         source_path = self.source_dir / "small_item.jpg"
         dest_path = self.dest_dir / "small_item.jpg"
-        result = self.processor.process_single_image(source_path, dest_path)
+        # Correct the method name to _process_single_image
+        result = self.processor._process_single_image(source_path, dest_path)
         self.assertFalse(result)
         self.assertFalse(dest_path.exists())
     

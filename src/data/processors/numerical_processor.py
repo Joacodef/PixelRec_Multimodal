@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import pickle
 from pathlib import Path
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Any, Tuple, Dict
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 
@@ -36,16 +36,29 @@ class NumericalProcessor:
         self.fitted_columns = getattr(scaler, 'feature_names_in_', None)
 
     # --- Methods for Online Processing (used by Dataset) ---
+    def get_scaler_info(self) -> Dict[str, Any]:
+        """
+        Returns a dictionary with information about the fitted scaler.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing the scaler type and fitted columns.
+        """
+        if not self.scaler:
+            return {
+                "scaler_type": "None",
+                "fitted_columns": []
+            }
+        
+        return {
+            "scaler_type": type(self.scaler).__name__,
+            "fitted_columns": self.fitted_columns or []
+        }
+    
 
     def get_features(self, item_info_row: pd.Series) -> torch.Tensor:
         """
         Extracts and processes numerical features from an item's metadata row.
-
-        Args:
-            item_info_row (pd.Series): The row from the item_info DataFrame.
-
-        Returns:
-            torch.Tensor: A tensor of the processed numerical features.
+        ...
         """
         if not self.numerical_cols:
             return torch.empty(0, dtype=torch.float32)
@@ -53,8 +66,12 @@ class NumericalProcessor:
         features = item_info_row.get(self.numerical_cols, pd.Series(0.0, index=self.numerical_cols))
         features = features.fillna(0).values.astype(np.float32).reshape(1, -1)
         
+        # Apply scaling if a scaler is present
         if self.scaler and self.normalization_method in ['standardization', 'min_max']:
             features = self.scaler.transform(features)
+        # Apply log transform if specified
+        elif self.normalization_method == 'log1p':
+            features = np.log1p(features)
         
         return torch.tensor(features, dtype=torch.float32).squeeze(0)
 
@@ -120,13 +137,21 @@ class NumericalProcessor:
         Returns:
             Tuple of (original_df, transformed_features_array).
         """
-        if not numerical_columns or method == 'none' or self.scaler is None:
+        if not numerical_columns or method == 'none':
             return df, df[numerical_columns].fillna(0).values
 
         features = df[numerical_columns].fillna(0).values
         
         if method in ['standardization', 'min_max']:
-            transformed_features = self.scaler.transform(features)
+            # The check for the scaler should happen here, specifically for
+            # methods that require it.
+            if self.scaler:
+                transformed_features = self.scaler.transform(features)
+            else:
+                # If no scaler exists for a scaling method, return original features.
+                transformed_features = features
+        elif method == 'log1p':
+            transformed_features = np.log1p(features)
         else:
             transformed_features = features
         

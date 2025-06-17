@@ -46,7 +46,7 @@ class TestSimpleFeatureCache(unittest.TestCase):
         )
         self.assertTrue(cache.cache_dir.exists())
         self.assertTrue(cache.cache_dir.is_dir())
-        expected_path = self.base_cache_dir / f"{self.vision_model}_{self.language_model}"
+        expected_path = self.base_cache_dir / f"vision_{self.vision_model or 'none'}_lang_{self.language_model or 'none'}"
         self.assertEqual(cache.cache_dir, expected_path)
         
         # Verifies that the cache directory is not created when disk usage is disabled.

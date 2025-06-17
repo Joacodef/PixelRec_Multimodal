@@ -48,7 +48,7 @@ class SimpleFeatureCache:
         self.max_memory_items = max_memory_items
         self.use_disk = use_disk
 
-        cache_name = f"{self.vision_model}_{self.language_model}"
+        cache_name = f"vision_{vision_model or 'none'}_lang_{language_model or 'none'}"
         provided_path = Path(base_cache_dir)
 
         # This logic prevents creating nested cache directories.
@@ -148,7 +148,7 @@ class SimpleFeatureCache:
             self.misses += 1
             return None
 
-    def set(self, item_id: str, features: Dict[str, torch.Tensor]) -> None:
+    def set(self, item_id: str, features: Dict[str, torch.Tensor], force_recompute: bool = False) -> None:
         """
         Caches the features for a given item ID.
 
@@ -158,17 +158,22 @@ class SimpleFeatureCache:
         Args:
             item_id (str): The unique identifier for the item.
             features (Dict[str, torch.Tensor]): A dictionary of the item's
-                                                processed feature tensors.
+                                                 processed feature tensors.
+            force_recompute (bool): If True, forces the cache to overwrite an
+                                    existing file on disk.
         """
         with self._lock:
             self._add_to_memory(item_id, features)
 
             if self.use_disk:
                 cache_file = self.cache_dir / f"{item_id}.pt"
-                try:
-                    torch.save(features, cache_file)
-                except Exception as e:
-                    print(f"Warning: SimpleFeatureCache could not save {cache_file}: {e}")
+                # Only save to disk if forcing recompute or if the file doesn't already exist.
+                if force_recompute or not cache_file.exists():
+                    try:
+                        torch.save(features, cache_file)
+                    except Exception as e:
+                        print(f"Warning: SimpleFeatureCache could not save {cache_file}: {e}")
+
 
     def _add_to_memory(self, item_id: str, features: Dict[str, torch.Tensor]) -> None:
         """

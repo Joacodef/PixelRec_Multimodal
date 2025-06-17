@@ -109,12 +109,19 @@ class MultimodalDataset(Dataset):
         self.is_train_mode = kwargs.get('is_train_mode', False)
 
         self.image_processor = None
+        self.clip_tokenizer = None  # Initialize clip_tokenizer attribute
         if self.vision_enabled:
             self.image_processor = ImageProcessor(
                 model_name=vision_model_name,
                 augmentation_config=self.image_augmentation_config,
                 is_train=self.is_train_mode
             )
+            # If using clip for vision, we also need its text tokenizer for contrastive loss
+            if vision_model_name == 'clip':
+                from transformers import CLIPProcessor
+                vision_hf_name = MODEL_CONFIGS['vision']['clip']['name']
+                clip_processor = CLIPProcessor.from_pretrained(vision_hf_name)
+                self.clip_tokenizer = clip_processor.tokenizer
 
         self.text_processor = None
         if self.language_enabled:
@@ -267,25 +274,26 @@ class MultimodalDataset(Dataset):
         features = {}
 
         # Process Image Features
-        if self.vision_enabled:
+        if self.vision_enabled and self.image_processor:
             image_path = f"{self.image_folder}/{item_id}.jpg"
             features['image'] = self.image_processor.load_and_transform_image(image_path)
-        else:
+        elif self.image_processor:
             features['image'] = self.image_processor.get_placeholder_tensor()
         
         # Process Text Features
-        if self.language_enabled:
+        if self.language_enabled and self.text_processor:
             text_content = item_info.get('description', '')
             text_features = self.text_processor.process_text(text_content)
             features.update(text_features)
-        else:
+        elif self.text_processor:
             text_features = self.text_processor.get_placeholder_tensors()
             features.update(text_features)
 
+
         # Process Numerical Features
-        if self.numerical_enabled:
+        if self.numerical_enabled and self.numerical_processor:
             features['numerical_features'] = self.numerical_processor.get_features(item_info)
-        else:
+        elif self.numerical_processor:
             features['numerical_features'] = self.numerical_processor.get_placeholder_tensor()
 
         # Process Categorical Features (Tag)
@@ -294,7 +302,19 @@ class MultimodalDataset(Dataset):
             tag_idx = self.tag_encoder.transform([tag_str])[0]
             features['tag_idx'] = torch.tensor(tag_idx, dtype=torch.long)
         else:
-            features['tag_idx'] = torch.tensor(0, dtype=torch.long) # Placeholder for untracked tag
+            features['tag_idx'] = torch.tensor(0, dtype=torch.long)
+
+        if self.clip_tokenizer:
+            text_content = item_info.get('description', '')
+            clip_tokens = self.clip_tokenizer(
+                text_content,
+                padding='max_length',
+                truncation=True,
+                max_length=77,  # CLIP's required text length
+                return_tensors='pt'
+            )
+            features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
+            features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
 
         return features
 

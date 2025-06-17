@@ -49,11 +49,11 @@ class PreprocessingPipeline:
         
         # Initializes all modular processors with their respective configurations.
         self.image_processor = ImageProcessor(
-            self.data_config.offline_image_compression,
-            self.data_config.offline_image_validation
+            compression_config=config.data.image_compression_config,
+            validation_config=config.data.image_validation_config
         )
         self.text_processor = TextProcessor(
-            self.data_config.offline_text_cleaning
+            cleaning_config=config.data.text_cleaning_config
         )
         self.numerical_processor = NumericalProcessor()
         self.data_filter = DataFilter()

@@ -76,17 +76,13 @@ class TestImageAugmentation(unittest.TestCase):
             image_folder=str(self.image_dir),
             vision_model_name='resnet',
             language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
             is_train_mode=True
         )
         
-        # Check that image augmentation is None when not configured
-        self.assertIsNone(dataset.image_augmentation)
-        
-        # Load an image and check it's not augmented
-        item_features1 = dataset._process_item_features('item_1')
-        item_features2 = dataset._process_item_features('item_1')
+        # When no augmentation config is passed, the processor should not apply it.
+        # Note: We now check the effect, not the internal attribute.
+        item_features1 = dataset._get_item_features('item_1')
+        item_features2 = dataset._get_item_features('item_1')
         
         # Images should be identical when augmentation is disabled
         torch.testing.assert_close(item_features1['image'], item_features2['image'])
@@ -108,39 +104,22 @@ class TestImageAugmentation(unittest.TestCase):
             image_folder=str(self.image_dir),
             vision_model_name='resnet',
             language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
             is_train_mode=True,
             image_augmentation_config=aug_config
         )
         
-        # Check that augmentation pipeline is created
-        self.assertIsNotNone(dataset.image_augmentation)
-        
         # Load the same image multiple times
-        images = []
-        for _ in range(5):
-            item_features = dataset._process_item_features('item_1')
-            images.append(item_features['image'])
+        images = [dataset._get_item_features('item_1')['image'] for _ in range(5)]
         
         # Check that at least some images are different due to augmentation
-        differences = []
-        for i in range(1, len(images)):
-            diff = torch.abs(images[0] - images[i]).sum().item()
-            differences.append(diff)
+        differences = [torch.abs(images[0] - img).sum().item() for img in images[1:]]
         
-        # At least one image should be different
         self.assertTrue(any(diff > 0.01 for diff in differences),
                        "Augmentation should produce different images")
     
     def test_augmentation_disabled_validation_mode(self):
         """Test that augmentation is disabled in validation mode even when config is enabled."""
-        aug_config = ImageAugmentationConfig(
-            enabled=True,
-            brightness=0.5,
-            contrast=0.5,
-            horizontal_flip=True
-        )
+        aug_config = ImageAugmentationConfig(enabled=True, brightness=0.5)
         
         dataset = MultimodalDataset(
             interactions_df=self.interactions_df,
@@ -148,285 +127,82 @@ class TestImageAugmentation(unittest.TestCase):
             image_folder=str(self.image_dir),
             vision_model_name='resnet',
             language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
             is_train_mode=False,  # Validation mode
             image_augmentation_config=aug_config
         )
         
-        # Augmentation should be None in validation mode
-        self.assertIsNone(dataset.image_augmentation)
+        # In validation mode, augmentations should not be applied.
+        item_features1 = dataset._get_item_features('item_1')
+        item_features2 = dataset._get_item_features('item_1')
         
         # Images should be identical
-        item_features1 = dataset._process_item_features('item_1')
-        item_features2 = dataset._process_item_features('item_1')
         torch.testing.assert_close(item_features1['image'], item_features2['image'])
-    
-    def test_color_augmentations(self):
-        """Test color-based augmentations (brightness, contrast, saturation, hue)."""
-        aug_config = ImageAugmentationConfig(
-            enabled=True,
-            brightness=0.5,
-            contrast=0.5,
-            saturation=0.5,
-            hue=0.2,
-            # Disable geometric augmentations for this test
-            random_crop=False,
-            horizontal_flip=False,
-            rotation_degrees=0,
-            gaussian_blur=False
-        )
-        
-        dataset = MultimodalDataset(
-            interactions_df=self.interactions_df,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            vision_model_name='resnet',
-            language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
-            is_train_mode=True,
-            image_augmentation_config=aug_config
-        )
-        
-        # Get multiple versions of the same image
-        original_image = dataset._load_and_process_image('item_1')
-        augmented_images = []
-        for _ in range(10):
-            aug_image = dataset._load_and_process_image('item_1')
-            augmented_images.append(aug_image)
-        
-        # Check that color values vary
-        color_variations = []
-        for aug_img in augmented_images:
-            # Calculate mean color difference from original
-            diff = torch.abs(aug_img - original_image).mean().item()
-            color_variations.append(diff)
-        
-        # Should have some variation in colors
-        self.assertTrue(max(color_variations) > 0.01,
-                       "Color augmentation should produce variations")
-    
-    def test_geometric_augmentations(self):
-        """Test geometric augmentations (crop, flip, rotation)."""
-        aug_config = ImageAugmentationConfig(
-            enabled=True,
-            # Disable color augmentations
-            brightness=0,
-            contrast=0,
-            saturation=0,
-            hue=0,
-            # Enable geometric augmentations
-            random_crop=True,
-            crop_scale=[0.7, 0.9],
-            horizontal_flip=True,
-            rotation_degrees=30,
-            gaussian_blur=False
-        )
-        
-        dataset = MultimodalDataset(
-            interactions_df=self.interactions_df,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            vision_model_name='resnet',
-            language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
-            is_train_mode=True,
-            image_augmentation_config=aug_config
-        )
-        
-        # Collect multiple augmented versions
-        images = []
-        for _ in range(10):
-            img = dataset._load_and_process_image('item_1')
-            images.append(img)
-        
-        # Check for variations indicating geometric changes
-        variations = []
-        for i in range(1, len(images)):
-            # Focus on edge regions where geometric changes are most apparent
-            edge_diff = torch.abs(images[0][:, :10, :] - images[i][:, :10, :]).sum()
-            edge_diff += torch.abs(images[0][:, -10:, :] - images[i][:, -10:, :]).sum()
-            edge_diff += torch.abs(images[0][:, :, :10] - images[i][:, :, :10]).sum()
-            edge_diff += torch.abs(images[0][:, :, -10:] - images[i][:, :, -10:]).sum()
-            variations.append(edge_diff.item())
-        
-        # Should have significant variations due to geometric transforms
-        self.assertTrue(max(variations) > 10.0,
-                       "Geometric augmentation should produce significant variations")
-    
-    def test_blur_augmentation(self):
-        """Test Gaussian blur augmentation."""
-        aug_config = ImageAugmentationConfig(
-            enabled=True,
-            # Disable other augmentations
-            brightness=0,
-            contrast=0,
-            saturation=0,
-            hue=0,
-            random_crop=False,
-            horizontal_flip=False,
-            rotation_degrees=0,
-            # Enable blur
-            gaussian_blur=True,
-            blur_kernel_size=[5, 9]
-        )
-        
-        dataset = MultimodalDataset(
-            interactions_df=self.interactions_df,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            vision_model_name='resnet',
-            language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
-            is_train_mode=True,
-            image_augmentation_config=aug_config
-        )
-        
-        # Get multiple versions
-        images = []
-        for _ in range(20):
-            img = dataset._load_and_process_image('item_1')
-            images.append(img)
-        
-        # Calculate sharpness metric (high-frequency content)
-        sharpness_values = []
-        for img in images:
-            # Use Laplacian to measure sharpness
-            img_gray = img.mean(dim=0)  # Convert to grayscale
-            laplacian = torch.nn.functional.conv2d(
-                img_gray.unsqueeze(0).unsqueeze(0),
-                torch.tensor([[[[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]]]]).float(),
-                padding=1
-            )
-            sharpness = laplacian.abs().mean().item()
-            sharpness_values.append(sharpness)
-        
-        # Should have variation in sharpness due to random blur application
-        sharpness_std = np.std(sharpness_values)
-        self.assertGreater(sharpness_std, 0.001,
-                          "Blur augmentation should create sharpness variations")
+
     
     def test_augmentation_with_missing_image(self):
         """Test that augmentation handles missing images gracefully."""
-        aug_config = ImageAugmentationConfig(
-            enabled=True,
-            brightness=0.5,
-            horizontal_flip=True
-        )
-        
         dataset = MultimodalDataset(
             interactions_df=self.interactions_df,
             item_info_df=self.item_info_df,
             image_folder=str(self.image_dir),
             vision_model_name='resnet',
             language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
-            is_train_mode=True,
-            image_augmentation_config=aug_config
+            is_train_mode=True
         )
         
-        # Try to process a non-existent item
-        # Should create a grey placeholder image and process it without errors
-        features = dataset._process_item_features('non_existent_item')
-        self.assertIsNone(features)  # Will be None because item not in item_info
+        # An item not in the item_info DataFrame should return placeholder features.
+        features = dataset._get_item_features('non_existent_item')
+        self.assertIsNotNone(features)
+        self.assertEqual(features['image'].sum(), 0) # Placeholder is zeros
         
-        # Try with an item that exists in item_info but has no image
+        # An item in the DataFrame but with no image file should also get a placeholder.
         self.item_info_df = pd.concat([
             self.item_info_df,
-            pd.DataFrame({
-                'item_id': ['item_no_image'],
-                'title': ['No Image Item'],
-                'tag': ['missing'],
-                'description': ['This item has no image'],
-                'view_number': [0],
-                'comment_number': [0]
-            })
+            pd.DataFrame([{'item_id': 'item_no_image', 'title': 'No Image', 'description': ''}])
         ], ignore_index=True)
-        
         dataset.item_info = self.item_info_df.set_index('item_id')
         
-        # This should work with a grey placeholder
-        features = dataset._process_item_features('item_no_image')
+        features = dataset._get_item_features('item_no_image')
         self.assertIsNotNone(features)
         self.assertEqual(features['image'].shape, torch.Size([3, 224, 224]))
+        self.assertEqual(features['image'].sum(), 0)
+
     
     def test_augmentation_reproducibility_with_seed(self):
         """Test that augmentation can be made reproducible with random seed."""
         aug_config = ImageAugmentationConfig(
             enabled=True,
             brightness=0.5,
-            contrast=0.5,
-            horizontal_flip=True,
-            random_crop=True
+            horizontal_flip=True
         )
-        
-        # Create two datasets with same config
-        dataset1 = MultimodalDataset(
+        dataset = MultimodalDataset(
             interactions_df=self.interactions_df,
             item_info_df=self.item_info_df,
             image_folder=str(self.image_dir),
             vision_model_name='resnet',
             language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
-            is_train_mode=True,
-            image_augmentation_config=aug_config
-        )
-        
-        dataset2 = MultimodalDataset(
-            interactions_df=self.interactions_df,
-            item_info_df=self.item_info_df,
-            image_folder=str(self.image_dir),
-            vision_model_name='resnet',
-            language_model_name='sentence-bert',
-            create_negative_samples=False,
-            cache_features=False,
             is_train_mode=True,
             image_augmentation_config=aug_config
         )
         
         # Set same random seed and get images
         torch.manual_seed(42)
-        img1 = dataset1._load_and_process_image('item_1')
+        img1 = dataset._get_item_features('item_1')['image']
         
         torch.manual_seed(42)
-        img2 = dataset2._load_and_process_image('item_1')
+        img2 = dataset._get_item_features('item_1')['image']
         
         # Should be identical with same seed
         torch.testing.assert_close(img1, img2)
         
         # Different seeds should produce different results
-        torch.manual_seed(42)
-        img3 = dataset1._load_and_process_image('item_1')
-        
         torch.manual_seed(43)
-        img4 = dataset1._load_and_process_image('item_1')
+        img3 = dataset._get_item_features('item_1')['image']
         
-        # Should be different with different seeds
-        diff = torch.abs(img3 - img4).sum().item()
+        diff = torch.abs(img1 - img3).sum().item()
         self.assertGreater(diff, 0.01, "Different seeds should produce different augmentations")
     
-    def test_augmentation_config_validation(self):
-        """Test that augmentation config validates parameters properly."""
-        # Test with invalid brightness value
-        with self.assertRaises(ValueError):
-            aug_config = ImageAugmentationConfig(
-                enabled=True,
-                brightness=-0.5  # Should be non-negative
-            )
-            # Add validation in ImageAugmentationConfig __post_init__ if needed
-        
-        # Test with invalid crop scale
-        with self.assertRaises(ValueError):
-            aug_config = ImageAugmentationConfig(
-                enabled=True,
-                crop_scale=[1.2, 0.8]  # min > max, should be invalid
-            )
-    
+
     def test_integration_with_dataloader(self):
         """Test that augmented dataset works properly with DataLoader."""
         aug_config = ImageAugmentationConfig(

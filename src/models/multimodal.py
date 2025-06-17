@@ -109,7 +109,6 @@ class MultimodalRecommender(nn.Module):
         self.n_users = n_users
         self.n_items = n_items
         self.n_tags = n_tags
-
         
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
         self.embedding_dim = embedding_dim
@@ -524,10 +523,10 @@ class MultimodalRecommender(nn.Module):
             user_idx: torch.Tensor,
             item_idx: torch.Tensor,
             tag_idx: torch.Tensor,
-            image: torch.Tensor,
-            text_input_ids: torch.Tensor,
-            text_attention_mask: torch.Tensor,
-            numerical_features: torch.Tensor,
+            image: Optional[torch.Tensor] = None,
+            text_input_ids: Optional[torch.Tensor] = None,
+            text_attention_mask: Optional[torch.Tensor] = None,
+            numerical_features: Optional[torch.Tensor] = None,
             clip_text_input_ids: Optional[torch.Tensor] = None,
             clip_text_attention_mask: Optional[torch.Tensor] = None,
             return_embeddings: bool = False,
@@ -548,17 +547,17 @@ class MultimodalRecommender(nn.Module):
         
         raw_vision_output = None
         # Conditionally process vision features.
-        if self.vision_model is not None:
+        if self.vision_model is not None and image is not None:
             raw_vision_output = self._get_vision_features(image)
             features_to_fuse.append(self.vision_projection(raw_vision_output))
         
         # Conditionally process language features.
-        if self.language_model is not None:
+        if self.language_model is not None and text_input_ids is not None and text_attention_mask is not None:
             raw_language_feat = self._get_language_features(text_input_ids, text_attention_mask)
             features_to_fuse.append(self.language_projection(raw_language_feat))
         
         # Conditionally process numerical features.
-        if self.numerical_projection is not None and self.num_numerical_features > 0:
+        if self.numerical_projection is not None and self.num_numerical_features > 0 and numerical_features is not None:
             features_to_fuse.append(self.numerical_projection(numerical_features))
 
         # Generate features specifically for the contrastive loss objective.
@@ -566,9 +565,10 @@ class MultimodalRecommender(nn.Module):
         text_features_for_contrastive_loss = None
         if self.use_contrastive and raw_vision_output is not None:
             vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
-            raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
-            if raw_clip_text_output is not None:
-                text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
+            if clip_text_input_ids is not None and clip_text_attention_mask is not None:
+                raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
+                if raw_clip_text_output is not None:
+                    text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
 
         # Apply the selected fusion method to the dynamically built list of features.
         if self.fusion_type == 'concatenate':

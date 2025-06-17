@@ -176,9 +176,10 @@ class ImageValidationConfig:
     # A list of valid image file extensions to consider during processing.
     allowed_extensions: List[str] = field(default_factory=lambda: ['.jpg', '.jpeg', '.png'])
 
-@dataclass
+@dataclass(frozen=True)
 class OfflineTextCleaningConfig:
     """Configures text cleaning rules applied during offline preprocessing."""
+    enabled: bool = True
     # If True, removes HTML tags from all text fields.
     remove_html: bool = True
     # If True, normalizes Unicode characters to a standard form.
@@ -453,6 +454,10 @@ class DataConfig:
     val_data_path: str = 'data/splits/split_1/val.csv'
     # Full path to the final test data CSV file.
     test_data_path: str = 'data/splits/split_1/test.csv'
+
+    image_compression_config: OfflineImageCompressionConfig = field(default_factory=OfflineImageCompressionConfig)
+    image_validation_config: ImageValidationConfig = field(default_factory=ImageValidationConfig)
+    text_cleaning_config: OfflineTextCleaningConfig = field(default_factory=OfflineTextCleaningConfig)
     
     # Nested configuration for the feature caching system.
     cache_config: SimpleCacheConfig = field(default_factory=SimpleCacheConfig)
