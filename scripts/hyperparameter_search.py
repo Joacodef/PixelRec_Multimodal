@@ -64,11 +64,11 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         config.training.weight_decay = trial.suggest_float(
             'weight_decay', 1e-6, 1e-2, log=True
         )
-        config.training.patience = trial.suggest_int(
-            'patience', 2, 10
-        )
         config.training.gradient_clip = trial.suggest_float(
             'gradient_clip', 0.5, 5.0
+        )
+        config.model.num_attention_heads = trial.suggest_categorical(
+            'num_attention_heads', [2, 4, 8]
         )
         
         # Model hyperparameters
@@ -137,10 +137,10 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
             # If contrastive learning is not used, set weights to zero
             config.training.contrastive_weight = 0.0
         
-        config.training.bce_weight = trial.suggest_float(
-            'bce_weight', 0.5, 1.0
-        )
-        
+            config.training.bce_weight = trial.suggest_float(
+                'bce_weight', 0.5, 1.0
+            )
+            
         # Optimizer settings
         config.training.optimizer_type = trial.suggest_categorical(
             'optimizer_type', ['adam', 'adamw', 'sgd']
@@ -493,14 +493,30 @@ def main():
                 best_config.training.batch_size = param_value
             elif param_name == 'weight_decay':
                 best_config.training.weight_decay = param_value
-            elif param_name == 'patience':
-                best_config.training.patience = param_value
             elif param_name == 'gradient_clip':
                 best_config.training.gradient_clip = param_value
             elif param_name == 'embedding_dim':
                 best_config.model.embedding_dim = param_value
+            elif param_name == 'num_attention_heads':
+                best_config.model.num_attention_heads = param_value
             elif param_name == 'fusion_type':
                 best_config.model.fusion_type = param_value
+            elif param_name == 'dropout_rate':
+                best_config.model.dropout_rate = param_value
+            elif param_name == 'attention_dropout':
+                best_config.model.attention_dropout = param_value
+            elif param_name == 'fusion_hidden_dims':
+                best_config.model.fusion_hidden_dims = [int(x) for x in param_value.split(',')]
+            elif param_name == 'projection_hidden_dim':
+                best_config.model.projection_hidden_dim = param_value
+            elif param_name == 'fusion_activation':
+                best_config.model.fusion_activation = param_value
+            elif param_name == 'use_batch_norm':
+                best_config.model.use_batch_norm = param_value
+            elif param_name == 'use_contrastive':
+                best_config.model.use_contrastive = param_value
+            elif param_name == 'contrastive_temperature':
+                best_config.model.contrastive_temperature = param_value
             elif param_name == 'contrastive_weight':
                 best_config.training.contrastive_weight = param_value
             elif param_name == 'bce_weight':
