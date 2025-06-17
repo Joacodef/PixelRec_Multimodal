@@ -46,8 +46,8 @@ class MultimodalRecommender(nn.Module):
         n_tags: int,
         num_numerical_features: int,
         embedding_dim: int = 128,
-        vision_model_name: str = 'clip',
-        language_model_name: str = 'sentence-bert',
+        vision_model_name: Optional[str] = 'clip',
+        language_model_name: Optional[str] = 'sentence-bert',
         freeze_vision: bool = True,
         freeze_language: bool = True,
         use_contrastive: bool = True,
@@ -110,14 +110,17 @@ class MultimodalRecommender(nn.Module):
         self.n_items = n_items
         self.n_tags = n_tags
 
-        self.vision_config = MODEL_CONFIGS['vision'][vision_model_name]
-        self.language_config = MODEL_CONFIGS['language'][language_model_name]
+        
         self.use_contrastive = use_contrastive and vision_model_name == 'clip'
-        self.language_model_name = language_model_name
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
         self.num_numerical_features = num_numerical_features
+
         self.vision_model_name = vision_model_name
+        self.language_model_name = language_model_name
+
+        self.vision_config = MODEL_CONFIGS['vision'][vision_model_name] if vision_model_name else None
+        self.language_config = MODEL_CONFIGS['language'][language_model_name] if language_model_name else None
 
         self._validate_model_configs()
         
@@ -133,8 +136,15 @@ class MultimodalRecommender(nn.Module):
 
         # Passes n_tags to the embedding initialization method.
         self._init_embeddings()
-        self._init_vision_model(vision_model_name, freeze_vision)
-        self._init_language_model(language_model_name, freeze_language)
+        self.vision_model = None
+        self.clip_text_model = None
+        if self.vision_model_name:
+            self._init_vision_model(self.vision_model_name, freeze_vision)
+        
+        self.language_model = None
+        if self.language_model_name:
+            self._init_language_model(self.language_model_name, freeze_language)
+
         self._init_projection_layers()
         self._init_fusion_network()
 
@@ -250,38 +260,40 @@ class MultimodalRecommender(nn.Module):
         activation = self._get_activation(self.fusion_activation)
         
         # Defines the vision projection network.
-        if self.projection_hidden_dim:
-            self.vision_projection = nn.Sequential(
-                nn.Linear(self.vision_config['dim'], self.projection_hidden_dim),
-                activation,
-                nn.Dropout(self.dropout_rate),
-                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
-        else:
-            self.vision_projection = nn.Sequential(
-                nn.Linear(self.vision_config['dim'], self.embedding_dim),
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
+        if self.vision_model:
+            if self.projection_hidden_dim:
+                self.vision_projection = nn.Sequential(
+                    nn.Linear(self.vision_config['dim'], self.projection_hidden_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate),
+                    nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
+            else:
+                self.vision_projection = nn.Sequential(
+                    nn.Linear(self.vision_config['dim'], self.embedding_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
         
         # Defines the language projection network.
-        if self.projection_hidden_dim:
-            self.language_projection = nn.Sequential(
-                nn.Linear(self.language_config['dim'], self.projection_hidden_dim),
-                activation,
-                nn.Dropout(self.dropout_rate),
-                nn.Linear(self.projection_hidden_dim, self.embedding_dim),
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
-        else:
-            self.language_projection = nn.Sequential(
-                nn.Linear(self.language_config['dim'], self.embedding_dim),
-                activation,
-                nn.Dropout(self.dropout_rate)
-            )
+        if self.language_model:
+            if self.projection_hidden_dim:
+                self.language_projection = nn.Sequential(
+                    nn.Linear(self.language_config['dim'], self.projection_hidden_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate),
+                    nn.Linear(self.projection_hidden_dim, self.embedding_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
+            else:
+                self.language_projection = nn.Sequential(
+                    nn.Linear(self.language_config['dim'], self.embedding_dim),
+                    activation,
+                    nn.Dropout(self.dropout_rate)
+                )
         
         # Defines the numerical features projection network.
         if self.num_numerical_features > 0:
@@ -322,10 +334,12 @@ class MultimodalRecommender(nn.Module):
         configured fusion_type.
         """
         self.fusion_layer = None
-        num_modalities = 4  # user, item, tag, numerical
-        if hasattr(self, 'vision_model'):
+        num_modalities = 3  # Start with user, item, and tag.
+        if self.vision_model is not None:
             num_modalities += 1
-        if hasattr(self, 'language_model'):
+        if self.language_model is not None:
+            num_modalities += 1
+        if self.num_numerical_features > 0:
             num_modalities += 1
 
         if self.fusion_type == 'concatenate':
@@ -521,83 +535,56 @@ class MultimodalRecommender(nn.Module):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
         Defines the main forward pass of the model.
-
-        Args:
-            user_idx (torch.Tensor): Tensor of user indices.
-            item_idx (torch.Tensor): Tensor of item indices.
-            tag_idx (torch.Tensor): Tensor of tag indices.
-            image (torch.Tensor): Tensor of item images.
-            text_input_ids (torch.Tensor): Tensor of tokenized text input IDs.
-            text_attention_mask (torch.Tensor): Tensor of text attention masks.
-            numerical_features (torch.Tensor): Tensor of numerical features.
-            clip_text_input_ids (Optional[torch.Tensor]): Optional text inputs for CLIP.
-            clip_text_attention_mask (Optional[torch.Tensor]): Optional attention masks for CLIP.
-            return_embeddings (bool): If True, returns intermediate embeddings
-                                    along with the final prediction.
-
-        Returns:
-            Union[torch.Tensor, Tuple]: Either the final prediction tensor or a
-                                        tuple containing the prediction and
-                                        intermediate embeddings.
         """
         batch_size = user_idx.size(0)
-
-        # Generate base embeddings.
-        user_emb = self.user_embedding(user_idx)
-        item_emb = self.item_embedding(item_idx)
-        tag_emb = self.tag_embedding(tag_idx)
-
-        # Extract and project features from each modality.
-        raw_vision_output = self._get_vision_features(image)
-        projected_vision_emb_main_task = self.vision_projection(raw_vision_output)
-        raw_language_feat_main_task = self._get_language_features(text_input_ids, text_attention_mask)
-        projected_language_emb_main_task = self.language_projection(raw_language_feat_main_task)
-
-        if self.numerical_projection is not None and self.num_numerical_features > 0:
-            projected_numerical_emb_main_task = self.numerical_projection(numerical_features)
-        else:
-            projected_numerical_emb_main_task = torch.zeros(batch_size, self.embedding_dim, device=user_idx.device)
         
+        # Create a dynamic list to hold features from active modalities.
+        features_to_fuse = []
+
+        # Always include user, item, and tag embeddings.
+        features_to_fuse.append(self.user_embedding(user_idx))
+        features_to_fuse.append(self.item_embedding(item_idx))
+        features_to_fuse.append(self.tag_embedding(tag_idx))
+        
+        raw_vision_output = None
+        # Conditionally process vision features.
+        if self.vision_model is not None:
+            raw_vision_output = self._get_vision_features(image)
+            features_to_fuse.append(self.vision_projection(raw_vision_output))
+        
+        # Conditionally process language features.
+        if self.language_model is not None:
+            raw_language_feat = self._get_language_features(text_input_ids, text_attention_mask)
+            features_to_fuse.append(self.language_projection(raw_language_feat))
+        
+        # Conditionally process numerical features.
+        if self.numerical_projection is not None and self.num_numerical_features > 0:
+            features_to_fuse.append(self.numerical_projection(numerical_features))
 
         # Generate features specifically for the contrastive loss objective.
         vision_features_for_contrastive_loss = None
         text_features_for_contrastive_loss = None
+        if self.use_contrastive and raw_vision_output is not None:
+            vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
+            raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
+            if raw_clip_text_output is not None:
+                text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
 
-        if self.use_contrastive: 
-            if hasattr(self, 'vision_contrastive_projection'):
-                vision_features_for_contrastive_loss = self.vision_contrastive_projection(raw_vision_output)
-            
-            if hasattr(self, 'clip_text_model') and clip_text_input_ids is not None and clip_text_attention_mask is not None:
-                raw_clip_text_output = self._get_clip_text_features(clip_text_input_ids, clip_text_attention_mask)
-                if raw_clip_text_output is not None and hasattr(self, 'text_contrastive_projection'): 
-                    text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
-        
-        # Stack all features and apply attention-based fusion.
-        # The new tag_emb is added to the stack of features.
-        features_to_fuse = [
-            user_emb, 
-            item_emb, 
-            tag_emb,
-            projected_vision_emb_main_task,
-            projected_language_emb_main_task,
-            projected_numerical_emb_main_task
-        ]
-
-        # Apply the selected fusion method.
+        # Apply the selected fusion method to the dynamically built list of features.
         if self.fusion_type == 'concatenate':
             fused_features = torch.cat(features_to_fuse, dim=1)
         else:
-            # The 'attention' and 'gated' layers expect a list of features.
             fused_features = self.fusion_layer(features_to_fuse)
         
-        # Pass the dynamically fused features through the final prediction network.
         output = self.prediction_network(fused_features)
         
-        # Sanitize the output to prevent NaN/Inf values from propagating.
         if torch.isnan(output).any() or torch.isinf(output).any():
             output = torch.nan_to_num(output, nan=0.0, posinf=10.0, neginf=-10.0)
 
         if return_embeddings:
+            # For the fourth return value, we return the main task's vision embedding.
+            projected_vision_emb_main_task = self.vision_projection(raw_vision_output) if raw_vision_output is not None else None
+            
             if vision_features_for_contrastive_loss is not None:
                 vision_features_for_contrastive_loss = F.normalize(vision_features_for_contrastive_loss, p=2, dim=-1)
             if text_features_for_contrastive_loss is not None:
@@ -639,13 +626,15 @@ class MultimodalRecommender(nn.Module):
         """
         Validates that the selected model configurations are available and consistent.
         """
-        if self.vision_model_name not in MODEL_CONFIGS['vision']:
+        if self.vision_model_name and self.vision_model_name not in MODEL_CONFIGS['vision']:
             raise ValueError(f"Vision model '{self.vision_model_name}' not found in MODEL_CONFIGS.")
-        if self.language_model_name not in MODEL_CONFIGS['language']:
+        if self.language_model_name and self.language_model_name not in MODEL_CONFIGS['language']:
             raise ValueError(f"Language model '{self.language_model_name}' not found in MODEL_CONFIGS.")
-        vision_dim = self.vision_config.get('dim')
-        if not isinstance(vision_dim, int) or vision_dim <= 0:
-            raise ValueError(f"Invalid vision model dimension: {vision_dim}")
+        
+        if self.vision_config:
+            vision_dim = self.vision_config.get('dim')
+            if not isinstance(vision_dim, int) or vision_dim <= 0:
+                raise ValueError(f"Invalid vision model dimension: {vision_dim}")
 
     def _get_clip_text_output_dim(self) -> int:
         """

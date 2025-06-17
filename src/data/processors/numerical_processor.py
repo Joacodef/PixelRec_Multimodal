@@ -1,22 +1,74 @@
 # src/data/processors/numerical_processor.py
 """
-Modular numerical feature processing and scaling
+Modular numerical feature processing for both offline scaling 
+and online feature extraction for the model.
 """
 import pandas as pd
 import numpy as np
+import torch
+import pickle
 from pathlib import Path
 from typing import List, Optional, Any, Tuple
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-import pickle
 
 
 class NumericalProcessor:
-    """Handles numerical feature processing and scaling operations"""
-    
-    def __init__(self):
-        self.scaler = None
-        self.fitted_columns = None
-    
+    """Handles both offline and online numerical feature processing and scaling."""
+
+    def __init__(
+        self,
+        # Parameters for online mode (used by Dataset)
+        numerical_cols: Optional[List[str]] = None,
+        normalization_method: str = 'none',
+        scaler: Optional[Any] = None
+    ):
+        """
+        Initializes the NumericalProcessor for either online or offline use.
+
+        Args:
+            numerical_cols (Optional[List[str]]): List of columns to process (online mode).
+            normalization_method (str): Normalization method to use (online mode).
+            scaler (Optional[Any]): A pre-fitted scikit-learn scaler (online mode).
+        """
+        self.numerical_cols = numerical_cols or []
+        self.normalization_method = normalization_method
+        self.scaler = scaler
+        self.fitted_columns = getattr(scaler, 'feature_names_in_', None)
+
+    # --- Methods for Online Processing (used by Dataset) ---
+
+    def get_features(self, item_info_row: pd.Series) -> torch.Tensor:
+        """
+        Extracts and processes numerical features from an item's metadata row.
+
+        Args:
+            item_info_row (pd.Series): The row from the item_info DataFrame.
+
+        Returns:
+            torch.Tensor: A tensor of the processed numerical features.
+        """
+        if not self.numerical_cols:
+            return torch.empty(0, dtype=torch.float32)
+
+        features = item_info_row.get(self.numerical_cols, pd.Series(0.0, index=self.numerical_cols))
+        features = features.fillna(0).values.astype(np.float32).reshape(1, -1)
+        
+        if self.scaler and self.normalization_method in ['standardization', 'min_max']:
+            features = self.scaler.transform(features)
+        
+        return torch.tensor(features, dtype=torch.float32).squeeze(0)
+
+    def get_placeholder_tensor(self) -> torch.Tensor:
+        """
+        Creates a placeholder (zero) tensor for numerical features.
+
+        Returns:
+            torch.Tensor: A zero tensor with length equal to the number of numerical features.
+        """
+        return torch.zeros(len(self.numerical_cols), dtype=torch.float32)
+        
+    # --- Methods for Offline Processing (used by scripts) ---
+
     def fit_scaler(
         self,
         df: pd.DataFrame,
@@ -27,37 +79,25 @@ class NumericalProcessor:
         Fit a scaler on numerical columns.
         
         Args:
-            df: DataFrame containing numerical features
-            numerical_columns: List of column names to scale
-            method: Scaling method ('standardization', 'min_max', 'log1p', 'none')
+            df: DataFrame containing numerical features.
+            numerical_columns: List of column names to scale.
+            method: Scaling method ('standardization', 'min_max', 'log1p', 'none').
             
         Returns:
-            Fitted scaler object or None
+            Fitted scaler object or None.
         """
         if not numerical_columns or method in ['none', 'log1p']:
-            print(f"Scaler fitting skipped for method: {method}")
             return None
         
-        # Validate columns exist
-        missing_cols = [col for col in numerical_columns if col not in df.columns]
-        if missing_cols:
-            print(f"Warning: Missing columns {missing_cols}. Skipping scaler fitting.")
-            return None
-        
-        # Prepare data
         data_to_scale = df[numerical_columns].fillna(0).values
         
-        # Create scaler
         if method == 'standardization':
             self.scaler = StandardScaler()
         elif method == 'min_max':
             self.scaler = MinMaxScaler()
         else:
-            print(f"Unknown scaling method: {method}")
             return None
         
-        # Fit scaler
-        print(f"Fitting {method} scaler on {len(data_to_scale)} samples...")
         self.scaler.fit(data_to_scale)
         self.fitted_columns = numerical_columns.copy()
         
@@ -67,114 +107,52 @@ class NumericalProcessor:
         self,
         df: pd.DataFrame,
         numerical_columns: List[str],
-        method: str = 'standardization',
-        scaler: Optional[Any] = None
+        method: str = 'standardization'
     ) -> Tuple[pd.DataFrame, np.ndarray]:
         """
-        Transform numerical features using specified method.
+        Transform numerical features using the fitted scaler.
         
         Args:
-            df: Input DataFrame
-            numerical_columns: Columns to transform
-            method: Transformation method
-            scaler: Pre-fitted scaler (optional)
+            df: Input DataFrame.
+            numerical_columns: Columns to transform.
+            method: Transformation method.
             
         Returns:
-            Tuple of (original_df, transformed_features_array)
+            Tuple of (original_df, transformed_features_array).
         """
-        if not numerical_columns or method == 'none':
-            return df, np.array([])
-        
-        # Validate columns
-        missing_cols = [col for col in numerical_columns if col not in df.columns]
-        if missing_cols:
-            print(f"Warning: Missing columns {missing_cols}")
-            available_cols = [col for col in numerical_columns if col in df.columns]
-            if not available_cols:
-                return df, np.array([])
-            numerical_columns = available_cols
-        
-        # Prepare data
+        if not numerical_columns or method == 'none' or self.scaler is None:
+            return df, df[numerical_columns].fillna(0).values
+
         features = df[numerical_columns].fillna(0).values
         
-        # Apply transformation
-        if method == 'log1p':
-            if np.any(features < 0):
-                print("Warning: log1p applied to negative values")
-            transformed_features = np.log1p(features)
-        elif method in ['standardization', 'min_max'] and scaler is not None:
-            transformed_features = scaler.transform(features)
-        elif method in ['standardization', 'min_max'] and self.scaler is not None:
+        if method in ['standardization', 'min_max']:
             transformed_features = self.scaler.transform(features)
         else:
-            print(f"No scaler available for method {method}. Using original features.")
             transformed_features = features
         
         return df, transformed_features
-    
+
     def save_scaler(self, scaler_path: Path) -> bool:
-        """
-        Save fitted scaler and its column names to disk.
-        
-        Args:
-            scaler_path: Path to save the scaler
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Save fitted scaler and its column names to disk."""
         if self.scaler is None:
-            print("No scaler to save")
             return False
         
-        try:
-            scaler_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(scaler_path, 'wb') as f:
-                # Save both the scaler and the columns it was fitted on
-                pickle.dump({'scaler': self.scaler, 'columns': self.fitted_columns}, f)
-            print(f"Scaler and column info saved to {scaler_path}")
-            return True
-        except Exception as e:
-            print(f"Error saving scaler: {e}")
-            return False
+        scaler_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(scaler_path, 'wb') as f:
+            pickle.dump({'scaler': self.scaler, 'columns': self.fitted_columns}, f)
+        return True
     
     def load_scaler(self, scaler_path: Path) -> bool:
-        """
-        Load scaler and its column names from disk.
-        
-        Args:
-            scaler_path: Path to load the scaler from
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Load scaler and its column names from disk."""
         if not scaler_path.exists():
-            print(f"Scaler not found at {scaler_path}")
             return False
         
-        try:
-            with open(scaler_path, 'rb') as f:
-                scaler_data = pickle.load(f)
-                # Handle both new (dict) and old (direct scaler) formats
-                if isinstance(scaler_data, dict):
-                    self.scaler = scaler_data.get('scaler')
-                    self.fitted_columns = scaler_data.get('columns')
-                else:
-                    self.scaler = scaler_data
-                    self.fitted_columns = None # Old format, columns are unknown
-            print(f"Scaler loaded from {scaler_path}")
-            return True
-        except Exception as e:
-            print(f"Error loading scaler: {e}")
-            return False
-    
-    def get_scaler_info(self) -> dict:
-        """Get information about the current scaler"""
-        if self.scaler is None:
-            return {"scaler": None, "fitted_columns": None}
-        
-        scaler_type = type(self.scaler).__name__
-        return {
-            "scaler_type": scaler_type,
-            "fitted_columns": self.fitted_columns,
-            "n_features": len(self.fitted_columns) if self.fitted_columns else 'Unknown'
-        }
+        with open(scaler_path, 'rb') as f:
+            scaler_data = pickle.load(f)
+            if isinstance(scaler_data, dict):
+                self.scaler = scaler_data.get('scaler')
+                self.fitted_columns = scaler_data.get('columns')
+            else:
+                self.scaler = scaler_data
+                self.fitted_columns = None
+        return True

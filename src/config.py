@@ -34,9 +34,9 @@ MODEL_CONFIGS = {
 class ModelConfig:
     """Specifies the architecture and parameters of the recommender model."""
     # The pre-trained vision model to use as a feature extractor.
-    vision_model: str = 'resnet'
+    vision_model: Optional[str] = 'resnet'
     # The pre-trained language model to use for text feature extraction.
-    language_model: str = 'sentence-bert'
+    language_model: Optional[str] = 'sentence-bert'
     # The dimensionality of the latent embeddings for users, items, and projected features.
     embedding_dim: int = 64
     # The method for combining multimodal features ('concatenate', 'attention', 'gated').

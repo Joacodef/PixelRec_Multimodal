@@ -25,7 +25,11 @@ class TestPrecomputeCache(unittest.TestCase):
     def setUp(self):
         """Set up a temporary environment for testing."""
         self.test_dir = Path("test_temp_cache")
-        self.test_dir.mkdir(exist_ok=True)
+        # Clean up previous runs if necessary
+        if self.test_dir.exists():
+            import shutil
+            shutil.rmtree(self.test_dir)
+        self.test_dir.mkdir()
 
         # Define paths
         self.processed_data_dir = self.test_dir / "data" / "processed"
@@ -71,30 +75,35 @@ class TestPrecomputeCache(unittest.TestCase):
             pickle.dump({'scaler': scaler, 'columns': self.numerical_cols}, f)
         
         # 5. Dummy Config File
+        # This is the key change: we enable the vision model and point all data paths
+        # to our temporary test directories.
         self.config_path = self.configs_dir / "test_config_cache.yaml"
         config_content = f"""
 model:
   vision_model: {self.vision_model}
-  language_model: {self.language_model}
+  language_model: null
 
 data:
-  processed_item_info_path: {self.processed_item_info_path.as_posix()}
-  processed_interactions_path: {self.processed_interactions_path.as_posix()}
-  processed_image_destination_folder: {self.image_dir.as_posix()}
-  image_folder: {self.image_dir.as_posix()}
-  scaler_path: {self.scaler_path.as_posix()}
+  item_info_path: {self.processed_item_info_path}
+  interactions_path: {self.processed_interactions_path}
+  image_folder: {self.image_dir}
+  scaler_path: {self.scaler_path}
   numerical_features_cols: {self.numerical_cols}
-  numerical_normalization_method: standardization
-
+  
   cache_config:
-    cache_directory: {self.cache_dir.as_posix()}
+    enabled: True
+    cache_directory: {self.cache_dir}
+    use_disk: True
 """
-        self.config_path.write_text(config_content)
+        with open(self.config_path, 'w') as f:
+            f.write(config_content)
 
     def tearDown(self):
-        """Clean up the temporary directory."""
+        """Clean up the temporary environment after tests."""
+        import shutil
         if self.test_dir.exists():
             shutil.rmtree(self.test_dir)
+
 
     def test_cache_creation_and_content(self):
         """Test that cache files are created correctly and contain valid features."""

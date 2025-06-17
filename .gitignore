@@ -72,3 +72,5 @@ parallel_coordinate.html
 # Model artifacts that might be large
 best_params.json
 study_results.json
+
+test_temp*

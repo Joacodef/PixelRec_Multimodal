@@ -10,6 +10,10 @@ sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent.parent)
 from src.data.processors.image_processor import ImageProcessor
 from src.config import OfflineImageCompressionConfig, ImageValidationConfig
 
+compression_config = OfflineImageCompressionConfig()
+validation_config = ImageValidationConfig()
+processor = ImageProcessor(compression_config=compression_config, validation_config=validation_config)
+
 class TestImageProcessor(unittest.TestCase):
     """Unit tests for the ImageProcessor class."""
 

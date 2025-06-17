@@ -24,6 +24,9 @@ import traceback
 from .simple_cache import SimpleFeatureCache
 from ..config import MODEL_CONFIGS, TextAugmentationConfig, ImageAugmentationConfig
 from ..data.preprocessing import augment_text
+from .processors import ImageProcessor, TextProcessor, NumericalProcessor
+
+
 
 
 class MultimodalDataset(Dataset):
@@ -41,8 +44,8 @@ class MultimodalDataset(Dataset):
         interactions_df: pd.DataFrame,
         item_info_df: pd.DataFrame,
         image_folder: str,
-        vision_model_name: str = 'clip',
-        language_model_name: str = 'sentence-bert',
+        vision_model_name: Optional[str] = 'clip',
+        language_model_name: Optional[str] = 'sentence-bert',
         create_negative_samples: bool = True,
         numerical_feat_cols: Optional[List[str]] = None,
         categorical_feat_cols: Optional[List[str]] = None,
@@ -62,8 +65,8 @@ class MultimodalDataset(Dataset):
             interactions_df (pd.DataFrame): DataFrame of user-item interactions.
             item_info_df (pd.DataFrame): DataFrame of item metadata.
             image_folder (str): Path to the directory containing item images.
-            vision_model_name (str): The key for the vision model configuration.
-            language_model_name (str): The key for the language model configuration.
+            vision_model_name (Optional[str]): The key for the vision model config. If None, vision is disabled.
+            language_model_name (Optional[str]): The key for the language model config. If None, language is disabled.
             create_negative_samples (bool): If True, generates negative samples for training.
             numerical_feat_cols (Optional[List[str]]): A list of column names for numerical features.
             categorical_feat_cols (Optional[List[str]]): A list of column names for categorical features.
@@ -71,6 +74,9 @@ class MultimodalDataset(Dataset):
             cache_max_items (int): The maximum number of items for the in-memory cache.
             cache_dir (Optional[str]): The base directory for the feature cache.
             cache_to_disk (bool): If True, persists the cache to disk.
+            user_encoder (LabelEncoder): An optional pre-fitted user LabelEncoder.
+            item_encoder (LabelEncoder): An optional pre-fitted item LabelEncoder.
+            tag_encoder (LabelEncoder): An optional pre-fitted tag LabelEncoder.
             **kwargs: Additional optional arguments for configuration.
         """
         self.interactions = interactions_df.copy()
@@ -78,84 +84,83 @@ class MultimodalDataset(Dataset):
         self.item_info = item_info_df.set_index('item_id')
         self.image_folder = image_folder
 
-        # Ensures that interactions only include items present in the item metadata.
+        self.vision_enabled = vision_model_name is not None
+        self.language_enabled = language_model_name is not None
+        self.numerical_enabled = numerical_feat_cols is not None and len(numerical_feat_cols) > 0
+
         valid_item_ids = set(self.item_info_df_original['item_id'].astype(str))
         original_interaction_count = len(self.interactions)
         self.interactions = self.interactions[
             self.interactions['item_id'].astype(str).isin(valid_item_ids)
         ].reset_index(drop=True)
-        
         if len(self.interactions) < original_interaction_count:
             print(f"INFO: Dropped {original_interaction_count - len(self.interactions)} interactions "
                   "that had no corresponding item metadata.")
 
-        # Sets the numerical feature columns to use.
-        if numerical_feat_cols is not None:
-            self.numerical_feat_cols = numerical_feat_cols
-        else:
-            self.numerical_feat_cols = [
-                'view_number', 'comment_number', 'thumbup_number',
-                'share_number', 'coin_number', 'favorite_number', 'barrage_number'
-            ]
-        
-        # Sets the categorical feature columns to use.
-        self.categorical_feat_cols = categorical_feat_cols if categorical_feat_cols is not None else []
+        self.numerical_feat_cols = numerical_feat_cols or []
+        self.categorical_feat_cols = categorical_feat_cols or []
 
-        # Sets up other configuration parameters from kwargs.
         self.negative_sampling_strategy = kwargs.get('negative_sampling_strategy', 'random')
         self.negative_sampling_ratio = float(kwargs.get('negative_sampling_ratio', 1.0))
         self.text_augmentation_config = kwargs.get('text_augmentation_config', TextAugmentationConfig(enabled=False))
+        self.image_augmentation_config = kwargs.get('image_augmentation_config', ImageAugmentationConfig(enabled=False))
         self.numerical_normalization_method = kwargs.get('numerical_normalization_method', 'none')
         self.numerical_scaler = kwargs.get('numerical_scaler', None)
         self.is_train_mode = kwargs.get('is_train_mode', False)
 
+        self.image_processor = None
+        if self.vision_enabled:
+            self.image_processor = ImageProcessor(
+                model_name=vision_model_name,
+                augmentation_config=self.image_augmentation_config,
+                is_train=self.is_train_mode
+            )
+
+        self.text_processor = None
+        if self.language_enabled:
+            self.text_processor = TextProcessor(
+                model_name=language_model_name,
+                augmentation_config=self.text_augmentation_config
+            )
+
+        self.numerical_processor = None
+        if self.numerical_enabled:
+            self.numerical_processor = NumericalProcessor(
+                numerical_cols=self.numerical_feat_cols,
+                normalization_method=self.numerical_normalization_method,
+                scaler=self.numerical_scaler
+            )
+            if self.numerical_processor.scaler and not hasattr(self.numerical_processor.scaler, 'scale_'):
+                 self.numerical_processor.fit_scaler(self.item_info_df_original)
+
         self.user_encoder = user_encoder if user_encoder is not None else LabelEncoder()
         self.item_encoder = item_encoder if item_encoder is not None else LabelEncoder()
-
-        # Fit user encoder ONLY if it hasn't been fitted before
         if not hasattr(self.user_encoder, 'classes_'):
-            
             self.user_encoder.fit(self.interactions['user_id'].astype(str))
-
-        # Fit item encoder ONLY if it hasn't been fitted before
         if not hasattr(self.item_encoder, 'classes_'):
-            print("Fitting item encoder...")
             self.all_item_ids = self.item_info_df_original['item_id'].astype(str).unique()
             self.item_encoder.fit(self.all_item_ids)
-        
-        # Initializes the necessary Hugging Face processors.
-        self._init_processors(vision_model_name, language_model_name)
 
-        # Initializes the feature cache if enabled.
+        for col in self.categorical_feat_cols:
+             if col == 'tag':
+                self.item_info_df_original[col] = self.item_info_df_original[col].fillna('unknown')
+                self.item_info[col] = self.item_info[col].fillna('unknown')
+                self.tag_encoder = tag_encoder if tag_encoder is not None else LabelEncoder()
+                if not hasattr(self.tag_encoder, 'classes_'):
+                    self.tag_encoder.fit(self.item_info_df_original[col])
+                self.n_tags = len(self.tag_encoder.classes_)
+
         self.feature_cache = None
         if cache_features:
             base_dir_for_sfc = cache_dir if cache_dir else "cache"
             self.feature_cache = SimpleFeatureCache(
-                vision_model=vision_model_name,
-                language_model=language_model_name,
+                vision_model=vision_model_name if self.vision_enabled else None,
+                language_model=language_model_name if self.language_enabled else None,
                 base_cache_dir=base_dir_for_sfc,
                 max_memory_items=cache_max_items,
                 use_disk=cache_to_disk
             )
 
-        # Fits encoders on the entire user and item catalogs to ensure consistency.
-        self.user_encoder.fit(self.interactions['user_id'].astype(str))
-        self.item_encoder.fit(self.item_info_df_original['item_id'].astype(str))
-
-        # Handle categorical features like 'tag'
-        for col in self.categorical_feat_cols:
-            if col == 'tag':
-                # Fill missing tags with a placeholder and fit encoder
-                self.item_info_df_original[col] = self.item_info_df_original[col].fillna('unknown')
-                self.item_info[col] = self.item_info[col].fillna('unknown')
-                
-                self.tag_encoder = tag_encoder if tag_encoder is not None else LabelEncoder()
-                if not hasattr(self.tag_encoder, 'classes_'):
-                    print("Fitting tag encoder...")
-                    self.tag_encoder.fit(self.item_info_df_original[col])
-                self.n_tags = len(self.tag_encoder.classes_)
-        
-        # Transforms interaction data to numerical indices.
         if not self.interactions.empty:
             self.interactions['user_idx'] = self.user_encoder.transform(self.interactions['user_id'].astype(str))
             self.interactions['item_idx'] = self.item_encoder.transform(self.interactions['item_id'].astype(str))
@@ -165,18 +170,6 @@ class MultimodalDataset(Dataset):
             self.n_users = 0
             self.n_items = 0
 
-        self.image_augmentation_config = kwargs.get(
-            'image_augmentation_config', 
-            ImageAugmentationConfig(enabled=False)
-        )
-        
-        # Only initialize augmentations if truly needed
-        if hasattr(self, 'image_augmentation_config'):
-            self._init_image_augmentations()
-        else:
-            self.image_augmentation = None
-
-        # Creates the final set of samples, including negatives if specified.
         if create_negative_samples:
             self.all_samples = self._create_samples_with_negatives()
         else:
@@ -220,7 +213,8 @@ class MultimodalDataset(Dataset):
         Retrieves a single sample from the dataset by its index.
 
         This method first attempts to retrieve pre-computed features from the
-        cache. If not found, it processes the features on-the-fly. It assembles
+        cache. If not found, it calls a helper method to process the features
+        on-the-fly, which respects which modalities are enabled. It assembles
         and returns a dictionary of tensors ready for model input.
 
         Args:
@@ -236,24 +230,10 @@ class MultimodalDataset(Dataset):
         features = self.feature_cache.get(item_id) if self.feature_cache else None
 
         if features is None:
-            features = self._process_item_features(item_id)
+            features = self._get_item_features(item_id)
             if self.feature_cache and features:
                 self.feature_cache.set(item_id, features)
         
-        # Provides dummy features if processing fails, to prevent crashes.
-        if features is None:
-            dummy_len = getattr(self.tokenizer, 'model_max_length', 128)
-            features = {
-                'image': torch.zeros(3, 224, 224),
-                'text_input_ids': torch.zeros(dummy_len, dtype=torch.long),
-                'text_attention_mask': torch.zeros(dummy_len, dtype=torch.long),
-                'numerical_features': torch.zeros(len(self.numerical_feat_cols)),
-                'tag_idx': torch.zeros(1, dtype=torch.long),
-            }
-            if self.clip_tokenizer_for_contrastive:
-                features['clip_text_input_ids'] = torch.zeros(77, dtype=torch.long)
-                features['clip_text_attention_mask'] = torch.zeros(77, dtype=torch.long)
-                
         batch = {
             'user_idx': torch.tensor(row['user_idx'], dtype=torch.long),
             'item_idx': torch.tensor(row['item_idx'], dtype=torch.long),
@@ -261,6 +241,80 @@ class MultimodalDataset(Dataset):
         }
         batch.update(features)
         return batch
+
+    def _get_item_features(self, item_id: str) -> Dict[str, torch.Tensor]:
+        """
+        Processes all enabled features for a given item ID.
+
+        For each modality (vision, text, numerical, etc.), this method checks
+        if it is enabled in the dataset's configuration. It calls the
+        appropriate processor to generate feature tensors if enabled, or
+        placeholder tensors if disabled.
+
+        Args:
+            item_id (str): The unique identifier for the item.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary of feature tensors for the item.
+        """
+        try:
+            item_info = self.item_info.loc[item_id]
+        except KeyError:
+            # Return placeholders if item metadata is not found
+            print(f"Warning: Item ID {item_id} not found in item_info. Using placeholders.")
+            return self._get_placeholder_features()
+
+        features = {}
+
+        # Process Image Features
+        if self.vision_enabled:
+            image_path = f"{self.image_folder}/{item_id}.jpg"
+            features['image'] = self.image_processor.load_and_transform_image(image_path)
+        else:
+            features['image'] = self.image_processor.get_placeholder_tensor()
+        
+        # Process Text Features
+        if self.language_enabled:
+            text_content = item_info.get('description', '')
+            text_features = self.text_processor.process_text(text_content)
+            features.update(text_features)
+        else:
+            text_features = self.text_processor.get_placeholder_tensors()
+            features.update(text_features)
+
+        # Process Numerical Features
+        if self.numerical_enabled:
+            features['numerical_features'] = self.numerical_processor.get_features(item_info)
+        else:
+            features['numerical_features'] = self.numerical_processor.get_placeholder_tensor()
+
+        # Process Categorical Features (Tag)
+        if 'tag' in self.categorical_feat_cols:
+            tag_str = item_info.get('tag', 'unknown')
+            tag_idx = self.tag_encoder.transform([tag_str])[0]
+            features['tag_idx'] = torch.tensor(tag_idx, dtype=torch.long)
+        else:
+            features['tag_idx'] = torch.tensor(0, dtype=torch.long) # Placeholder for untracked tag
+
+        return features
+
+    def _get_placeholder_features(self) -> Dict[str, torch.Tensor]:
+        """
+        Generates a full set of placeholder features for all modalities.
+        
+        This is used as a fallback when an item's metadata cannot be found.
+        """
+        features = {}
+        if self.image_processor:
+            features['image'] = self.image_processor.get_placeholder_tensor()
+        if self.text_processor:
+            features.update(self.text_processor.get_placeholder_tensors())
+        if self.numerical_processor:
+            features['numerical_features'] = self.numerical_processor.get_placeholder_tensor()
+        
+        features['tag_idx'] = torch.tensor(0, dtype=torch.long)
+        
+        return features
 
     def _process_item_features(self, item_id: str) -> Optional[Dict[str, torch.Tensor]]:
         """
