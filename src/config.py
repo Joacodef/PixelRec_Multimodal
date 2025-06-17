@@ -80,6 +80,10 @@ class TrainingConfig:
     epochs: int = 30
     # The number of epochs to wait for improvement in validation loss before stopping the training early.
     patience: int = 10
+    # The metric to monitor for early stopping (e.g., 'val_loss', 'val_f1_score').
+    early_stopping_metric: str = 'val_loss'
+    # The direction of improvement for the monitored metric ('minimize' or 'maximize').
+    early_stopping_direction: str = 'minimize'
     
     # The L2 regularization factor applied by the optimizer to prevent overfitting.
     weight_decay: float = 0.01

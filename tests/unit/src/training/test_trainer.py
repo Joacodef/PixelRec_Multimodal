@@ -38,9 +38,15 @@ class TestTrainer(unittest.TestCase):
         self.device = torch.device('cpu')
         self.mock_model = SimpleMockModel().to(self.device)
         
+        # Create a mock config with the expected nested structure
         self.mock_config = MagicMock()
-        self.mock_config.vision_model = "test_vision"
-        self.mock_config.language_model = "test_language"
+        self.mock_config.model.vision_model = "test_vision"
+        self.mock_config.model.language_model = "test_language"
+        self.mock_config.model.use_contrastive = False
+        # Set default early stopping behavior for most tests
+        self.mock_config.training.early_stopping_metric = 'val_loss'
+        self.mock_config.training.early_stopping_direction = 'minimize'
+
 
         def create_mock_batch(label_val):
             return {
@@ -62,8 +68,8 @@ class TestTrainer(unittest.TestCase):
         self.trainer = Trainer(
             model=self.mock_model,
             device=self.device,
-            checkpoint_dir=str(self.test_dir),
-            model_config=self.mock_config
+            config=self.mock_config,
+            checkpoint_dir=str(self.test_dir)
         )
         
         self.optimizer = torch.optim.SGD(self.mock_model.parameters(), lr=0.1)
@@ -118,7 +124,13 @@ class TestTrainer(unittest.TestCase):
         self.assertTrue(expected_path.exists())
         
         new_model = SimpleMockModel().to(self.device)
-        new_trainer = Trainer(new_model, self.device, str(self.test_dir), model_config=self.mock_config)
+        # Instantiate the new trainer with the correct 'config' argument
+        new_trainer = Trainer(
+            model=new_model, 
+            device=self.device, 
+            config=self.mock_config, 
+            checkpoint_dir=str(self.test_dir)
+        )
         new_trainer.load_checkpoint(checkpoint_filename)
         
         loaded_state = new_model.state_dict()
@@ -126,24 +138,50 @@ class TestTrainer(unittest.TestCase):
             self.assertFalse(torch.equal(initial_state[key], loaded_state[key]))
             self.assertTrue(torch.equal(self.mock_model.state_dict()[key], loaded_state[key]))
 
+
     @patch('src.training.trainer.Trainer.save_checkpoint')
     def test_early_stopping_logic(self, mock_save_checkpoint):
-        """Tests the logic for early stopping."""
+        """Tests the flexible logic for early stopping."""
         patience = 2
         
-        stop = self.trainer._check_early_stopping(val_loss=0.5, patience=patience)
+        # --- Test Case 1: Minimizing val_loss ---
+        self.trainer.config.training.early_stopping_direction = 'minimize'
+        self.trainer.best_early_stopping_score = float('inf')
+
+        # First score is always an improvement
+        stop = self.trainer._check_early_stopping(score=0.5, patience=patience)
         self.assertFalse(stop)
-        self.assertEqual(self.trainer.best_val_loss, 0.5)
+        self.assertEqual(self.trainer.best_early_stopping_score, 0.5)
         self.assertEqual(self.trainer.patience_counter, 0)
         mock_save_checkpoint.assert_called_once_with('best_model.pth', is_best=True)
 
-        stop = self.trainer._check_early_stopping(val_loss=0.6, patience=patience)
+        # Worsening score increases counter
+        stop = self.trainer._check_early_stopping(score=0.6, patience=patience)
         self.assertFalse(stop)
         self.assertEqual(self.trainer.patience_counter, 1)
+        
+        # --- Test Case 2: Maximizing val_f1_score ---
+        self.trainer.config.training.early_stopping_direction = 'maximize'
+        self.trainer.best_early_stopping_score = float('-inf')
+        self.trainer.patience_counter = 0 # Reset counter for new test case
 
-        stop = self.trainer._check_early_stopping(val_loss=0.7, patience=patience)
+        # First score is always an improvement
+        stop = self.trainer._check_early_stopping(score=0.8, patience=patience)
+        self.assertFalse(stop)
+        self.assertEqual(self.trainer.best_early_stopping_score, 0.8)
+        self.assertEqual(self.trainer.patience_counter, 0)
+
+        # Worsening score (lower F1) increases counter
+        stop = self.trainer._check_early_stopping(score=0.7, patience=patience)
+        self.assertFalse(stop)
+        self.assertEqual(self.trainer.patience_counter, 1)
+        
+        # Another worsening score triggers early stopping
+        stop = self.trainer._check_early_stopping(score=0.6, patience=patience)
         self.assertTrue(stop)
         self.assertEqual(self.trainer.patience_counter, 2)
+
+
 
     def test_nan_loss_handling_in_training(self):
         """Tests that the trainer can handle NaN loss during training without crashing."""

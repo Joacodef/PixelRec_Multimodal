@@ -300,7 +300,8 @@ class MultimodalDataset(Dataset):
             features['tag_idx'] = torch.tensor(0, dtype=torch.long)
 
         if self.clip_tokenizer:
-            text_content = item_info.get('description', '')
+            # Ensure text_content is always a string, even if the description is missing or NaN
+            text_content = str(item_info.get('description', ''))
             clip_tokens = self.clip_tokenizer(
                 text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt'
             )

@@ -469,9 +469,9 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
     trainer = Trainer(
         model=model,
         device=device,
+        config=config, 
         checkpoint_dir=config.checkpoint_dir,
-        use_contrastive=model_config.use_contrastive,
-        model_config=model_config
+        use_contrastive=config.model.use_contrastive,
     )
     trainer.criterion.contrastive_weight = training_config.contrastive_weight
     trainer.criterion.bce_weight = training_config.bce_weight

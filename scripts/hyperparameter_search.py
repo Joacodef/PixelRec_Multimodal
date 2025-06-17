@@ -52,6 +52,43 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         """
         # Load base configuration
         config = Config.from_yaml(base_config_path)
+
+        # --- START OF MODIFICATION: Progressive Data Loading ---
+        # Get the directory of the original full training file to locate subsets.
+        base_split_dir = Path(config.data.train_data_path).parent
+
+        # Define the full paths to the training data subsets.
+        path_train_05 = base_split_dir / "train_05_percent.csv"
+        path_train_20 = base_split_dir / "train_20_percent.csv"
+        path_train_50 = base_split_dir / "train_50_percent.csv"
+        path_train_full = base_split_dir / "train.csv" # Original full training file
+
+        # Verify that the subset files exist. If not, log a warning and use the full dataset.
+        if not all([path_train_05.exists(), path_train_20.exists(), path_train_50.exists()]):
+                print("\nWarning: Training subset files not found. Falling back to full training data for all trials.")
+                print("Please run the script to create the subsets first.\n")
+        else:
+            trial_num = trial.number
+            # Use command-line arguments to define the trial thresholds for switching datasets.
+            if trial_num < args.trials_on_5_percent:
+                config.data.train_data_path = str(path_train_05)
+                data_fraction_used = 0.05
+            elif trial_num < args.trials_on_20_percent:
+                config.data.train_data_path = str(path_train_20)
+                data_fraction_used = 0.20
+            elif trial_num < args.trials_on_50_percent:
+                config.data.train_data_path = str(path_train_50)
+                data_fraction_used = 0.50
+            else:
+                config.data.train_data_path = str(path_train_full)
+                data_fraction_used = 1.0
+            
+            # Log which dataset is being used for the current trial.
+            print(f"\n--- Trial {trial_num}: Using {data_fraction_used*100:.0f}% of training data ({Path(config.data.train_data_path).name}) ---")
+
+            # Track data fraction in trial for later analysis
+            trial.set_user_attr('data_fraction', data_fraction_used)
+            trial.set_user_attr('train_data_path', Path(config.data.train_data_path).name)
         
         # Define the available model choices for each modality
         # 1. Define the complete, static set of choices for each modality.
@@ -357,6 +394,18 @@ def main():
     parser.add_argument(
         '--verbose', action='store_true',
         help='Enable verbose output'
+    )
+    parser.add_argument(
+        '--trials_on_5_percent', type=int, default=20,
+        help='Number of initial trials to run on the 5% data subset.'
+    )
+    parser.add_argument(
+        '--trials_on_20_percent', type=int, default=50,
+        help='Number of trials to run on the 20% data subset before moving to 50%.'
+    )
+    parser.add_argument(
+        '--trials_on_50_percent', type=int, default=90,
+        help='Number of trials to run on the 50% data subset before moving to the full dataset.'
     )
     
     args = parser.parse_args()

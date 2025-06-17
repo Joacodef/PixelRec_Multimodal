@@ -33,10 +33,10 @@ class Trainer:
         self,
         model: nn.Module,
         device: torch.device,
+        config: Optional[object] = None, 
         checkpoint_dir: str = 'models/checkpoints',
         use_contrastive: bool = True,
-        model_config: Optional[object] = None,
-        trial_info: Optional[Dict[str, Any]] = None  
+        trial_info: Optional[Dict[str, Any]] = None
     ):
         """
         Initializes the Trainer instance.
@@ -46,25 +46,23 @@ class Trainer:
             device (torch.device): The device (CPU or GPU) to run the training on.
             checkpoint_dir (str): The base directory to save model checkpoints and encoders.
             use_contrastive (bool): Flag to determine if contrastive loss should be used.
-            model_config (Optional[object]): A configuration object containing model
-                                            details, used to create model-specific
-                                            checkpoint directories.
+            config (Optional[object]): Configuration object containing model and training parameters.
             trial_info (Optional[Dict[str, Any]]): Information about the current Optuna trial,
                                                 including trial number and parameters.
         """
         self.model = model
         self.device = device
+        self.config = config
         self.base_checkpoint_dir = Path(checkpoint_dir)
-        self.model_config = model_config
         
         # Creates a model-specific directory for checkpoints to keep experiments organized.
-        if model_config and hasattr(model_config, 'vision_model') and hasattr(model_config, 'language_model'):
-            model_combo = f"{model_config.vision_model}_{model_config.language_model}"
+        # Access the model config via self.config.model
+        if config and hasattr(config, 'model'):
+            model_combo = f"{config.model.vision_model}_{config.model.language_model}"
             self.model_checkpoint_dir = self.base_checkpoint_dir / model_combo
         else:
-            self.model_checkpoint_dir = self.base_checkpoint_dir
-            if model_config is None:
-                print("Warning: No model config provided to Trainer. Using base checkpoint directory.")
+            self.model_checkpoint_dir = self.base_checkpoint_dir            
+            print("Warning: No model config provided to Trainer. Using base checkpoint directory.")
         
         # Defines a separate directory for shared encoder files.
         self.encoders_dir = self.base_checkpoint_dir / 'encoders'
@@ -80,9 +78,12 @@ class Trainer:
         self.criterion = MultimodalRecommenderLoss(use_contrastive=use_contrastive)
         
         # Initializes training state variables.
+        # Initializes training state variables.
         self.epoch = 0
-        self.best_val_loss = float('inf')
+        # Generic early stopping state initialization
         self.patience_counter = 0
+        # The config object is not available here, so we will get it later in the train method.
+        self.best_early_stopping_score = None 
         self.optimizer = None
         self.scheduler = None
         self.trial_info = trial_info
@@ -279,13 +280,41 @@ class Trainer:
                 else: 
                     self.scheduler.step()
             
+            # Set the initial best score on the first epoch that has validation.
+            if self.best_early_stopping_score is None and validation_performed_this_epoch:
+                if self.config.training.early_stopping_direction == 'minimize':
+                    self.best_early_stopping_score = float('inf')
+                else:
+                    self.best_early_stopping_score = float('-inf')
+
             # Checks for early stopping criteria.
-            if validation_performed_this_epoch and not np.isnan(val_metrics['total_loss']):
-                if self._check_early_stopping(val_metrics['total_loss'], patience):
-                    print(f"Early stopping at epoch {self.epoch+1}")
-                    self.save_checkpoint('last_model.pth')
-                    break 
-            
+            if validation_performed_this_epoch:
+                # Select the metric to monitor based on the configuration.
+                monitor_metric_name = self.config.training.early_stopping_metric
+                
+                # The metric from config can be 'val_f1_score', but the dictionary key is 'f1_score'.
+                # We remove the 'val_' prefix to get the correct key for lookup.
+                lookup_key = monitor_metric_name.replace('val_', '')
+                
+                # The validation dictionary uses 'total_loss' as the key for the main loss.
+                if lookup_key == 'loss':
+                    lookup_key = 'total_loss'
+
+                score = val_metrics.get(lookup_key)
+
+                # Fallback to val_loss if the specified metric is still not found.
+                if score is None:
+                    print(f"Warning: Early stopping metric '{monitor_metric_name}' (lookup key: '{lookup_key}') not found. Defaulting to val_loss.")
+                    score = val_metrics.get('total_loss')
+                    self.config.training.early_stopping_direction = 'minimize'
+                
+                if score is not None and not np.isnan(score):
+                    if self._check_early_stopping(score, patience):
+                        print(f"Early stopping at epoch {self.epoch+1} based on {monitor_metric_name}")
+                        self.save_checkpoint('last_model.pth')
+                        break
+
+
             # Saves a checkpoint at the end of each epoch.
             self.save_checkpoint('last_model.pth')
             
@@ -534,25 +563,38 @@ class Trainer:
                 wandb.log(wandb_log_data, step=current_epoch)
         except Exception as e: print(f"Warning: Failed to log to wandb: {e}")
 
-    def _check_early_stopping(self, val_loss: float, patience: int) -> bool:
+    def _check_early_stopping(self, score: float, patience: int) -> bool:
         """
-        Checks if the early stopping criteria have been met.
+        Checks if the early stopping criteria have been met based on the score.
 
         Args:
-            val_loss (float): The validation loss for the current epoch.
+            score (float): The score for the current epoch (e.g., val_loss or val_f1_score).
             patience (int): The number of epochs to wait for improvement.
 
         Returns:
             bool: True if training should stop, False otherwise.
         """
-        if np.isnan(val_loss): return False 
+        if np.isnan(score):
+            print("Warning: Early stopping score is NaN. Skipping check for this epoch.")
+            return False
 
-        if val_loss < self.best_val_loss:
-            self.best_val_loss = val_loss
+        is_improvement = False
+        # Determine if the current score is an improvement based on the configured direction.
+        if self.config.training.early_stopping_direction == 'minimize':
+            if score < self.best_early_stopping_score:
+                is_improvement = True
+        else: # 'maximize'
+            if score > self.best_early_stopping_score:
+                is_improvement = True
+
+        if is_improvement:
+            # If score has improved, update the best score and reset the patience counter.
+            self.best_early_stopping_score = score
             self.patience_counter = 0
             self.save_checkpoint('best_model.pth', is_best=True)
             return False
         else:
+            # If no improvement, increment the counter and check if patience is exceeded.
             self.patience_counter += 1
             return self.patience_counter >= patience
 
@@ -598,7 +640,10 @@ class Trainer:
         checkpoint = {
             'epoch': self.epoch,
             'model_state_dict': self.model.state_dict(),
-            'best_val_loss': self.best_val_loss,
+            # Save the new generic best score and its context
+            'best_early_stopping_score': self.best_early_stopping_score,
+            'early_stopping_metric': self.config.training.early_stopping_metric,
+            'early_stopping_direction': self.config.training.early_stopping_direction,
             'training_history': self.training_history,  
             'best_metrics': self.get_all_best_metrics()  
         }
@@ -647,8 +692,9 @@ class Trainer:
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.epoch = checkpoint.get('epoch', 0)
-        self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        
+        # Load the generic best score. Fallback to old best_val_loss for backward compatibility.
+        self.best_early_stopping_score = checkpoint.get('best_early_stopping_score', checkpoint.get('best_val_loss', None))
+
         # Restore training history if available
         if 'training_history' in checkpoint:
             self.training_history = checkpoint['training_history']
