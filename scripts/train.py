@@ -682,10 +682,10 @@ def main(cli_args: Optional[List[str]] = None):
         Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
         Path(config.results_dir).mkdir(parents=True, exist_ok=True)
         
-        # Validate model configurations
-        if config.model.vision_model not in MODEL_CONFIGS['vision']:
+        # Validate model configurations, allowing for None
+        if config.model.vision_model is not None and config.model.vision_model not in MODEL_CONFIGS['vision']:
             raise ValueError(f"Unknown vision model: {config.model.vision_model}")
-        if config.model.language_model not in MODEL_CONFIGS['language']:
+        if config.model.language_model is not None and config.model.language_model not in MODEL_CONFIGS['language']:
             raise ValueError(f"Unknown language model: {config.model.language_model}")
         
         print("✓ Configuration validated")

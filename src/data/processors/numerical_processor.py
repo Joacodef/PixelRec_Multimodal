@@ -63,10 +63,11 @@ class NumericalProcessor:
         if not self.numerical_cols:
             return torch.empty(0, dtype=torch.float32)
 
-        features = item_info_row.get(self.numerical_cols, pd.Series(0.0, index=self.numerical_cols))
-        features = features.fillna(0).values.astype(np.float32).reshape(1, -1)
+        features_series = item_info_row.get(self.numerical_cols, pd.Series(0.0, index=self.numerical_cols))
         
-        # Apply scaling if a scaler is present
+        # Fill NaNs, then infer best possible dtypes, then convert to numpy array
+        features = pd.to_numeric(features_series, errors='coerce').fillna(0).values.astype(np.float32).reshape(1, -1)
+
         if self.scaler and self.normalization_method in ['standardization', 'min_max']:
             features = self.scaler.transform(features)
         # Apply log transform if specified

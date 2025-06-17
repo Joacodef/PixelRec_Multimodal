@@ -75,8 +75,10 @@ class ImageProcessor:
         cfg = self.augmentation_config
         
         if cfg.random_crop:
+            # Use a default size if self.config is None (i.e., no vision model)
+            input_size = self.config.get('input_size', (224, 224)) if self.config else (224, 224)
             aug_list.append(transforms.RandomResizedCrop(
-                self.config.get('input_size', (224, 224))[0], 
+                input_size[0],
                 scale=tuple(cfg.crop_scale)
             ))
         if any([cfg.brightness, cfg.contrast, cfg.saturation, cfg.hue]):
@@ -114,9 +116,8 @@ class ImageProcessor:
 
     def get_placeholder_tensor(self) -> torch.Tensor:
         """Creates a placeholder (zero) tensor for an image."""
-        if not self.config:
-            raise RuntimeError("ImageProcessor not initialized for online mode. Provide 'model_name'.")
-        size = self.config.get('input_size', (224, 224))
+        # Allow placeholder creation even if no model/config is loaded.
+        size = self.config.get('input_size', (224, 224)) if self.config else (224, 224)
         return torch.zeros(3, size[0], size[1])
 
     # --- Methods for Offline Processing (used by scripts) ---

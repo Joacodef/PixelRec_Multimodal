@@ -110,18 +110,17 @@ class MultimodalDataset(Dataset):
 
         self.image_processor = None
         self.clip_tokenizer = None  # Initialize clip_tokenizer attribute
-        if self.vision_enabled:
-            self.image_processor = ImageProcessor(
-                model_name=vision_model_name,
-                augmentation_config=self.image_augmentation_config,
-                is_train=self.is_train_mode
-            )
-            # If using clip for vision, we also need its text tokenizer for contrastive loss
-            if vision_model_name == 'clip':
-                from transformers import CLIPProcessor
-                vision_hf_name = MODEL_CONFIGS['vision']['clip']['name']
-                clip_processor = CLIPProcessor.from_pretrained(vision_hf_name)
-                self.clip_tokenizer = clip_processor.tokenizer
+        self.image_processor = ImageProcessor(
+        model_name=vision_model_name,
+        augmentation_config=self.image_augmentation_config,
+        is_train=self.is_train_mode
+        )
+        # If using clip for vision, we also need its text tokenizer for contrastive loss
+        if vision_model_name == 'clip':
+            from transformers import CLIPProcessor
+            vision_hf_name = MODEL_CONFIGS['vision']['clip']['name']
+            clip_processor = CLIPProcessor.from_pretrained(vision_hf_name)
+            self.clip_tokenizer = clip_processor.tokenizer
 
         self.text_processor = None
         if self.language_enabled:
@@ -277,12 +276,14 @@ class MultimodalDataset(Dataset):
         if self.vision_enabled and self.image_processor:
             image_path = f"{self.image_folder}/{item_id}.jpg"
             features['image'] = self.image_processor.load_and_transform_image(image_path)
-        elif self.image_processor:
+        else:
+            # If vision is disabled, we still need to add a placeholder image tensor.
             features['image'] = self.image_processor.get_placeholder_tensor()
         
         # Process Text Features
         if self.language_enabled and self.text_processor:
-            text_content = item_info.get('description', '')
+            # Ensure text_content is always a string to prevent tokenizer errors with NaN values.
+            text_content = str(item_info.get('description', ''))
             text_features = self.text_processor.process_text(text_content)
             features.update(text_features)
         elif self.text_processor:
