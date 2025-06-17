@@ -54,27 +54,26 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         config = Config.from_yaml(base_config_path)
         
         # Define the available model choices for each modality
+        # 1. Define the complete, static set of choices for each modality.
         vision_model_choices = ['clip', 'resnet', 'dino', 'convnext', None]
         language_model_choices = ['sentence-bert', 'clip', 'bert-base', 'distilbert', None]
 
-        # Suggest a vision model. 'None' is an option.
+        # 2. Suggest from the static lists for both models.
+        # Now, both categorical suggestions use a fixed list of choices for every trial.
         config.model.vision_model = trial.suggest_categorical(
             'vision_model', vision_model_choices
         )
+        config.model.language_model = trial.suggest_categorical(
+            'language_model', language_model_choices
+        )
 
-        # Conditionally suggest a language model to enforce the rule that at least one model must be active.
-        if config.model.vision_model is None:
-            # If the vision model is disabled, the language model CANNOT be None.
-            # We suggest from a list of choices that excludes None.
-            language_model_choices_no_none = [m for m in language_model_choices if m is not None]
-            config.model.language_model = trial.suggest_categorical(
-                'language_model', language_model_choices_no_none
-            )
-        else:
-            # If the vision model is active, the language model can be anything, including None.
-            config.model.language_model = trial.suggest_categorical(
-                'language_model', language_model_choices
-            )
+        # 3. Validate the combination and prune the trial if it is invalid.
+        # This check enforces the rule that at least one of the models must be active.
+        if config.model.vision_model is None and config.model.language_model is None:
+            # If both suggested models are None, the combination is invalid.
+            # We prune the trial, telling Optuna to stop this run and start a new one.
+            raise optuna.TrialPruned("Both vision and language models cannot be None.")
+
 
         # Suggest hyperparameters using Optuna
         # Training hyperparameters
@@ -148,50 +147,51 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
             'use_contrastive', [True, False]
         )
         
-        # If contrastive learning is enabled, suggest additional parameters
-        if config.model.use_contrastive:
-            config.model.contrastive_temperature = trial.suggest_float(
-                'contrastive_temperature', 0.01, 0.5, log=True
-            )
-            config.training.contrastive_weight = trial.suggest_float(
-                'contrastive_weight', 0.01, 1.0
-            )
-        else:
-            # If contrastive learning is not used, set weights to zero
-            config.training.contrastive_weight = 0.0
-        
-            config.training.bce_weight = trial.suggest_float(
-                'bce_weight', 0.5, 1.0
-            )
-            
-        # Optimizer settings
+        ## --- Contrastive Learning Section ---
+        # Suggest whether to use contrastive learning.
+        config.model.use_contrastive = trial.suggest_categorical(
+            'use_contrastive', [True, False]
+        )
+
+        # ALWAYS suggest all parameters. The training script will be responsible
+        # for ignoring them if they are not needed (e.g., if use_contrastive is False).
+        config.model.contrastive_temperature = trial.suggest_float(
+            'contrastive_temperature', 0.01, 0.5, log=True
+        )
+        config.training.contrastive_weight = trial.suggest_float(
+            'contrastive_weight', 0.01, 1.0
+        )
+        config.training.bce_weight = trial.suggest_float(
+            'bce_weight', 0.5, 1.0
+        )
+
+        # --- Optimizer Section ---
+        # Suggest the optimizer type.
         config.training.optimizer_type = trial.suggest_categorical(
             'optimizer_type', ['adam', 'adamw', 'sgd']
         )
-        
-        if config.training.optimizer_type in ['adam', 'adamw']:
-            config.training.adam_beta1 = trial.suggest_float(
-                'adam_beta1', 0.8, 0.99
-            )
-            config.training.adam_beta2 = trial.suggest_float(
-                'adam_beta2', 0.9, 0.999
-            )
-            config.training.adam_eps = trial.suggest_float(
-                'adam_eps', 1e-9, 1e-7, log=True
-            )
-        
-        # Learning rate scheduler
+
+        # ALWAYS suggest the Adam-specific parameters. The trainer will only use them
+        # if the optimizer is 'adam' or 'adamw'.
+        config.training.adam_beta1 = trial.suggest_float('adam_beta1', 0.8, 0.99)
+        config.training.adam_beta2 = trial.suggest_float('adam_beta2', 0.9, 0.999)
+        config.training.adam_eps = trial.suggest_float('adam_eps', 1e-9, 1e-7, log=True)
+
+        # --- Learning Rate Scheduler Section ---
+        # Suggest whether to use a learning rate scheduler.
         config.training.use_lr_scheduler = trial.suggest_categorical(
             'use_lr_scheduler', [True, False]
         )
-        
-        if config.training.use_lr_scheduler:
-            config.training.lr_scheduler_type = trial.suggest_categorical(
-                'lr_scheduler_type', ['reduce_on_plateau', 'cosine', 'step']
-            )
-            config.training.lr_scheduler_factor = trial.suggest_float(
-                'lr_scheduler_factor', 0.1, 0.9
-            )
+
+        # ALWAYS suggest the scheduler-specific parameters. The trainer will only use them
+        # if use_lr_scheduler is True.
+        config.training.lr_scheduler_type = trial.suggest_categorical(
+            'lr_scheduler_type', ['reduce_on_plateau', 'cosine', 'step']
+        )
+        config.training.lr_scheduler_factor = trial.suggest_float(
+            'lr_scheduler_factor', 0.1, 0.9
+        )
+
         
         # Create unique directories for this trial
         trial_dir = Path(args.output_dir) / f"trial_{trial.number}"
