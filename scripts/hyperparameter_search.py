@@ -56,7 +56,7 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         # Define the available model choices for each modality
         # 1. Define the complete, static set of choices for each modality.
         vision_model_choices = ['clip', 'resnet', 'dino', 'convnext', None]
-        language_model_choices = ['sentence-bert', 'clip', 'bert-base', 'distilbert', None]
+        language_model_choices = ['sentence-bert', 'mpnet', 'bert', 'roberta', None]
 
         # 2. Suggest from the static lists for both models.
         # Now, both categorical suggestions use a fixed list of choices for every trial.
