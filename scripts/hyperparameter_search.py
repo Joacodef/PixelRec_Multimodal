@@ -53,6 +53,29 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
         # Load base configuration
         config = Config.from_yaml(base_config_path)
         
+        # Define the available model choices for each modality
+        vision_model_choices = ['clip', 'resnet', 'dino', 'convnext', None]
+        language_model_choices = ['sentence-bert', 'clip', 'bert-base', 'distilbert', None]
+
+        # Suggest a vision model. 'None' is an option.
+        config.model.vision_model = trial.suggest_categorical(
+            'vision_model', vision_model_choices
+        )
+
+        # Conditionally suggest a language model to enforce the rule that at least one model must be active.
+        if config.model.vision_model is None:
+            # If the vision model is disabled, the language model CANNOT be None.
+            # We suggest from a list of choices that excludes None.
+            language_model_choices_no_none = [m for m in language_model_choices if m is not None]
+            config.model.language_model = trial.suggest_categorical(
+                'language_model', language_model_choices_no_none
+            )
+        else:
+            # If the vision model is active, the language model can be anything, including None.
+            config.model.language_model = trial.suggest_categorical(
+                'language_model', language_model_choices
+            )
+
         # Suggest hyperparameters using Optuna
         # Training hyperparameters
         config.training.learning_rate = trial.suggest_float(
@@ -487,7 +510,11 @@ def main():
         
         # Apply best parameters
         for param_name, param_value in best_trial.params.items():
-            if param_name == 'learning_rate':
+            if param_name == 'vision_model':
+                best_config.model.vision_model = param_value
+            elif param_name == 'language_model':
+                best_config.model.language_model = param_value
+            elif param_name == 'learning_rate':
                 best_config.training.learning_rate = param_value
             elif param_name == 'batch_size':
                 best_config.training.batch_size = param_value

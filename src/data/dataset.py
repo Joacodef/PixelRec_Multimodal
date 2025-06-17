@@ -248,48 +248,42 @@ class MultimodalDataset(Dataset):
         batch.update(features)
         return batch
 
+    # src/data/dataset.py
+
+    # src/data/dataset.py
+
     def _get_item_features(self, item_id: str) -> Dict[str, torch.Tensor]:
         """
         Processes all enabled features for a given item ID.
-
-        For each modality (vision, text, numerical, etc.), this method checks
-        if it is enabled in the dataset's configuration. It calls the
-        appropriate processor to generate feature tensors if enabled, or
-        placeholder tensors if disabled.
-
-        Args:
-            item_id (str): The unique identifier for the item.
-
-        Returns:
-            Dict[str, torch.Tensor]: A dictionary of feature tensors for the item.
+        (This is a modified version for debugging)
         """
         try:
             item_info = self.item_info.loc[item_id]
         except KeyError:
-            # Return placeholders if item metadata is not found
-            print(f"Warning: Item ID {item_id} not found in item_info. Using placeholders.")
+            #print(f"[DEBUG] Item ID {item_id} not found in metadata. Using placeholders.")
             return self._get_placeholder_features()
 
         features = {}
 
-        # Process Image Features
+        # --- START of DEBUGGING BLOCK ---
+
         if self.vision_enabled and self.image_processor:
             image_path = f"{self.image_folder}/{item_id}.jpg"
             features['image'] = self.image_processor.load_and_transform_image(image_path)
         else:
-            # If vision is disabled, we still need to add a placeholder image tensor.
+            # This is the path that is likely failing in your local environment.
             features['image'] = self.image_processor.get_placeholder_tensor()
         
+        # --- END of DEBUGGING BLOCK ---
+
         # Process Text Features
         if self.language_enabled and self.text_processor:
-            # Ensure text_content is always a string to prevent tokenizer errors with NaN values.
             text_content = str(item_info.get('description', ''))
             text_features = self.text_processor.process_text(text_content)
             features.update(text_features)
         elif self.text_processor:
             text_features = self.text_processor.get_placeholder_tensors()
             features.update(text_features)
-
 
         # Process Numerical Features
         if self.numerical_enabled and self.numerical_processor:
@@ -308,16 +302,16 @@ class MultimodalDataset(Dataset):
         if self.clip_tokenizer:
             text_content = item_info.get('description', '')
             clip_tokens = self.clip_tokenizer(
-                text_content,
-                padding='max_length',
-                truncation=True,
-                max_length=77,  # CLIP's required text length
-                return_tensors='pt'
+                text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt'
             )
             features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
             features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
 
+        # This print shows all the keys just before returning from this function
+        #print(f"  [DEBUG] Final feature keys for item {item_id}: {list(features.keys())}")
+
         return features
+    
 
     def _get_placeholder_features(self) -> Dict[str, torch.Tensor]:
         """
