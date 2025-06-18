@@ -193,16 +193,23 @@ def run_training(config: Config, args: argparse.Namespace) -> Dict[str, Any]:
                 dataset_name = Path(data_config.train_data_path).parent.name
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 run_name = f"{models_used}_{dataset_name}_{timestamp}"
+
+            # Create a comprehensive configuration for wandb logging
+            wandb_config = {
+                'model_config': dataclasses.asdict(model_config),
+                'training_config': dataclasses.asdict(training_config),
+                'data_config': dataclasses.asdict(data_config)
+            }
+            
+            # If running as part of a hyperparameter search, add trial info
+            if hasattr(args, 'trial_info') and isinstance(args.trial_info, dict):
+                wandb_config['hyperparameter_search_info'] = args.trial_info
             
             wandb.init(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 name=run_name,
-                config={
-                    'model_config': dataclasses.asdict(model_config),
-                    'training_config': dataclasses.asdict(training_config),
-                    'data_config': dataclasses.asdict(data_config)
-                }
+                config=wandb_config  # Use the comprehensive config dictionary
             )
             print(f"W&B run initialized: {wandb.run.name}")
         except ImportError:

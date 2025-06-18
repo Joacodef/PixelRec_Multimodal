@@ -65,6 +65,7 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
 
         # Verify that the subset files exist. If not, log a warning and use the full dataset.
         if not all([path_train_05.exists(), path_train_20.exists(), path_train_50.exists()]):
+                print("Searched files in:", base_split_dir)
                 print("\nWarning: Training subset files not found. Falling back to full training data for all trials.")
                 print("Please run the script to create the subsets first.\n")
         else:
