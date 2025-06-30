@@ -249,7 +249,7 @@ def create_objective(base_config_path: str, args: argparse.Namespace):
             use_wandb=args.use_wandb,
             wandb_project=f"{args.wandb_project}_optuna" if args.use_wandb else None,
             wandb_entity=args.wandb_entity if args.use_wandb else None,
-            wandb_run_name=f"trial_{trial.number}" if args.use_wandb else None,
+            wandb_run_name=f"trial_{trial.number+1}" if args.use_wandb else None,
             verbose=args.verbose if hasattr(args, 'verbose') else False,
             # Add trial information to args
             trial_info={

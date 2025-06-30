@@ -382,7 +382,7 @@ class Recommender:
                 return None
 
             # Delegates to the dataset to process and retrieve the item's features.
-            features = self.dataset._process_item_features(item_id_str)
+            features = self.dataset._get_item_features(item_id_str)
 
             if features is None:
                  self.logger.warning(
