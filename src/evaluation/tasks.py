@@ -293,60 +293,59 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         """
         Processes a single user to obtain recommendations and associated data.
 
-        This method is designed to be executed in parallel for multiple users.
-        It generates a candidate set (including negative samples if enabled),
-        retrieves recommendations from the recommender, and extracts relevant
-        information for metric calculation.
-
-        Args:
-            user_id_and_interactions: A tuple containing the user ID (string) and
-                                      a DataFrame of their interactions in the test set.
-
-        Returns:
-            A tuple containing:
-            - user_id (str): The ID of the processed user.
-            - recommendations (List[Tuple[str, float]]): A list of (item_id, score) tuples
-                                                           recommended by the model.
-            - positive_items (List[str]): A list of true positive item IDs for the user.
-            - recommended_items_only (List[str]): A list of only item IDs from recommendations.
+        This corrected method ensures the single ground-truth positive item from the
+        test set is always included in the candidate list for ranking, and that the
+        recommender is instructed not to filter it out. This is essential for
+        obtaining meaningful metrics in a leave-one-out evaluation.
         """
         user_id, user_interactions = user_id_and_interactions
         user_id = str(user_id)
-        # Extracts actual positive items for the user from the test interactions.
+
+        # 1. IDENTIFY GROUND TRUTH POSITIVE ITEMS
+        # In leave-one-out, this will be a list with a single item.
         positive_items = [str(item) for item in user_interactions['item_id'].tolist()]
-        
-        candidate_items = None
+        if not positive_items:
+            # If for some reason there's no positive item, return empty.
+            return user_id, [], [], []
+
+        # 2. CONSTRUCT THE CANDIDATE SET
+        # Start with the ground truth item(s).
+        candidate_items = list(positive_items)
+
         if self.use_sampling:
-            # Samples negative items and combines them with positive items to form the candidate set.
+            # Generate negative samples, ensuring they don't include the positive item.
             negative_items = self._sample_negatives(user_id, positive_items)
-            candidate_items = positive_items + negative_items
-            
-            # Shuffles the candidate items deterministically for reproducibility.
-            user_shuffle_seed = hash(str(user_id) + "shuffle") % (2**31) # Creates a unique seed per user.
-            local_random = random.Random(user_shuffle_seed)
-            local_random.shuffle(candidate_items)
+            candidate_items.extend(negative_items)
         
+        # De-duplicate and shuffle the final list to avoid any order bias.
+        candidate_items = list(dict.fromkeys(candidate_items))
+        user_shuffle_seed = hash(str(user_id) + "shuffle") % (2**31)
+        local_random = random.Random(user_shuffle_seed)
+        local_random.shuffle(candidate_items)
+
         try:
-            # Calls the recommender to get top-K recommendations from the candidate set.
+            # 3. GET RECOMMENDATIONS WITH `filter_seen=False`
+            # This is the most critical change. We pass our perfectly crafted
+            # candidate set (1 positive + N negatives) and explicitly tell the
+            # recommender NOT to filter any items from it.
             recommendations = self.recommender.get_recommendations(
                 user_id=user_id,
                 top_k=self.top_k,
-                filter_seen=self.filter_seen,
+                filter_seen=False, # CRITICAL: Prevents filtering the positive item.
                 candidates=candidate_items
             )
             
-            # Ensures recommended item IDs are consistently strings.
             if recommendations:
                 recommendations = [(str(item_id), score) for item_id, score in recommendations]
             
-            # Extracts only the item IDs from the recommendations list.
             recommended_items_only = [item_id for item_id, _ in recommendations]
             return user_id, recommendations, positive_items, recommended_items_only
 
         except Exception as e:
             print(f"Error evaluating user {user_id}: {e}")
-            # Returns empty lists in case of an error to prevent process crash.
             return user_id, [], positive_items, []
+    # --- END OF CORRECTED METHOD ---
+
 
     def evaluate(self) -> Dict[str, Any]:
         """

@@ -242,10 +242,10 @@ def main():
     parser.add_argument('--eval_task', type=str, default='retrieval', choices=['retrieval', 'ranking'], help='Evaluation task')
     parser.add_argument('--save_predictions', type=str, default=None, help='Path to save user-level predictions')
     parser.add_argument('--warmup_recommender_cache', action='store_true', help="Warm-up the Recommender's feature cache")
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of parallel workers for evaluation')
+    parser.add_argument('--num_workers', type=int, default=1, help='Number of parallel workers for evaluation')
     parser.add_argument('--use_sampling', action='store_true', default=True, help='Use negative sampling for faster evaluation')
     parser.add_argument('--no_sampling', dest='use_sampling', action='store_false', help='Disable negative sampling')
-    parser.add_argument('--num_negatives', type=int, default=100, help='Number of negative samples per positive item')
+    parser.add_argument('--num_negatives', type=int, default=20, help='Number of negative samples per positive item')
     parser.add_argument('--sampling_strategy', type=str, default='random', choices=['random', 'popularity', 'popularity_inverse'], help='Negative sampling strategy')
     parser.add_argument('--checkpoint_name', type=str, default='best_model.pth', help='Name of checkpoint file to load')
     args = parser.parse_args()
@@ -338,7 +338,7 @@ def main():
     if args.recommender_type == 'multimodal':
         print("Initializing multimodal model...")
         model_instance_multimodal = MultimodalRecommender(
-            n_users=dataset_for_encoders.n_users,
+            n_users=dataset_for_encoders.n_users, 
             n_items=dataset_for_encoders.n_items,
             n_tags=dataset_for_encoders.n_tags,
             num_numerical_features=len(numerical_features_for_dataset), # Use the validated number of features
@@ -364,6 +364,14 @@ def main():
         try:
             checkpoint_path = find_model_checkpoint(config_obj, args.checkpoint_name)
             checkpoint = torch.load(checkpoint_path, map_location=device)
+            print("\n--- CHECKPOINT INSPECTION ---")
+            if isinstance(checkpoint, dict):
+                print(f"Checkpoint is a dictionary. Keys: {list(checkpoint.keys())}")
+            else:
+                print("WARNING: Checkpoint is NOT a dictionary. This might be the issue.")
+                # If it's not a dict, it might be the state_dict itself.
+                # You would then load it directly: model_instance_multimodal.load_state_dict(checkpoint)
+            print("--- END INSPECTION ---\n")
             model_instance_multimodal.load_state_dict(checkpoint['model_state_dict'])
             model_instance_multimodal.eval()
         except FileNotFoundError as e:

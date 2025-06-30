@@ -190,7 +190,33 @@ class Recommender:
             # Add item_idx, which is also a feature
             item_encoded_indices = self.dataset.item_encoder.transform(valid_item_ids_for_batch)
             model_input_dict['item_idx'] = torch.tensor(item_encoded_indices, dtype=torch.long, device=self.device)
+            if not hasattr(self, '_debug_has_run_recommender'):
+                print("\n--- MODEL INPUT INSPECTION (from Recommender._score_items_batch) ---")
+                for key, value in model_input_dict.items():
+                    if isinstance(value, torch.Tensor):
+                        print(f"  - Key: '{key}'")
+                        print(f"    - Shape: {value.shape}")
+                        print(f"    - Dtype: {value.dtype}")
+                        print(f"    - Device: {value.device}")
+                        print(f"    - Has NaNs: {torch.isnan(value).any().item()}")
+                        # Prints the sum to quickly check if the tensor is all zeros.
+                        print(f"    - Sum: {value.sum().item():.4f}") 
+                    else:
+                        print(f"  - Key: '{key}', Value: {value}")
+                
+                print("\n--- Performing forward pass on this batch... ---")
+                try:
+                    with torch.no_grad():
+                        single_output = self.model(**model_input_dict)
+                        print(f"--- Model output for this specific batch: {single_output.squeeze().cpu().tolist()} ---")
+                except Exception as e:
+                    print(f"--- ERROR during forward pass: {e} ---")
 
+                import sys
+                print("\n--- DEBUGGING COMPLETE: Exiting. ---")
+                ##sys.exit(0)
+                # Sets a flag to ensure this block only runs once if sys.exit is removed.
+                self._debug_has_run_recommender = True
             # 4. Perform a single, efficient, batched forward pass
             with torch.no_grad():
                 scores_tensor = self.model(**model_input_dict)

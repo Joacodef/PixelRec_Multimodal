@@ -488,35 +488,42 @@ class MultimodalRecommender(nn.Module):
 
     def _apply_attention_fusion(
             self,
-            user_emb: torch.Tensor,
-            item_emb: torch.Tensor,
-            tag_emb: torch.Tensor,
-            vision_emb: torch.Tensor,
-            language_emb: torch.Tensor,
-            numerical_emb: torch.Tensor,
-            batch_size: int
+            features_to_fuse: List[torch.Tensor]
     ) -> torch.Tensor:
         """
-        Applies self-attention to fuse different feature embeddings.
+        Applies the instantiated attention fusion layer to a list of feature embeddings.
+
+        This method takes a list of tensors from active modalities, stacks them
+        into a single tensor, and processes them through the attention fusion layer
+        to produce a single, context-aware feature vector.
 
         Args:
-            user_emb, item_emb, tag_emb, vision_emb, language_emb, numerical_emb: The
-                embedding tensors for each modality.
-            batch_size (int): The number of samples in the batch.
+            features_to_fuse (List[torch.Tensor]): A list of embedding tensors
+                from each modality, each with a shape of (batch_size, embedding_dim).
 
         Returns:
-            torch.Tensor: The concatenated, attention-fused feature tensor.
+            torch.Tensor: The final, attention-fused feature tensor, typically of
+                          shape (batch_size, embedding_dim).
         """
-        # Stacks the embeddings for all modalities, including the new tag embedding.
-        features_stacked = torch.stack([
-            user_emb, item_emb, tag_emb, vision_emb, language_emb, numerical_emb
-        ], dim=0)
+        # The list of tensors, each of shape (batch_size, embedding_dim),
+        # is stacked along a new dimension to create a single tensor.
+        # The desired input shape for a multi-head attention layer is
+        # (batch_size, num_modalities, embedding_dim).
+        # Stacking along dim=1 achieves this.
+        features_stacked = torch.stack(features_to_fuse, dim=1)
+
+        # Applies the self-attention mechanism using the CORRECTLY instantiated layer.
+        # The 'self.attention' attribute did not exist; 'self.fusion_layer' is correct.
+        # The AttentionFusionLayer is expected to handle the attention logic and
+        # return a single, fused tensor representing the aggregated information.
+        attended_features = self.fusion_layer(features_stacked)
         
-        # Applies the self-attention mechanism to the stacked features.
-        attended_features, _ = self.attention(features_stacked, features_stacked, features_stacked)
-        
-        # Reshapes the output for the final fusion network.
-        return attended_features.permute(1, 0, 2).contiguous().view(batch_size, -1)
+        # The fusion layer should output the final fused tensor directly,
+        # with the expected dimensions for the subsequent prediction network.
+        # The previous permute and view operations are brittle and have been removed,
+        # as this logic is properly encapsulated within the AttentionFusionLayer itself.
+        return attended_features
+
 
     def forward(
             self,
@@ -534,9 +541,11 @@ class MultimodalRecommender(nn.Module):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
         Defines the main forward pass of the model.
+
+        This method processes features from all active modalities, fuses them using
+        the configured strategy (e.g., concatenation or attention), and passes the
+        resulting vector through a final prediction network.
         """
-        batch_size = user_idx.size(0)
-        
         # Create a dynamic list to hold features from active modalities.
         features_to_fuse = []
 
@@ -544,18 +553,18 @@ class MultimodalRecommender(nn.Module):
         features_to_fuse.append(self.user_embedding(user_idx))
         features_to_fuse.append(self.item_embedding(item_idx))
         features_to_fuse.append(self.tag_embedding(tag_idx))
-        
+
         raw_vision_output = None
         # Conditionally process vision features.
         if self.vision_model is not None and image is not None:
             raw_vision_output = self._get_vision_features(image)
             features_to_fuse.append(self.vision_projection(raw_vision_output))
-        
+
         # Conditionally process language features.
         if self.language_model is not None and text_input_ids is not None and text_attention_mask is not None:
             raw_language_feat = self._get_language_features(text_input_ids, text_attention_mask)
             features_to_fuse.append(self.language_projection(raw_language_feat))
-        
+
         # Conditionally process numerical features.
         if self.numerical_projection is not None and self.num_numerical_features > 0 and numerical_features is not None:
             features_to_fuse.append(self.numerical_projection(numerical_features))
@@ -570,29 +579,64 @@ class MultimodalRecommender(nn.Module):
                 if raw_clip_text_output is not None:
                     text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
 
+        # --- START: CORRECTED FUSION LOGIC ---
         # Apply the selected fusion method to the dynamically built list of features.
         if self.fusion_type == 'concatenate':
             fused_features = torch.cat(features_to_fuse, dim=1)
-        else:
+        elif self.fusion_type == 'attention':
+            # This now correctly calls the robust helper method, which in turn uses
+            # the self.fusion_layer to process the list of features correctly.
+            fused_features = self._apply_attention_fusion(features_to_fuse)
+        elif self.fusion_type == 'gated':
+            # The fusion_layer for 'gated' is also expected to handle the list of tensors.
             fused_features = self.fusion_layer(features_to_fuse)
+        else:
+            raise ValueError(f"Unknown fusion type: '{self.fusion_type}'")
+        # --- END: CORRECTED FUSION LOGIC ---
         
+        # # --- START: FINAL DEBUGGING SNIPPET ---
+        # # This block will inspect the direct input to the final prediction network.
+        # if not hasattr(self, '_debug_forward_has_run'):
+        #     print("\n--- FUSED FEATURES INSPECTION (inside model.forward) ---")
+        #     print(f"  - Fused Features Shape: {fused_features.shape}")
+        #     print(f"  - Fused Features Sum: {fused_features.sum().item():.4f}")
+        #     print(f"  - Fused Features Mean: {fused_features.mean().item():.4f}")
+        #     print(f"  - Fused Features Std: {fused_features.std().item():.4f}")
+            
+        #     # Isolate the prediction network to see its raw output
+        #     # We iterate through the layers to bypass the final Sigmoid for inspection
+        #     intermediate_output = fused_features
+        #     raw_logit = None
+        #     for i, layer in enumerate(self.prediction_network):
+        #         intermediate_output = layer(intermediate_output)
+        #         # Check the output of the final linear layer before sigmoid
+        #         if isinstance(layer, nn.Linear) and i == len(self.prediction_network) - 2:
+        #             raw_logit = intermediate_output
+            
+        #     print(f"\n--- Raw Logit (before Sigmoid): {raw_logit.squeeze().cpu().tolist()} ---")
+            
+        #     final_output_check = self.prediction_network(fused_features)
+        #     print(f"--- Final Output (after Sigmoid): {final_output_check.squeeze().cpu().tolist()} ---")
+        #     self._debug_forward_has_run = True
+        # # --- END: FINAL DEBUGGING SNIPPET ---
         output = self.prediction_network(fused_features)
-        
+
         if torch.isnan(output).any() or torch.isinf(output).any():
             output = torch.nan_to_num(output, nan=0.0, posinf=10.0, neginf=-10.0)
 
         if return_embeddings:
             # For the fourth return value, we return the main task's vision embedding.
             projected_vision_emb_main_task = self.vision_projection(raw_vision_output) if raw_vision_output is not None else None
-            
+
             if vision_features_for_contrastive_loss is not None:
                 vision_features_for_contrastive_loss = F.normalize(vision_features_for_contrastive_loss, p=2, dim=-1)
             if text_features_for_contrastive_loss is not None:
                 text_features_for_contrastive_loss = F.normalize(text_features_for_contrastive_loss, p=2, dim=-1)
-            
+
             return output, vision_features_for_contrastive_loss, text_features_for_contrastive_loss, projected_vision_emb_main_task
-        
+
         return output
+        
 
     def get_item_embedding(
         self, item_idx: torch.Tensor, image: torch.Tensor, text_input_ids: torch.Tensor,
