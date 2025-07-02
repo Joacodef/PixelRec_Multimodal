@@ -52,8 +52,9 @@ cache/*/*
 
 *_predictions.json
 
-configs/simple_config.yaml
-configs/advanced_config.yaml
+configs/*
+!configs/advanced_config_example.yaml
+!configs/simple_config_example.yaml
 
 # Optuna-specific files
 *.db            # SQLite databases

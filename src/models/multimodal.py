@@ -579,7 +579,6 @@ class MultimodalRecommender(nn.Module):
                 if raw_clip_text_output is not None:
                     text_features_for_contrastive_loss = self.text_contrastive_projection(raw_clip_text_output)
 
-        # --- START: CORRECTED FUSION LOGIC ---
         # Apply the selected fusion method to the dynamically built list of features.
         if self.fusion_type == 'concatenate':
             fused_features = torch.cat(features_to_fuse, dim=1)
@@ -592,33 +591,6 @@ class MultimodalRecommender(nn.Module):
             fused_features = self.fusion_layer(features_to_fuse)
         else:
             raise ValueError(f"Unknown fusion type: '{self.fusion_type}'")
-        # --- END: CORRECTED FUSION LOGIC ---
-        
-        # # --- START: FINAL DEBUGGING SNIPPET ---
-        # # This block will inspect the direct input to the final prediction network.
-        # if not hasattr(self, '_debug_forward_has_run'):
-        #     print("\n--- FUSED FEATURES INSPECTION (inside model.forward) ---")
-        #     print(f"  - Fused Features Shape: {fused_features.shape}")
-        #     print(f"  - Fused Features Sum: {fused_features.sum().item():.4f}")
-        #     print(f"  - Fused Features Mean: {fused_features.mean().item():.4f}")
-        #     print(f"  - Fused Features Std: {fused_features.std().item():.4f}")
-            
-        #     # Isolate the prediction network to see its raw output
-        #     # We iterate through the layers to bypass the final Sigmoid for inspection
-        #     intermediate_output = fused_features
-        #     raw_logit = None
-        #     for i, layer in enumerate(self.prediction_network):
-        #         intermediate_output = layer(intermediate_output)
-        #         # Check the output of the final linear layer before sigmoid
-        #         if isinstance(layer, nn.Linear) and i == len(self.prediction_network) - 2:
-        #             raw_logit = intermediate_output
-            
-        #     print(f"\n--- Raw Logit (before Sigmoid): {raw_logit.squeeze().cpu().tolist()} ---")
-            
-        #     final_output_check = self.prediction_network(fused_features)
-        #     print(f"--- Final Output (after Sigmoid): {final_output_check.squeeze().cpu().tolist()} ---")
-        #     self._debug_forward_has_run = True
-        # # --- END: FINAL DEBUGGING SNIPPET ---
         output = self.prediction_network(fused_features)
 
         if torch.isnan(output).any() or torch.isinf(output).any():

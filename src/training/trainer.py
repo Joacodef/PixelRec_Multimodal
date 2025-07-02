@@ -355,18 +355,18 @@ class Trainer:
             optimizer.zero_grad()
             batch = self._batch_to_device(batch)
             
-            model_call_args = {
-                'user_idx': batch['user_idx'],
-                'item_idx': batch['item_idx'],
-                'tag_idx': batch['tag_idx'],
-                'image': batch['image'],
-                'text_input_ids': batch['text_input_ids'],
-                'text_attention_mask': batch['text_attention_mask'],
-                'numerical_features': batch['numerical_features'],
-            }
-           
-            if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
-            if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
+            model_call_args = {}
+
+            # Dynamically build the arguments for the model call.
+            # This ensures that only the keys present in the batch are passed.
+            model_call_args = {}
+            for key in ['user_idx', 'item_idx', 'tag_idx', 'image', 
+                        'text_input_ids', 'text_attention_mask', 
+                        'numerical_features', 'clip_text_input_ids', 
+                        'clip_text_attention_mask']:
+                if key in batch:
+                    model_call_args[key] = batch[key]
+        
 
             vision_features_for_loss = None
             text_features_for_loss = None
@@ -463,19 +463,13 @@ class Trainer:
             for batch_idx, batch in enumerate(progress_bar_val):
                 batch = self._batch_to_device(batch)
                 
-                model_call_args = {
-                    'user_idx': batch['user_idx'],
-                    'item_idx': batch['item_idx'],
-                    'image': batch['image'],
-                    'text_input_ids': batch['text_input_ids'],
-                    'text_attention_mask': batch['text_attention_mask'],
-                    'numerical_features': batch['numerical_features']
-                }
-                if 'tag_idx' in batch:
-                    model_call_args['tag_idx'] = batch['tag_idx']
-                    
-                if 'clip_text_input_ids' in batch: model_call_args['clip_text_input_ids'] = batch['clip_text_input_ids']
-                if 'clip_text_attention_mask' in batch: model_call_args['clip_text_attention_mask'] = batch['clip_text_attention_mask']
+                model_call_args = {}
+                for key in ['user_idx', 'item_idx', 'tag_idx', 'image', 
+                            'text_input_ids', 'text_attention_mask', 
+                            'numerical_features', 'clip_text_input_ids', 
+                            'clip_text_attention_mask']:
+                    if key in batch:
+                        model_call_args[key] = batch[key]
                 
                 vision_features_for_loss_val, text_features_for_loss_val = None, None
 

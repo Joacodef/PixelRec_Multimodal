@@ -255,43 +255,35 @@ class MultimodalDataset(Dataset):
     def _get_item_features(self, item_id: str) -> Dict[str, torch.Tensor]:
         """
         Processes all enabled features for a given item ID.
-        (This is a modified version for debugging)
         """
         try:
             item_info = self.item_info.loc[item_id]
         except KeyError:
-            #print(f"[DEBUG] Item ID {item_id} not found in metadata. Using placeholders.")
             return self._get_placeholder_features()
 
         features = {}
 
-        # --- START of DEBUGGING BLOCK ---
-
+        # Vision features processing 
         if self.vision_enabled and self.image_processor:
             image_path = f"{self.image_folder}/{item_id}.jpg"
             features['image'] = self.image_processor.load_and_transform_image(image_path)
-        else:
-            # This is the path that is likely failing in your local environment.
+        elif self.image_processor:
             features['image'] = self.image_processor.get_placeholder_tensor()
         
-        # --- END of DEBUGGING BLOCK ---
 
-        # Process Text Features
+        # Conditionally process text features 
         if self.language_enabled and self.text_processor:
             text_content = str(item_info.get('description', ''))
             text_features = self.text_processor.process_text(text_content)
             features.update(text_features)
-        elif self.text_processor:
-            text_features = self.text_processor.get_placeholder_tensors()
-            features.update(text_features)
 
-        # Process Numerical Features
+        # Process Numerical Features 
         if self.numerical_enabled and self.numerical_processor:
             features['numerical_features'] = self.numerical_processor.get_features(item_info)
         elif self.numerical_processor:
             features['numerical_features'] = self.numerical_processor.get_placeholder_tensor()
 
-        # Process Categorical Features (Tag)
+        # Process Categorical Features
         if 'tag' in self.categorical_feat_cols:
             tag_str = item_info.get('tag', 'unknown')
             tag_idx = self.tag_encoder.transform([tag_str])[0]
@@ -299,17 +291,14 @@ class MultimodalDataset(Dataset):
         else:
             features['tag_idx'] = torch.tensor(0, dtype=torch.long)
 
+        # CLIP features processing
         if self.clip_tokenizer:
-            # Ensure text_content is always a string, even if the description is missing or NaN
             text_content = str(item_info.get('description', ''))
             clip_tokens = self.clip_tokenizer(
                 text_content, padding='max_length', truncation=True, max_length=77, return_tensors='pt'
             )
             features['clip_text_input_ids'] = clip_tokens['input_ids'].squeeze(0)
             features['clip_text_attention_mask'] = clip_tokens['attention_mask'].squeeze(0)
-
-        # This print shows all the keys just before returning from this function
-        #print(f"  [DEBUG] Final feature keys for item {item_id}: {list(features.keys())}")
 
         return features
     
