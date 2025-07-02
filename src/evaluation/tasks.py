@@ -1,12 +1,19 @@
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, Set
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import random
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from src.evaluation.novelty import NoveltyMetrics # Asegúrate de que esta línea esté presente
+
+import scipy.sparse as sp
+from sklearn.metrics.pairwise import cosine_similarity
+
+from src.inference.recommender import Recommender as MultimodalModelRecommender
+import logging
 
 
 class EvaluationTask(Enum):
@@ -52,7 +59,7 @@ class BaseEvaluator(ABC):
         self.config = config
         self.task_name = task_name
         # Retrieves the `top_k` value from the configuration, defaulting to 50 if not specified.
-        self.top_k = getattr(config.recommendation, 'top_k', 50)
+        self.top_k = getattr(config.recommendation, 'top_k', 20)
         # Determines whether previously seen items should be filtered from recommendations.
         self.filter_seen = kwargs.get('filter_seen', True)
         
@@ -61,6 +68,17 @@ class BaseEvaluator(ABC):
         self.test_data = self.test_data.copy()
         self.test_data['user_id'] = self.test_data['user_id'].astype(str)
         self.test_data['item_id'] = self.test_data['item_id'].astype(str)
+
+
+        # Ensures that 'user_id' and 'item_id' columns in the test data are treated as strings
+        # for consistent handling across the system.
+        self.test_data = self.test_data.copy()
+        self.test_data['user_id'] = self.test_data['user_id'].astype(str)
+        self.test_data['item_id'] = self.test_data['item_id'].astype(str)
+        # Inicializa logger para mensajes de advertencia
+        
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(self.__class__.__name__)
         
     @abstractmethod
     def evaluate(self) -> Dict[str, Any]:
@@ -346,6 +364,147 @@ class TopKRetrievalEvaluator(BaseEvaluator):
             return user_id, [], positive_items, []
     # --- END OF CORRECTED METHOD ---
 
+    # --- START NEW STATIC METHODS FOR PERSONALIZATION ---
+    @staticmethod
+    def _make_rec_matrix(predicted_lists: List[list]) -> sp.csr_matrix:
+        """
+        Helper to convert a list of recommendation lists into a sparse user-item matrix.
+        Each row corresponds to a user, and columns correspond to items.
+        A cell is 1 if the item is in the user's recommendation list, 0 otherwise.
+        """
+        if not predicted_lists:
+            return sp.csr_matrix((0, 0))
+
+        data = []
+        for user_idx, recs in enumerate(predicted_lists):
+            for item in recs:
+                data.append({'user_idx': user_idx, 'item': item})
+
+        if not data: 
+            # If all lists are empty, return a matrix with correct number of users and 0 items
+            return sp.csr_matrix((len(predicted_lists), 0))
+
+        df = pd.DataFrame(data)
+
+        unique_items = df['item'].unique()
+        item_to_col_idx = {item: i for i, item in enumerate(unique_items)}
+
+        row_indices = df['user_idx'].values
+        col_indices = df['item'].map(item_to_col_idx).values
+        values = np.ones(len(df))
+
+        rec_matrix = sp.csr_matrix(
+            (values, (row_indices, col_indices)), 
+            shape=(len(predicted_lists), len(unique_items))
+        )
+        return rec_matrix
+
+    @staticmethod
+    def _calculate_personalization(predicted_lists: List[list]) -> float:
+        """
+        Calculates personalization, which measures recommendation dissimilarity across users.
+        A high score indicates good personalization (user's lists of recommendations are different).
+        It's defined as 1 - (average pairwise cosine similarity of recommendation lists).
+        """
+        if not predicted_lists:
+            return 0.0
+
+        rec_matrix_sparse = TopKRetrievalEvaluator._make_rec_matrix(predicted_lists)
+
+        if rec_matrix_sparse.shape[0] <= 1: 
+             # Perfect personalization if only one user or no users (no lists to compare)
+             return 1.0 
+
+        similarity = cosine_similarity(X=rec_matrix_sparse, dense_output=False)
+
+        dim = similarity.shape[0]
+        upper_right_indices = np.triu_indices(dim, k=1)
+
+        if upper_right_indices[0].size == 0:
+            return 1.0 # Should not happen if dim > 1, but as a safeguard.
+
+        average_similarity = np.mean(similarity[upper_right_indices])
+
+        return 1 - average_similarity
+    # --- END NEW STATIC METHODS FOR PERSONALIZATION ---
+
+        # --- INICIO: NUEVO MÉTODO ESTÁTICO PARA OBTENER EMBEDDINGS DE ENTRADA CONCATENADOS ---
+    @staticmethod
+    def _get_concatenated_input_embeddings(
+        recommender_instance: Any, # Puede ser MultimodalModelRecommender o BaselineRecommender
+        unique_recommended_item_ids: Set[str]
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """
+        Recolecta las características de entrada procesadas para los ítems recomendados,
+        las concatena en un único array NumPy para cada ítem, simulando un "embedding de entrada".
+        """
+        collected_embeddings = {}
+        
+        if not hasattr(recommender_instance, 'dataset') or \
+           not hasattr(recommender_instance.dataset, '_process_item_features'):
+            # self.logger no está disponible directamente en un staticmethod, usar print o pasar logger
+            print("Warning: Recommender instance lacks dataset or _process_item_features. Cannot collect input embeddings.")
+            return None # No se pueden obtener los embeddings de entrada
+
+        print(f"Collecting concatenated input embeddings (only {len(unique_recommended_item_ids)} unique recommended items)...")
+        
+        for item_id_str in tqdm(list(unique_recommended_item_ids), desc="Collecting input embeddings"):
+            try:
+                # Obtener el diccionario de tensores de características de entrada
+                # Esto es lo que recommender_instance._get_item_features devuelve (Dict[str, torch.Tensor])
+                input_features_dict_tensors = recommender_instance._get_item_features(item_id_str)
+                
+                if input_features_dict_tensors is None:
+                    print(f"Warning: Feature processing for item '{item_id_str}' returned None by recommender._get_item_features. Skipping.")
+                    continue
+
+                concatenated_features_list = []
+
+                # Concatenar las características de entrada relevantes
+                # Se convierten a NumPy y se aplanan. Asegurarse de un orden consistente.
+                
+                # 1. Item ID (convertir a float y aplanar)
+                if 'item_idx' in input_features_dict_tensors and input_features_dict_tensors['item_idx'] is not None:
+                    concatenated_features_list.append(input_features_dict_tensors['item_idx'].cpu().numpy().flatten())
+                
+                # 2. Tag ID (convertir a float y aplanar)
+                if 'tag_idx' in input_features_dict_tensors and input_features_dict_tensors['tag_idx'] is not None:
+                    concatenated_features_list.append(input_features_dict_tensors['tag_idx'].cpu().numpy().flatten())
+
+                # 3. Características Numéricas
+                if 'numerical_features' in input_features_dict_tensors and input_features_dict_tensors['numerical_features'] is not None:
+                    concatenated_features_list.append(input_features_dict_tensors['numerical_features'].cpu().numpy().flatten())
+                
+                # 4. Características de Imagen (si existen, aplanar el tensor)
+                if 'image' in input_features_dict_tensors and features_dict_tensors['image'] is not None:
+                    concatenated_features_list.append(input_features_dict_tensors['image'].cpu().numpy().flatten())
+
+                # 5. Características de Texto (si existen y son vectores - no IDs de tokens crudos)
+                # Asumiendo que si 'text_features' está presente, es un vector de embedding de texto
+                if 'text_features' in input_features_dict_tensors and features_dict_tensors['text_features'] is not None:
+                    concatenated_features_list.append(features_dict_tensors['text_features'].cpu().numpy().flatten())
+                # Si el campo 'text_input_ids' está presente, es para el tokenizador/modelo de lenguaje, no un embedding directo
+                
+                if not concatenated_features_list:
+                    print(f"Warning: No features available for concatenation for item '{item_id_str}'. Skipping embedding.")
+                    continue # Skip this item if no features can be concatenated
+                
+                # Concatenar todos los arrays NumPy en un único vector de características
+                concatenated_embedding = np.concatenate(concatenated_features_list)
+                collected_embeddings[item_id_str] = concatenated_embedding
+            
+            except Exception as e:
+                # Usar print directamente en staticmethod si logger no es fácil de pasar
+                import traceback
+                print(f"ERROR: Error collecting concatenated input embedding for item '{item_id_str}': {e}\n{traceback.format_exc()}")
+                continue # Continuar con el siguiente ítem
+        
+        if collected_embeddings:
+            return collected_embeddings
+        else:
+            print("Warning: Could not collect any concatenated input embeddings for recommended items. Intra-list similarity might be NaN.")
+            return None
+    # --- FIN: NUEVO MÉTODO ESTÁTICO ---  
 
     def evaluate(self) -> Dict[str, Any]:
         """
@@ -361,6 +520,18 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         print(f"Evaluating Top-K Retrieval (K={self.top_k})")
         if self.use_sampling:
             print(f"Using negative sampling: {self.num_negatives} negatives per user, strategy: {self.sampling_strategy}")
+
+        # --- MODIFICACIÓN: Inicialización explícita de num_users y user_groups ---
+        user_groups: List[Tuple[str, pd.DataFrame]] = []
+        num_users: int = 0
+        
+        try:
+            user_groups = list(self.test_data.groupby('user_id'))
+            num_users = len(user_groups)
+        except Exception as e:
+            self.logger.error(f"Error grouping test data by user_id: {e}. Proceeding with 0 users.", exc_info=True)
+            # num_users remains 0, user_groups remains empty
+        # --- FIN MODIFICACIÓN ---
 
         # Groups test data by user to process each user individually.
         user_groups = list(self.test_data.groupby('user_id'))
@@ -462,6 +633,85 @@ class TopKRetrievalEvaluator(BaseEvaluator):
         results['num_users_evaluated'] = num_users
         results['evaluation_method'] = 'negative_sampling' if self.use_sampling else 'full_evaluation'
         results['predictions'] = all_predictions # Includes raw predictions for further analysis.
+
+        # --- START OF NOVELTY AND DIVERSITY METRICS CALCULATION (MODIFICADO) ---
+        print("\nCalculating Novelty and Diversity Metrics...")
+        
+        # Preparar datos para NoveltyMetrics calculator
+        if hasattr(self.recommender.dataset, 'interactions') and not self.recommender.dataset.interactions.empty:
+            interactions_df_for_novelty = self.recommender.dataset.interactions.copy()
+            interactions_df_for_novelty['user_id'] = interactions_df_for_novelty['user_id'].astype(str)
+            interactions_df_for_novelty['item_id'] = interactions_df_for_novelty['item_id'].astype(str)
+            
+            item_popularity_for_novelty = interactions_df_for_novelty['item_id'].value_counts().to_dict()
+            all_interactions_list_for_novelty = interactions_df_for_novelty[['user_id', 'item_id']].values.tolist()
+        else:
+            self.logger.warning("Recommender's dataset does not have 'interactions' or it's empty. Skipping novelty metrics.")
+            return results 
+            
+         # --- MODIFICACIÓN CLAVE: Recolectar embeddings SOLAMENTE para ítems recomendados ---
+        # Ahora, esta sección intentará recolectar los embeddings de ENTRADA CONCATENADOS,
+        # para todos los tipos de recomendadores, como solicitaste.
+
+        unique_recommended_item_ids = set()
+        if all_predictions: # Solo iterar si hay predicciones
+            for user_recs in all_predictions.values(): 
+                for item_id, _ in user_recs:
+                    unique_recommended_item_ids.add(item_id)
+        
+        if not unique_recommended_item_ids:
+            self.logger.warning("No recommended items found. Cannot collect embeddings for diversity.")
+            item_embeddings_for_novelty = None 
+        else:
+            # Llamar al nuevo método estático para obtener los embeddings de entrada concatenados
+            item_embeddings_for_novelty = TopKRetrievalEvaluator._get_concatenated_input_embeddings(
+                self.recommender, # Pasamos la instancia del recomendador
+                unique_recommended_item_ids
+            )
+        # --- FIN DE LA MODIFICACIÓN DE EMBEDDINGS ---
+
+        novelty_calculator = NoveltyMetrics(
+            item_popularity=item_popularity_for_novelty,
+            user_history=all_interactions_list_for_novelty,
+            item_embeddings=item_embeddings_for_novelty
+        )
+
+        per_user_novelty_metrics = {}
+
+        for user_id, recommendations_list in tqdm(all_predictions.items(), total=num_users, desc="Calculating novelty per user"):
+            recommended_item_ids = [item_id for item_id, _ in recommendations_list]
+            
+            user_novelty_metrics = novelty_calculator.calculate_metrics(
+                recommendations=recommended_item_ids,
+                user_id=user_id
+            )
+            per_user_novelty_metrics[user_id] = user_novelty_metrics
+            
+        # Agrega las métricas de novedad
+        avg_self_info_scores = [m['avg_self_information'] for m in per_user_novelty_metrics.values() if 'avg_self_information' in m]
+        avg_iif_scores = [m['avg_iif'] for m in per_user_novelty_metrics.values() if 'avg_iif' in m]
+        catalog_coverage_scores = [m['catalog_coverage'] for m in per_user_novelty_metrics.values() if 'catalog_coverage' in m]
+        intra_list_similarity_scores = [m['intra_list_similarity'] for m in per_user_novelty_metrics.values() if 'intra_list_similarity' in m and not np.isnan(m['intra_list_similarity'])]
+        personalized_novelty_scores = [m['personalized_novelty'] for m in per_user_novelty_metrics.values() if 'personalized_novelty' in m]
+
+        results["avg_self_information"] = np.mean(avg_self_info_scores) if avg_self_info_scores else 0.0
+        results["avg_iif"] = np.mean(avg_iif_scores) if avg_iif_scores else 0.0
+        results["avg_catalog_coverage"] = np.mean(catalog_coverage_scores) if catalog_coverage_scores else 0.0
+        
+        # Métrica de Personalización (ya implementada)
+        predicted_lists_for_personalization = [
+            [item_id for item_id, _ in recs] for recs in all_predictions.values()
+        ]
+        avg_personalization_score = TopKRetrievalEvaluator._calculate_personalization(
+            predicted_lists_for_personalization
+        )
+        results["avg_personalization"] = avg_personalization_score
+
+        # Métrica de Diversidad (Intra-list Similarity)
+        results["avg_intra_list_similarity"] = np.mean(intra_list_similarity_scores) if intra_list_similarity_scores else 0.0
+        
+        results["avg_personalized_novelty"] = np.mean(personalized_novelty_scores) if personalized_novelty_scores else 0.0
+        # --- FIN DE LAS MODIFICACIONES DE NOVELTY Y DIVERSITY --
         
         return results
     
@@ -521,7 +771,7 @@ class TopKRankingEvaluator(BaseEvaluator):
             config: The configuration object.
             **kwargs: Additional keyword arguments.
         """
-        super().__init__(recommender, test_data, config, "Top-K Ranking", **kwargs)
+        super().__init__(recommender, test_data, config, "Top-K Ranking", **kwargs)  
     
     def evaluate(self) -> Dict[str, Any]:
         """

@@ -635,10 +635,10 @@ class ItemKNNRecommender(BaselineRecommender):
             if item_id_cand_str in self.item_to_idx:
                 item_idx_cand: int = self.item_to_idx[item_id_cand_str]
                 # Adds item to recommendations if its score is positive (i.e., it has some similarity).
-                if scores[item_idx_cand] > 1e-9:
-                    if filter_seen and item_id_cand_str in user_interacted_items_history:
-                        continue # Skips if item is seen and filtering is enabled.
-                    recommendations.append((item_id_cand_str, float(scores[item_idx_cand])))
+                #if scores[item_idx_cand] > 1e-9:
+                if filter_seen and item_id_cand_str in user_interacted_items_history:
+                    continue # Skips if item is seen and filtering is enabled.
+                recommendations.append((item_id_cand_str, float(scores[item_idx_cand])))
         
         # Sorts the recommendations by score in descending order and returns the top-K.
         recommendations.sort(key=lambda x: x[1], reverse=True)
@@ -796,7 +796,7 @@ class UserKNNRecommender(BaselineRecommender):
 
     def get_recommendations(
         self,
-        user_id: str,
+        user_id: Any, # Changed type hint to Any for robustness
         top_k: int = 10,
         filter_seen: bool = True,
         candidates: Optional[List[str]] = None
@@ -817,10 +817,28 @@ class UserKNNRecommender(BaselineRecommender):
         Returns:
             A list of (item_id, score) tuples, representing User-KNN recommendations.
         """
-        user_id_str = str(user_id)
-        
+        # Ensure user_id_str is safely defined before any debug prints or operations
+        # This modification aims to prevent the "local variable not associated" error
+        user_id_str: str
+        try:
+            user_id_str = str(user_id)
+        except Exception as e:
+            # If conversion fails, assign a placeholder and log the error
+            print(f"ERROR: UserKNN get_recommendations received an invalid user_id '{user_id}'. Conversion to string failed: {e}")
+            user_id_str = "UNKNOWN_USER_ID"
+            # Since the user_id is critical, it's safer to return an empty list here
+            # to prevent further errors down the line if the ID is malformed.
+            return [] 
+            
+        # --- START OF ADDED DEBUG PRINTS ---
+        #print(f"\n--- UserKNN Recommendations Debug for User: {user_id_str} ---")
+        #print(f"Top K requested: {top_k}")
+        #print(f"Candidates received (if any): {candidates}")
+        # --- END OF ADDED DEBUG PRINTS ---
+
         # If the user is not found in the encoder, falls back to popularity-based recommendations.
         if user_id_str not in self.user_to_idx:
+            print(f"User {user_id_str} not in encoder. Falling back to PopularityRecommender.")
             return PopularityRecommender(
                 self.dataset, 
                 history_interactions_df=self.interactions_for_model
@@ -843,7 +861,10 @@ class UserKNNRecommender(BaselineRecommender):
         similar_user_indices = similar_user_indices[user_sim_vector[similar_user_indices] > 1e-9]
 
         if len(similar_user_indices) == 0:
+            print("No similar users found with positive similarity.")
             return []
+
+        # print(f"<<<<<<<<< {user_id_str} kelok este es el febug para saber: ({len(similar_user_indices)}), {similar_user_indices}")
         
         # Aggregates item scores from similar users.
         item_scores: np.ndarray = np.zeros(len(self.item_to_idx))
@@ -871,19 +892,32 @@ class UserKNNRecommender(BaselineRecommender):
         else:
             item_pool = [str(item) for item in self.all_items]
 
+        # --- START OF ADDED DEBUG PRINTS ---
+        #print(f"Items in item_pool for scoring ({len(item_pool)} items): {item_pool[:5]}... (showing first 5)")
+        # --- END OF ADDED DEBUG PRINTS ---
+
         # Iterates through the item pool, adding items to recommendations based on their scores.
         for item_id_cand in item_pool:
             item_id_cand_str = str(item_id_cand)
             if item_id_cand_str in self.item_to_idx:
                 item_idx_cand: int = self.item_to_idx[item_id_cand_str]
-                # Adds item to recommendations if its score is positive.
-                if item_scores[item_idx_cand] > 1e-9:
-                    if filter_seen and item_id_cand_str in user_interacted_items_history:
-                        continue # Skips if item is seen and filtering is enabled.
-                    recommendations.append((item_id_cand_str, float(item_scores[item_idx_cand])))
-        
+                # --- START OF MODIFICATION ---
+                # REMOVED: if item_scores[item_idx_cand] > 1e-9:
+                # This ensures all items in the pool are considered for the top-K list,
+                # regardless of their score (as long as they are not seen and are in the item index).
+                # --- END OF MODIFICATION ---
+                if filter_seen and item_id_cand_str in user_interacted_items_history:
+                    continue # Skips if item is seen and filtering is enabled.
+                recommendations.append((item_id_cand_str, float(item_scores[item_idx_cand])))
+
         # Sorts the recommendations by score in descending order and returns the top-K.
         recommendations.sort(key=lambda x: x[1], reverse=True)
+        
+        # --- START OF ADDED DEBUG PRINTS ---
+        #print(f"Raw recommendations generated before top_k slice ({len(recommendations)} items): {recommendations}")
+        #print(f"Returning top {top_k} recommendations.")
+        # --- END OF ADDED DEBUG PRINTS ---
+
         return recommendations[:top_k]
     
     def get_item_score(self, user_id: str, item_id: str) -> float:

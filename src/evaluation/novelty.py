@@ -10,6 +10,7 @@ import numpy as np
 from typing import List, Dict, Set, Tuple, Optional
 from collections import Counter
 import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity # ¡Importar esto!
 
 
 class NoveltyMetrics:
@@ -25,7 +26,8 @@ class NoveltyMetrics:
     def __init__(
         self, 
         item_popularity: Dict[str, float],
-        user_history: List[Tuple[str, str]]
+        user_history: List[Tuple[str, str]],
+        item_embeddings: Optional[Dict[str, np.ndarray]] = None # <--- AÑADIDO: Recibe los embeddings de ítems
     ):
         """
         Initializes the NoveltyMetrics calculator.
@@ -37,10 +39,13 @@ class NoveltyMetrics:
             user_history: A list of (user_id, item_id) tuples representing all user-item interactions.
                           This data is used to derive global user and item interaction counts
                           and for personalized novelty calculations.
+            item_embeddings: A dictionary mapping item IDs (string) to their embedding vectors (NumPy array).
+                             Required for calculating intra-list similarity.
         """
         self.item_popularity = item_popularity
         self.user_history = user_history
-        
+        self.item_embeddings = item_embeddings # <--- AÑADIDO: Guarda los embeddings
+
         # Calculates derived statistics from the input data.
         self.total_interactions = sum(item_popularity.values())
         self.n_users = len(set(user for user, _ in user_history))
@@ -122,10 +127,15 @@ class NoveltyMetrics:
             recommendations
         )
         
-        # Calculates intra-list diversity, currently based on the percentage of unique items.
-        if len(recommendations) > 1:
-            metrics['diversity'] = self.calculate_diversity(recommendations)
-        
+        # <--- MODIFICACIÓN AQUÍ: Llamar al nuevo calculate_diversity que ahora es intra-list similarity
+        # El nombre del campo en el diccionario de resultados puede ser 'intra_list_similarity' para mayor claridad
+        if self.item_embeddings:
+            metrics['intra_list_similarity'] = self.calculate_diversity(recommendations)
+        else:
+            # Si no hay embeddings, no se puede calcular esta métrica
+            metrics['intra_list_similarity'] = np.nan # Usar NaN para indicar no calculable
+            # np.nan is used as per problem description for such cases where metric is not calculable
+
         # Calculates personalized novelty if a user ID is provided, measuring how many
         # recommended items are new to the specific user.
         if user_id:
@@ -281,24 +291,54 @@ class NoveltyMetrics:
         # Calculates the percentage of long-tail items in the recommendations.
         return tail_count / len(items) if items else 0.0
     
+    # <--- MODIFICACIÓN AQUÍ: EL MÉTODO calculate_diversity SE REEMPLAZA
     def calculate_diversity(self, items: List[str]) -> float:
         """
-        Calculates intra-list diversity, which measures the uniqueness of items
-        within a single list of recommendations.
-
-        Currently, this metric is calculated as the percentage of unique items
-        within the provided list. This can be extended to use item embeddings
-        for more sophisticated similarity-based diversity measures.
+        Calculates intra-list similarity (a measure of diversity) for a single list of recommendations
+        using item embeddings, as postulated by Ziegler et al. in "Improving Recommendation Through Topic Diversification".
+        This metric quantifies how similar recommended items are to each other within a list.
+        Lower values indicate higher diversity, as it represents the average pairwise cosine similarity.
 
         Args:
             items: A list of recommended item IDs (string).
 
         Returns:
-            The intra-list diversity score (float), between 0.0 and 1.0.
-            Returns 0.0 if the input `items` list is empty.
+            The average pairwise cosine similarity (intra-list similarity) among recommended items.
+            Returns 0.0 if no valid embeddings are provided, or fewer than two items are present,
+            or if no valid embeddings are found for the recommended items.
         """
-        # Calculates diversity as the ratio of unique items to the total number of items.
-        return len(set(items)) / len(items) if items else 0.0
+        if not self.item_embeddings:
+            return 0.0
+        
+        if len(items) < 2: # Se necesitan al menos 2 ítems para calcular la similitud por pares
+            return 0.0
+
+        recs_embeddings = []
+        for item_id in items:
+            if item_id in self.item_embeddings:
+                recs_embeddings.append(self.item_embeddings[item_id])
+            # else: print(f"Warning: Embedding for item '{item_id}' not found. Skipping for diversity calculation.")
+
+        if len(recs_embeddings) < 2: # Si no hay suficientes ítems con embeddings, no se puede calcular
+            return 0.0 
+
+        # Convertir la lista de embeddings a un array de NumPy
+        recs_content = np.array(recs_embeddings) 
+        
+        # Calcular la matriz de similitud coseno entre todos los pares de ítems en la lista
+        similarity_matrix = cosine_similarity(X=recs_content, dense_output=True)
+
+        # Obtener los índices de la parte superior derecha de la matriz (sin la diagonal)
+        # Esto considera cada par de ítems una sola vez
+        upper_right = np.triu_indices(similarity_matrix.shape[0], k=1)
+        
+        # Asegurarse de que haya valores en upper_right para evitar errores si está vacío (p.ej., si solo queda 1 ítem válido)
+        if upper_right[0].size == 0:
+            return 0.0
+
+        # Calcular la similitud intra-lista promedio: el promedio de todas las similitudes por pares
+        ils_single_user = np.mean(similarity_matrix[upper_right])
+        return ils_single_user
     
     def calculate_personalized_novelty(
         self, 
