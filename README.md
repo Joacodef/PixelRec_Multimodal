@@ -1,15 +1,10 @@
 # Multimodal Recommender System
 
 <div align="center">
-
     <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python Version">
-
     <img src="https://img.shields.io/badge/PyTorch-2.2.1+-ee4c2c.svg" alt="PyTorch Version">
-
     <img src="https://img.shields.io/badge/Transformers-4.47.1+-orange.svg" alt="Transformers Version">
-
 </div>
-
 <br>
 
 
