@@ -1,11 +1,17 @@
 # Multimodal Recommender System
 
-\<div align="center"\>
-\<img src="[https://img.shields.io/badge/Python-3.11+-blue.svg](https://img.shields.io/badge/Python-3.11+-blue.svg)" alt="Python Version"\>
-\<img src="[https://img.shields.io/badge/PyTorch-2.2.1+-ee4c2c.svg](https://img.shields.io/badge/PyTorch-2.2.1+-ee4c2c.svg)" alt="PyTorch Version"\>
-\<img src="[https://img.shields.io/badge/Transformers-4.47.1+-orange.svg](https://img.shields.io/badge/Transformers-4.47.1+-orange.svg)" alt="Transformers Version"\>
-\</div\>
-\<br\>
+<div align="center">
+
+    <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python Version">
+
+    <img src="https://img.shields.io/badge/PyTorch-2.2.1+-ee4c2c.svg" alt="PyTorch Version">
+
+    <img src="https://img.shields.io/badge/Transformers-4.47.1+-orange.svg" alt="Transformers Version">
+
+</div>
+
+<br>
+
 
 A PyTorch-based framework for building and evaluating multimodal recommendation systems that integrate visual, textual, and numerical features to generate personalized recommendations. This repository is specially designed to work with the [PixelRec dataset](https://github.com/westlake-repl/PixelRec) and provides a comprehensive suite of tools for training, evaluation, and hyperparameter optimization.
 
